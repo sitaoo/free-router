@@ -1,0 +1,52 @@
+{
+  "host": "127.0.0.1",
+  "port": 8787,
+  "attemptTimeoutMs": 180000,
+  "catalogRefreshMs": 900000,
+  "cooldownMs": {
+    "rateLimit": 600000,
+    "timeout": 300000,
+    "serverError": 120000,
+    "empty": 300000,
+    "notFound": 3600000,
+    "forbidden": 3600000
+  },
+  "routes": {
+    "free-best": [
+      "stealth/ox-alpha",
+      "z-ai/glm-5.2:free",
+      "poolside/laguna-s-2.1:free",
+      "thinkingmachines/inkling:free",
+      "thinkingmachines/inkling-small:free",
+      "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "poolside/laguna-xs-2.1:free",
+      "cohere/north-mini-code:free",
+      "google/gemma-4-31b-it:free",
+      "nvidia/nemotron-3.5-lightning:free",
+      "google/gemma-4-26b-a4b-it:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "dots-studio/dots-3-note-preview:free",
+      "liquid/lfm-2.5-2.6b:free"
+    ],
+    "free-code": [
+      "stealth/ox-alpha",
+      "z-ai/glm-5.2:free",
+      "poolside/laguna-s-2.1:free",
+      "thinkingmachines/inkling:free",
+      "poolside/laguna-xs-2.1:free",
+      "cohere/north-mini-code:free",
+      "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "thinkingmachines/inkling-small:free",
+      "google/gemma-4-31b-it:free"
+    ],
+    "free-fast": [
+      "nvidia/nemotron-3.5-lightning:free",
+      "google/gemma-4-31b-it:free",
+      "google/gemma-4-26b-a4b-it:free",
+      "poolside/laguna-xs-2.1:free",
+      "cohere/north-mini-code:free",
+      "liquid/lfm-2.5-2.6b:free"
+    ]
+  }
+}
