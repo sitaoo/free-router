@@ -3,6 +3,19 @@
   "port": 8787,
   "attemptTimeoutMs": 180000,
   "catalogRefreshMs": 900000,
+  "discovery": {
+    "enabled": true,
+    "intervalMs": 604800000,
+    "route": "free-best",
+    "stateFile": "discovered-free-models.json",
+    "evaluation": {
+      "enabled": true,
+      "maxTokens": 4000,
+      "pinnedModels": [
+        "stealth/ox-alpha"
+      ]
+    }
+  },
   "cooldownMs": {
     "rateLimit": 600000,
     "timeout": 300000,

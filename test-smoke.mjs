@@ -23,11 +23,17 @@ const mock = http.createServer(async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     res.end(
       JSON.stringify({
-        data: ['mock-a', 'mock-b'].map((id) => ({
+        data: ['mock-a', 'mock-b', 'mock-new', 'mock-audio'].map((id) => ({
           id,
-          pricing: { prompt: '0', completion: '0' },
+          pricing:
+            id === 'mock-b'
+              ? { prompt: '0.000001', completion: '0.000001' }
+              : { prompt: '0', completion: '0' },
           supported_parameters: ['tools', 'response_format'],
-          architecture: { input_modalities: ['text'] },
+          architecture: {
+            input_modalities: ['text'],
+            output_modalities: id === 'mock-audio' ? ['text', 'audio'] : ['text'],
+          },
         })),
       }),
     );
@@ -37,6 +43,34 @@ const mock = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const isEvaluation = body.messages?.some(
+      (message) => typeof message.content === 'string' && message.content.includes('OX-RANK-7'),
+    );
+    if (isEvaluation) {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(
+        JSON.stringify({
+          model: body.model,
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: JSON.stringify({
+                  token: 'OX-RANK-7',
+                  crt: 269,
+                  trace: '1-3',
+                  path: 10,
+                  sequence: 42,
+                  binary: 55,
+                }),
+              },
+              finish_reason: 'stop',
+            },
+          ],
+        }),
+      );
+      return;
+    }
     if (body.stream) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       if (body.model === 'mock-a') {
@@ -98,6 +132,17 @@ fs.writeFileSync(
     port: routerPort,
     attemptTimeoutMs: 5000,
     catalogRefreshMs: 1000,
+    discovery: {
+      enabled: true,
+      intervalMs: 604800000,
+      route: 'test-route',
+      stateFile: 'discovered-free-models.json',
+      evaluation: {
+        enabled: true,
+        pinnedModels: ['mock-a'],
+        baselineScores: { 'mock-b': 80 },
+      },
+    },
     cooldownMs: {},
     routes: { 'test-route': ['mock-a', 'mock-b'] },
   }),
@@ -125,7 +170,7 @@ async function waitForHealth() {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try {
       const response = await fetch(`http://127.0.0.1:${routerPort}/health`);
-      if (response.ok) return;
+      if (response.ok) return response.json();
     } catch {
       // Service is still starting.
     }
@@ -135,7 +180,19 @@ async function waitForHealth() {
 }
 
 try {
-  await waitForHealth();
+  const health = await waitForHealth();
+  assert.deepEqual(health.discovery.addedModels, ['mock-new']);
+  assert.deepEqual(
+    health.routes['test-route'].map((entry) => entry.id),
+    ['mock-a', 'mock-new'],
+  );
+  assert.deepEqual(health.discovery.removedModels, ['mock-b']);
+  assert.equal(health.discovery.evaluations['mock-new'].status, 'scored');
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(tempDir, 'discovered-free-models.json'), 'utf8'))
+      .addedModels[0],
+    'mock-new',
+  );
   const request = {
     model: 'test-route',
     messages: [{ role: 'user', content: 'test' }],
@@ -150,9 +207,9 @@ try {
     },
   );
   assert.equal(jsonResponse.status, 200);
-  assert.equal(jsonResponse.headers.get('x-free-router-model'), 'mock-b');
+  assert.equal(jsonResponse.headers.get('x-free-router-model'), 'mock-new');
   const json = await jsonResponse.json();
-  assert.equal(json.model, 'mock-b');
+  assert.equal(json.model, 'mock-new');
   assert.equal(json.choices[0].message.content, 'router-ok');
 
   const streamResponse = await fetch(
@@ -164,12 +221,12 @@ try {
     },
   );
   assert.equal(streamResponse.status, 200);
-  assert.equal(streamResponse.headers.get('x-free-router-model'), 'mock-b');
+  assert.equal(streamResponse.headers.get('x-free-router-model'), 'mock-new');
   const stream = await streamResponse.text();
   assert.match(stream, /router-ok/);
   assert.doesNotMatch(stream, /thinking only/);
 
-  console.log('smoke test passed: empty response fell back for JSON and SSE');
+  console.log('smoke test passed: discovery and empty-response fallback work');
 } finally {
   child.kill('SIGTERM');
   await close(mock);

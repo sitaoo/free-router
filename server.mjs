@@ -38,11 +38,30 @@ const ATTEMPT_TIMEOUT_MS = Number(
 );
 const CATALOG_REFRESH_MS = Number(config.catalogRefreshMs || 900000);
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+const discoveryConfig = config.discovery || {};
+const DISCOVERY_ENABLED = discoveryConfig.enabled !== false;
+const DISCOVERY_INTERVAL_MS = Number(discoveryConfig.intervalMs || 7 * 24 * 60 * 60 * 1000);
+const DISCOVERY_ROUTE = String(discoveryConfig.route || 'free-best');
+const DISCOVERY_STATE_PATH = path.resolve(
+  path.dirname(CONFIG_PATH),
+  discoveryConfig.stateFile || 'discovered-free-models.json',
+);
+const evaluationConfig = discoveryConfig.evaluation || {};
+const EVALUATION_ENABLED = evaluationConfig.enabled !== false;
+const EVALUATION_MAX_TOKENS = Number(evaluationConfig.maxTokens || 4000);
+const PINNED_MODELS = new Set(evaluationConfig.pinnedModels || ['stealth/ox-alpha']);
 
 const cooldowns = new Map();
 let catalog = new Map();
 let catalogFetchedAt = 0;
 let catalogError = '';
+let discoveredModelIds = [];
+let discoverySeenIds = [];
+let discoveryRemovedIds = [];
+let discoveryLastCheckedAt = 0;
+let discoveryError = '';
+let discoveryInFlight = null;
+let modelEvaluations = {};
 
 function log(message, detail = undefined) {
   const prefix = `[${new Date().toISOString()}]`;
@@ -67,6 +86,95 @@ function isZeroCost(model) {
   return Number.isFinite(prompt) && Number.isFinite(completion) && prompt === 0 && completion === 0;
 }
 
+function isChatModel(model) {
+  const outputs = model?.architecture?.output_modalities || ['text'];
+  if (!outputs.includes('text') || outputs.some((modality) => modality !== 'text')) return false;
+  if (model?.architecture?.tokenizer === 'Router') return false;
+  return !/(?:content[-_ ]?safety|moderation|guard)(?:[:/_-]|$)/i.test(model?.id || '');
+}
+
+function loadDiscoveryState() {
+  if (!DISCOVERY_ENABLED || !fs.existsSync(DISCOVERY_STATE_PATH)) return;
+  try {
+    const state = JSON.parse(fs.readFileSync(DISCOVERY_STATE_PATH, 'utf8'));
+    discoveredModelIds = Array.isArray(state.addedModels)
+      ? state.addedModels.filter((id) => typeof id === 'string')
+      : [];
+    discoverySeenIds = Array.isArray(state.freeModels)
+      ? state.freeModels.filter((id) => typeof id === 'string')
+      : [];
+    discoveryRemovedIds = Array.isArray(state.removedModels)
+      ? state.removedModels.filter((id) => typeof id === 'string')
+      : [];
+    discoveryLastCheckedAt = Date.parse(state.lastCheckedAt || '') || 0;
+    modelEvaluations =
+      state.evaluations && typeof state.evaluations === 'object' ? state.evaluations : {};
+  } catch (error) {
+    discoveryError = `state load failed: ${error instanceof Error ? error.message : String(error)}`;
+    log(discoveryError);
+  }
+}
+
+function saveDiscoveryState() {
+  const payload = {
+    lastCheckedAt: new Date(discoveryLastCheckedAt).toISOString(),
+    route: DISCOVERY_ROUTE,
+    freeModels: discoverySeenIds,
+    addedModels: discoveredModelIds,
+    removedModels: discoveryRemovedIds,
+    evaluations: modelEvaluations,
+  };
+  const temporaryPath = `${DISCOVERY_STATE_PATH}.${process.pid}.tmp`;
+  fs.writeFileSync(temporaryPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o644 });
+  fs.renameSync(temporaryPath, DISCOVERY_STATE_PATH);
+}
+
+function configuredScore(id, configuredIndex) {
+  const explicit = Number(evaluationConfig.baselineScores?.[id]);
+  if (Number.isFinite(explicit)) return explicit;
+  return Math.max(30, 94 - Math.max(0, configuredIndex - 1) * 4);
+}
+
+function rankedModelScore(id, configured, configuredIndex) {
+  if (PINNED_MODELS.has(id)) return Number.POSITIVE_INFINITY;
+  if (configured.has(id)) return configuredScore(id, configuredIndex.get(id));
+  const evaluated = Number(modelEvaluations[id]?.score);
+  return Number.isFinite(evaluated) ? evaluated : -1;
+}
+
+function routeModelIds(routeName) {
+  const configured = config.routes?.[routeName];
+  if (!configured) return null;
+  const activeConfigured = catalog.size
+    ? configured.filter((id) => {
+        const model = catalog.get(id);
+        return model && isZeroCost(model) && isChatModel(model);
+      })
+    : configured;
+  if (!DISCOVERY_ENABLED || routeName !== DISCOVERY_ROUTE) return activeConfigured;
+
+  const ids = [...activeConfigured];
+  const present = new Set(ids);
+  for (const id of discoveredModelIds) {
+    if (present.has(id)) continue;
+    const model = catalog.get(id);
+    if (catalog.size && (!model || !isZeroCost(model))) continue;
+    ids.push(id);
+    present.add(id);
+  }
+  const configuredSet = new Set(configured);
+  const configuredIndex = new Map(configured.map((id, index) => [id, index]));
+  return ids
+    .map((id, originalIndex) => ({ id, originalIndex }))
+    .sort((a, b) => {
+      const scoreDifference =
+        rankedModelScore(b.id, configuredSet, configuredIndex) -
+        rankedModelScore(a.id, configuredSet, configuredIndex);
+      return scoreDifference || a.originalIndex - b.originalIndex;
+    })
+    .map(({ id }) => id);
+}
+
 async function refreshCatalog(force = false) {
   if (!force && Date.now() - catalogFetchedAt < CATALOG_REFRESH_MS && catalog.size) return;
   try {
@@ -88,6 +196,189 @@ async function refreshCatalog(force = false) {
     log(`catalog refresh failed; retaining previous catalog: ${catalogError}`);
   }
 }
+
+function evaluationText(payload) {
+  const content = payload?.choices?.[0]?.message?.content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part) => (typeof part === 'string' ? part : part?.text || ''))
+    .join('');
+}
+
+function parseEvaluationAnswers(text) {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+function metadataScore(model) {
+  const supported = new Set(model?.supported_parameters || []);
+  const contextLength = Number(model?.context_length || 0);
+  const createdMs = Number(model?.created || 0) * 1000;
+  let score = 0;
+  if (supported.has('tools')) score += 6;
+  if (supported.has('response_format') || supported.has('structured_outputs')) score += 4;
+  score += Math.min(6, Math.max(0, Math.log2(Math.max(4096, contextLength) / 4096)));
+  if ((model?.architecture?.input_modalities || ['text']).includes('text')) score += 2;
+  if (createdMs && Date.now() - createdMs <= 180 * 24 * 60 * 60 * 1000) score += 2;
+  return Math.round(score * 10) / 10;
+}
+
+async function evaluateModel(modelId) {
+  const startedAt = Date.now();
+  const model = catalog.get(modelId);
+  const supported = new Set(model?.supported_parameters || []);
+  const evaluationBody = {
+    messages: [
+      {
+        role: 'user',
+        content:
+          'Return ONLY one JSON object with keys token, crt, trace, path, sequence, binary. ' +
+          'No markdown and no explanation. token must be "OX-RANK-7". ' +
+          'crt: smallest positive integer n where n%7=3, n%11=5, n%13=9. ' +
+          'trace: output of JavaScript: let a=[1,2,3,4]; for(let i=0;i<a.length;i++){if(a[i]%2===0)a.splice(i,1)} console.log(a.join("-")). ' +
+          'path: shortest distance A to E for undirected edges A-B:4,A-C:2,C-B:1,B-D:5,C-D:8,C-E:10,D-E:2. ' +
+          'sequence: next number after 2,6,12,20,30. ' +
+          'binary: number of binary strings of length 8 with no consecutive ones.',
+      },
+    ],
+    temperature: 0,
+    max_tokens: EVALUATION_MAX_TOKENS,
+  };
+  if (supported.has('reasoning') || supported.has('reasoning_effort')) {
+    evaluationBody.reasoning = { effort: 'low' };
+  }
+  const result = await attemptJson(modelId, evaluationBody);
+  const latencyMs = Date.now() - startedAt;
+  if (!result.ok) {
+    return {
+      status: 'pending',
+      attemptedAt: new Date().toISOString(),
+      latencyMs,
+      error: `${result.status} ${result.reason}`.slice(0, 300),
+    };
+  }
+
+  const answers = parseEvaluationAnswers(evaluationText(result.payload));
+  let benchmarkScore = 0;
+  if (answers) benchmarkScore += 5;
+  if (answers?.token === 'OX-RANK-7') benchmarkScore += 5;
+  if (Number(answers?.crt) === 269) benchmarkScore += 15;
+  if (String(answers?.trace) === '1-3') benchmarkScore += 10;
+  if (Number(answers?.path) === 10) benchmarkScore += 10;
+  if (Number(answers?.sequence) === 42) benchmarkScore += 10;
+  if (Number(answers?.binary) === 55) benchmarkScore += 10;
+
+  const modelMetadataScore = metadataScore(catalog.get(modelId));
+  const latencyScore = latencyMs <= 5000 ? 15 : latencyMs <= 15000 ? 10 : latencyMs <= 30000 ? 5 : 0;
+  const score = Math.round((benchmarkScore + modelMetadataScore + latencyScore) * 10) / 10;
+  return {
+    status: 'scored',
+    evaluatedAt: new Date().toISOString(),
+    score,
+    benchmarkScore,
+    metadataScore: modelMetadataScore,
+    latencyScore,
+    latencyMs,
+  };
+}
+
+async function performFreeModelDiscovery(forceCatalogRefresh = false) {
+  if (!DISCOVERY_ENABLED) return;
+  if (
+    discoveryLastCheckedAt &&
+    Date.now() - discoveryLastCheckedAt < DISCOVERY_INTERVAL_MS
+  ) {
+    return;
+  }
+
+  try {
+    if (forceCatalogRefresh || !catalog.size) await refreshCatalog(true);
+    if (!catalog.size || catalogError) throw new Error(catalogError || 'catalog is empty');
+
+    const configured = config.routes?.[DISCOVERY_ROUTE];
+    if (!Array.isArray(configured)) {
+      throw new Error(`discovery route does not exist: ${DISCOVERY_ROUTE}`);
+    }
+
+    const freeIds = [...catalog.values()]
+      .filter((model) => isZeroCost(model) && isChatModel(model))
+      .map((model) => model.id)
+      .filter((id) => typeof id === 'string' && id)
+      .sort();
+    const eligible = new Set(freeIds);
+    const allRouted = [...new Set([...configured, ...discoveredModelIds])];
+    discoveryRemovedIds = allRouted.filter((id) => !eligible.has(id));
+    const removedDiscovered = discoveredModelIds.filter((id) => !eligible.has(id));
+    if (removedDiscovered.length) {
+      discoveredModelIds = discoveredModelIds.filter((id) => eligible.has(id));
+    }
+    if (discoveryRemovedIds.length) {
+      log(
+        `removed ${discoveryRemovedIds.length} non-free or unavailable model(s) from active routes`,
+        discoveryRemovedIds,
+      );
+    }
+    const routed = new Set([...configured, ...discoveredModelIds]);
+    const additions = freeIds.filter((id) => !routed.has(id));
+    if (additions.length) {
+      discoveredModelIds.push(...additions);
+      log(`discovered ${additions.length} free model(s); evaluating for ${DISCOVERY_ROUTE}`, additions);
+    } else {
+      log(`free-model discovery complete: no additions for ${DISCOVERY_ROUTE}`);
+    }
+
+    if (EVALUATION_ENABLED && additions.length) {
+      for (const id of additions) {
+        log(`evaluating newly discovered model ${id}`);
+        modelEvaluations[id] = await evaluateModel(id);
+        if (modelEvaluations[id].status === 'scored') {
+          log(`evaluated ${id}: score ${modelEvaluations[id].score}`);
+        } else {
+          log(`evaluation deferred for ${id}: ${modelEvaluations[id].error}`);
+        }
+        saveDiscoveryState();
+      }
+    }
+
+    discoverySeenIds = freeIds;
+    discoveryLastCheckedAt = Date.now();
+    discoveryError = '';
+    saveDiscoveryState();
+  } catch (error) {
+    discoveryError = error instanceof Error ? error.message : String(error);
+    log(`free-model discovery failed: ${discoveryError}`);
+  }
+}
+
+function discoverFreeModels(forceCatalogRefresh = false) {
+  if (discoveryInFlight) return discoveryInFlight;
+  discoveryInFlight = performFreeModelDiscovery(forceCatalogRefresh).finally(() => {
+    discoveryInFlight = null;
+  });
+  return discoveryInFlight;
+}
+
+function scheduleNextDiscovery() {
+  if (!DISCOVERY_ENABLED) return;
+  const elapsed = discoveryLastCheckedAt ? Date.now() - discoveryLastCheckedAt : 0;
+  const delay = discoveryLastCheckedAt
+    ? Math.max(1000, DISCOVERY_INTERVAL_MS - elapsed)
+    : Math.min(DISCOVERY_INTERVAL_MS, 60 * 60 * 1000);
+  const timer = setTimeout(async () => {
+    await discoverFreeModels(true);
+    scheduleNextDiscovery();
+  }, delay);
+  timer.unref();
+}
+
+loadDiscoveryState();
 
 function requestNeeds(body) {
   const modalities = new Set();
@@ -150,7 +441,7 @@ function setCooldown(modelId, kind, reason) {
 }
 
 function candidateModels(requestedModel, body) {
-  const configured = config.routes?.[requestedModel];
+  const configured = routeModelIds(requestedModel);
   if (!configured) return [requestedModel];
 
   const needs = requestNeeds(body);
@@ -465,13 +756,22 @@ async function readJson(req, limit = 10 * 1024 * 1024) {
 function routeStatus() {
   const now = Date.now();
   const routes = {};
-  for (const [name, ids] of Object.entries(config.routes || {})) {
+  for (const name of Object.keys(config.routes || {})) {
+    const ids = routeModelIds(name) || [];
+    const configured = config.routes[name] || [];
+    const configuredSet = new Set(configured);
+    const configuredIndex = new Map(configured.map((id, index) => [id, index]));
     routes[name] = ids.map((id, priority) => {
       const model = catalog.get(id);
       const cooldown = cooldowns.get(id);
       return {
         priority: priority + 1,
         id,
+        pinned: PINNED_MODELS.has(id),
+        score: PINNED_MODELS.has(id)
+          ? null
+          : rankedModelScore(id, configuredSet, configuredIndex),
+        scoreSource: configuredSet.has(id) ? 'baseline' : 'evaluation',
         zeroCost: model ? isZeroCost(model) : null,
         supportsTools: model ? (model.supported_parameters || []).includes('tools') : null,
         cooldownSeconds:
@@ -556,12 +856,26 @@ async function handler(req, res) {
   const url = new URL(req.url || '/', `http://${req.headers.host || `${HOST}:${PORT}`}`);
   if (req.method === 'GET' && (url.pathname === '/health' || url.pathname === '/v1/health')) {
     await refreshCatalog();
+    await discoverFreeModels();
     return sendJson(res, 200, {
       ok: true,
       service: 'openrouter-free-router',
       catalogModels: catalog.size,
       catalogFetchedAt: catalogFetchedAt ? new Date(catalogFetchedAt).toISOString() : null,
       catalogError: catalogError || null,
+      discovery: {
+        enabled: DISCOVERY_ENABLED,
+        route: DISCOVERY_ROUTE,
+        intervalMs: DISCOVERY_INTERVAL_MS,
+        lastCheckedAt: discoveryLastCheckedAt
+          ? new Date(discoveryLastCheckedAt).toISOString()
+          : null,
+        freeModelsSeen: discoverySeenIds.length,
+        addedModels: discoveredModelIds,
+        removedModels: discoveryRemovedIds,
+        evaluations: modelEvaluations,
+        error: discoveryError || null,
+      },
       routes: routeStatus(),
     });
   }
@@ -606,6 +920,8 @@ server.listen(PORT, HOST, async () => {
   log(`OpenRouter free router listening on http://${HOST}:${PORT}/v1`);
   if (!OPENROUTER_API_KEY) log('warning: OPENROUTER_API_KEY is missing');
   await refreshCatalog(true);
+  await discoverFreeModels();
+  scheduleNextDiscovery();
 });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
