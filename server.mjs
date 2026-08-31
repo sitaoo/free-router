@@ -174,6 +174,9 @@ function loadDiscoveryState() {
     discoveryLastCheckedAt = Date.parse(state.lastCheckedAt || '') || 0;
     modelEvaluations =
       state.evaluations && typeof state.evaluations === 'object' ? state.evaluations : {};
+    if (state.lastSelection && typeof state.lastSelection === 'object') {
+      lastSelection = state.lastSelection;
+    }
   } catch (error) {
     discoveryError = `state load failed: ${error instanceof Error ? error.message : String(error)}`;
     log(discoveryError);
@@ -188,10 +191,20 @@ function saveDiscoveryState() {
     addedModels: discoveredModelIds,
     removedModels: discoveryRemovedIds,
     evaluations: modelEvaluations,
+    lastSelection,
   };
   const temporaryPath = `${DISCOVERY_STATE_PATH}.${process.pid}.tmp`;
   fs.writeFileSync(temporaryPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o644 });
   fs.renameSync(temporaryPath, DISCOVERY_STATE_PATH);
+}
+
+function rememberSelection(selection) {
+  lastSelection = selection;
+  try {
+    saveDiscoveryState();
+  } catch (error) {
+    log(`failed to persist lastSelection: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function configuredScore(id, configuredIndex) {
@@ -922,12 +935,12 @@ async function handleChat(req, res) {
       : await attemptJson(candidate, body, clientController.signal);
 
     if (result.ok) {
-      lastSelection = {
+      rememberSelection({
         route: requestedModel,
         provider: candidate.provider,
         model: candidate.model,
         selectedAt: new Date().toISOString(),
-      };
+      });
       if (!body.stream) {
         log(`selected ${candidateKey(candidate)}`);
         return sendJson(res, 200, result.payload, {
@@ -963,8 +976,6 @@ async function handleChat(req, res) {
 async function handler(req, res) {
   const url = new URL(req.url || '/', `http://${req.headers.host || `${HOST}:${PORT}`}`);
   if (req.method === 'GET' && (url.pathname === '/health' || url.pathname === '/v1/health')) {
-    await refreshCatalog();
-    await discoverFreeModels();
     return sendJson(res, 200, {
       ok: true,
       service: 'free-router',
