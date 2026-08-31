@@ -26,7 +26,6 @@ function loadEnvFile(file) {
 }
 
 const envCandidates = [
-  process.env.FREE_ROUTER_ENV,
   path.join(HERE, '.env'),
   path.join(os.homedir(), '.hermes', '.env'),
 ];

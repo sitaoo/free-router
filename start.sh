@@ -17,7 +17,6 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 
 PID_FILE="$DIR/router.pid"
-LOG_FILE="$DIR/router.log"
 
 if [ -s "$PID_FILE" ]; then
   PID="$(cat "$PID_FILE")"
@@ -40,7 +39,7 @@ load_env() {
 load_env "${HOME}/.hermes/.env"
 load_env "$DIR/.env"
 
-nohup node "$DIR/server.mjs" >>"$LOG_FILE" 2>&1 &
+nohup node "$DIR/server.mjs" >/dev/null 2>&1 &
 PID=$!
 echo "$PID" >"$PID_FILE"
 
@@ -53,5 +52,5 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.5
 done
 
-echo "router failed to become healthy; see $LOG_FILE" >&2
+echo "router failed to become healthy; run: node server.mjs" >&2
 exit 1

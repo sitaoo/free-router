@@ -31,9 +31,8 @@ cp .env.example .env
 Lookup order, first non-empty value wins:
 
 1. Process environment (`export OPENROUTER_API_KEY=...`)
-2. `FREE_ROUTER_ENV`, if you point it at another env file
-3. `.env` in the project directory
-4. `~/.hermes/.env`, if you already keep keys there
+2. `.env` in the project directory
+3. `~/.hermes/.env`, if you already keep keys there
 
 `.env` is gitignored. Do not put keys in the systemd unit, README, or config.
 
