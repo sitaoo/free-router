@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Ordered, health-aware OpenRouter free-model gateway for Hermes Agent",
+  "description": "Ordered, health-aware TokenRouter and OpenRouter free-model gateway for Hermes Agent",
   "scripts": {
     "start": "node server.mjs",
     "check": "node --check server.mjs && node --check test-smoke.mjs",

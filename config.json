@@ -3,6 +3,19 @@
   "port": 8787,
   "attemptTimeoutMs": 180000,
   "catalogRefreshMs": 900000,
+  "providers": {
+    "openrouter": {
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "keyEnv": "OPENROUTER_API_KEY"
+    },
+    "tokenrouter": {
+      "baseUrl": "https://api.tokenrouter.com/v1",
+      "keyEnv": "TOKENROUTER_API_KEY",
+      "freeModels": [
+        "z-ai/glm-5.3-free"
+      ]
+    }
+  },
   "discovery": {
     "enabled": true,
     "intervalMs": 604800000,
@@ -12,7 +25,7 @@
       "enabled": true,
       "maxTokens": 4000,
       "pinnedModels": [
-        "stealth/ox-alpha"
+        "tokenrouter:z-ai/glm-5.3-free"
       ]
     }
   },
@@ -26,6 +39,10 @@
   },
   "routes": {
     "free-best": [
+      {
+        "provider": "tokenrouter",
+        "model": "z-ai/glm-5.3-free"
+      },
       "stealth/ox-alpha",
       "z-ai/glm-5.2:free",
       "poolside/laguna-s-2.1:free",

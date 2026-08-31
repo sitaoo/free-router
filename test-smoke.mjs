@@ -115,8 +115,42 @@ const mock = http.createServer(async (req, res) => {
   res.writeHead(404).end();
 });
 
+let tokenRouterRequests = 0;
+const tokenRouterMock = http.createServer(async (req, res) => {
+  if (req.method === 'POST' && req.url === '/api/v1/chat/completions') {
+    tokenRouterRequests += 1;
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const shouldFail = body.messages?.some(
+      (message) => message.content === 'force-token-failure',
+    );
+    if (shouldFail) {
+      res.writeHead(429, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'tokenrouter rate limited' } }));
+      return;
+    }
+    res.setHeader('Content-Type', 'application/json');
+    res.end(
+      JSON.stringify({
+        model: 'glm-5.3',
+        choices: [
+          {
+            message: { role: 'assistant', content: 'tokenrouter-ok' },
+            finish_reason: 'stop',
+          },
+        ],
+      }),
+    );
+    return;
+  }
+  res.writeHead(404).end();
+});
+
 await listen(mock);
 const mockPort = mock.address().port;
+await listen(tokenRouterMock);
+const tokenRouterPort = tokenRouterMock.address().port;
 
 const portProbe = http.createServer();
 await listen(portProbe);
@@ -132,6 +166,17 @@ fs.writeFileSync(
     port: routerPort,
     attemptTimeoutMs: 5000,
     catalogRefreshMs: 1000,
+    providers: {
+      openrouter: {
+        baseUrl: `http://127.0.0.1:${mockPort}/api/v1`,
+        keyEnv: 'OPENROUTER_API_KEY',
+      },
+      tokenrouter: {
+        baseUrl: `http://127.0.0.1:${tokenRouterPort}/api/v1`,
+        keyEnv: 'TOKENROUTER_API_KEY',
+        freeModels: ['z-ai/glm-5.3-free'],
+      },
+    },
     discovery: {
       enabled: true,
       intervalMs: 604800000,
@@ -139,12 +184,18 @@ fs.writeFileSync(
       stateFile: 'discovered-free-models.json',
       evaluation: {
         enabled: true,
-        pinnedModels: ['mock-a'],
+        pinnedModels: ['tokenrouter:z-ai/glm-5.3-free'],
         baselineScores: { 'mock-b': 80 },
       },
     },
     cooldownMs: {},
-    routes: { 'test-route': ['mock-a', 'mock-b'] },
+    routes: {
+      'test-route': [
+        { provider: 'tokenrouter', model: 'z-ai/glm-5.3-free' },
+        'mock-a',
+        'mock-b',
+      ],
+    },
   }),
 );
 
@@ -153,6 +204,8 @@ const child = spawn(process.execPath, [path.join(HERE, 'server.mjs')], {
     ...process.env,
     OPENROUTER_API_KEY: 'test-key',
     OPENROUTER_BASE_URL: `http://127.0.0.1:${mockPort}/api/v1`,
+    TOKENROUTER_API_KEY: 'token-test-key',
+    TOKENROUTER_BASE_URL: `http://127.0.0.1:${tokenRouterPort}/api/v1`,
     FREE_ROUTER_CONFIG: testConfig,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -184,8 +237,9 @@ try {
   assert.deepEqual(health.discovery.addedModels, ['mock-new']);
   assert.deepEqual(
     health.routes['test-route'].map((entry) => entry.id),
-    ['mock-a', 'mock-new'],
+    ['z-ai/glm-5.3-free', 'mock-a', 'mock-new'],
   );
+  assert.equal(health.routes['test-route'][0].provider, 'tokenrouter');
   assert.deepEqual(health.discovery.removedModels, ['mock-b']);
   assert.equal(health.discovery.evaluations['mock-new'].status, 'scored');
   assert.equal(
@@ -198,11 +252,11 @@ try {
   const models = await modelsResponse.json();
   assert.deepEqual(
     models.data.map((model) => model.id),
-    ['test-route', 'mock-a', 'mock-new'],
+    ['test-route', 'z-ai/glm-5.3-free', 'mock-a', 'mock-new'],
   );
   const request = {
     model: 'test-route',
-    messages: [{ role: 'user', content: 'test' }],
+    messages: [{ role: 'user', content: 'force-token-failure' }],
   };
 
   const jsonResponse = await fetch(
@@ -233,15 +287,39 @@ try {
   assert.match(stream, /router-ok/);
   assert.doesNotMatch(stream, /thinking only/);
 
+  const directTokenRouterResponse = await fetch(
+    `http://127.0.0.1:${routerPort}/v1/chat/completions`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'z-ai/glm-5.3-free',
+        messages: [{ role: 'user', content: 'token-success' }],
+      }),
+    },
+  );
+  assert.equal(directTokenRouterResponse.status, 200);
+  assert.equal(
+    directTokenRouterResponse.headers.get('x-free-router-provider'),
+    'tokenrouter',
+  );
+  assert.equal(
+    (await directTokenRouterResponse.json()).choices[0].message.content,
+    'tokenrouter-ok',
+  );
+
   const updatedHealth = await fetch(`http://127.0.0.1:${routerPort}/health`).then((res) =>
     res.json(),
   );
-  assert.equal(updatedHealth.lastSelection.route, 'test-route');
-  assert.equal(updatedHealth.lastSelection.model, 'mock-new');
+  assert.equal(updatedHealth.lastSelection.route, 'z-ai/glm-5.3-free');
+  assert.equal(updatedHealth.lastSelection.provider, 'tokenrouter');
+  assert.equal(updatedHealth.lastSelection.model, 'z-ai/glm-5.3-free');
+  assert.ok(tokenRouterRequests >= 3);
 
-  console.log('smoke test passed: model listing, discovery, fallback, and selection tracking work');
+  console.log('smoke test passed: multi-provider routing, fallback, discovery, and tracking work');
 } finally {
   child.kill('SIGTERM');
   await close(mock);
+  await close(tokenRouterMock);
   fs.rmSync(tempDir, { recursive: true, force: true });
 }

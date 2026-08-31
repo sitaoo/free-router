@@ -1,12 +1,13 @@
 # OpenRouter Free Router
 
-Local OpenAI-compatible gateway for Hermes Agent. It keeps an ordered list of
-zero-cost OpenRouter models and falls back when a model is unavailable,
-rate-limited, times out, or returns only reasoning with no content/tool call.
+Local OpenAI-compatible gateway for Hermes Agent. It tries TokenRouter's free
+GLM-5.3 first, then falls back through an ordered list of zero-cost OpenRouter
+models when a provider is unavailable, rate-limited, times out, or returns only
+reasoning with no content/tool call.
 
 ## Routes
 
-- `free-best`: strongest general/coding models first
+- `free-best`: TokenRouter GLM-5.3 first, then OpenRouter fallbacks
 
 Edit `config.json` to change ordering, timeout, and cooldowns.
 
@@ -52,8 +53,8 @@ models removed because they are no longer free or available.
 
 ## Run
 
-The router reads `OPENROUTER_API_KEY` from the process environment or
-`~/.hermes/.env`.
+The router reads `TOKENROUTER_API_KEY` and `OPENROUTER_API_KEY` from the
+process environment or `~/.hermes/.env`.
 
 ```bash
 cd /home/dannyaw/openrouter-free-router
@@ -77,9 +78,9 @@ GET  /v1/models
 POST /v1/chat/completions
 ```
 
-`GET /v1/models` returns both the route aliases and every currently free
-text-chat model from OpenRouter. A listed concrete model ID can be selected
-directly to bypass fallback routing.
+`GET /v1/models` returns the route alias, TokenRouter's configured free models,
+and every currently free text-chat model from OpenRouter. A listed concrete
+model ID can be selected directly to bypass fallback routing.
 
 Inspect route health and cooldowns:
 
@@ -98,8 +99,9 @@ curl -s http://127.0.0.1:8787/v1/chat/completions \
   }' | jq
 ```
 
-The selected upstream model is returned in the `X-Free-Router-Model` response
-header and OpenRouter's normal `model` response field.
+The selected upstream is returned in the `X-Free-Router-Provider` and
+`X-Free-Router-Model` response headers, plus the provider's normal `model`
+response field.
 
 ## Hermes
 
@@ -139,17 +141,18 @@ journalctl --user -u openrouter-free-router -f
 
 ## Routing behavior
 
-1. Refreshes OpenRouter's catalog every 15 minutes.
-2. Collects newly free text models weekly, evaluates them once, and inserts them
+1. Tries the configured TokenRouter free model first.
+2. Refreshes OpenRouter's catalog every 15 minutes.
+3. Collects newly free OpenRouter text models weekly, evaluates them once, and inserts them
    into `free-best` by score.
-3. Removes models that are no longer free, available, or text-chat compatible
+4. Removes OpenRouter models that are no longer free, available, or text-chat compatible
    from effective routes.
-4. Removes models missing capabilities required by the request, such as tools
+5. Removes models missing capabilities required by the request, such as tools
    or image input.
-5. Tries remaining models in configured order.
-6. Applies cooldowns after rate limits, timeouts, server failures, and empty
+6. Tries remaining models in configured order.
+7. Applies per-provider/model cooldowns after rate limits, timeouts, server failures, and empty
    successful responses.
-7. Buffers reasoning-only stream chunks. Nothing is sent to Hermes until a
+8. Buffers reasoning-only stream chunks. Nothing is sent to Hermes until a
    model emits content or a tool call, so an empty model can still be replaced.
 
 When a concrete OpenRouter model ID is requested instead of one of the route

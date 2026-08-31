@@ -8,9 +8,6 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || path.join(HERE, 'config.json');
-const OPENROUTER_BASE_URL = (
-  process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'
-).replace(/\/+$/, '');
 
 function loadEnvFile(file) {
   if (!fs.existsSync(file)) return;
@@ -38,6 +35,34 @@ const ATTEMPT_TIMEOUT_MS = Number(
 );
 const CATALOG_REFRESH_MS = Number(config.catalogRefreshMs || 900000);
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+const TOKENROUTER_API_KEY = process.env.TOKENROUTER_API_KEY || '';
+const providerConfig = config.providers || {};
+const PROVIDERS = new Map([
+  [
+    'openrouter',
+    {
+      baseUrl: (
+        process.env.OPENROUTER_BASE_URL ||
+        providerConfig.openrouter?.baseUrl ||
+        'https://openrouter.ai/api/v1'
+      ).replace(/\/+$/, ''),
+      apiKey: OPENROUTER_API_KEY,
+      freeModels: null,
+    },
+  ],
+  [
+    'tokenrouter',
+    {
+      baseUrl: (
+        process.env.TOKENROUTER_BASE_URL ||
+        providerConfig.tokenrouter?.baseUrl ||
+        'https://api.tokenrouter.com/v1'
+      ).replace(/\/+$/, ''),
+      apiKey: TOKENROUTER_API_KEY,
+      freeModels: new Set(providerConfig.tokenrouter?.freeModels || []),
+    },
+  ],
+]);
 const discoveryConfig = config.discovery || {};
 const DISCOVERY_ENABLED = discoveryConfig.enabled !== false;
 const DISCOVERY_INTERVAL_MS = Number(discoveryConfig.intervalMs || 7 * 24 * 60 * 60 * 1000);
@@ -70,15 +95,19 @@ function log(message, detail = undefined) {
   else console.log(prefix, message, detail);
 }
 
-function openRouterHeaders() {
-  return {
-    Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+function providerHeaders(providerName) {
+  const provider = PROVIDERS.get(providerName);
+  const headers = {
+    Authorization: `Bearer ${provider?.apiKey || ''}`,
     'Content-Type': 'application/json',
-    'HTTP-Referer':
-      process.env.OPENROUTER_HTTP_REFERER ||
-      'https://github.com/NousResearch/hermes-agent',
-    'X-Title': process.env.OPENROUTER_APP_NAME || 'Hermes Agent',
   };
+  if (providerName === 'openrouter') {
+    headers['HTTP-Referer'] =
+      process.env.OPENROUTER_HTTP_REFERER ||
+      'https://github.com/NousResearch/hermes-agent';
+    headers['X-Title'] = process.env.OPENROUTER_APP_NAME || 'Hermes Agent';
+  }
+  return headers;
 }
 
 function isZeroCost(model) {
@@ -92,6 +121,35 @@ function isChatModel(model) {
   if (!outputs.includes('text') || outputs.some((modality) => modality !== 'text')) return false;
   if (model?.architecture?.tokenizer === 'Router') return false;
   return !/(?:content[-_ ]?safety|moderation|guard)(?:[:/_-]|$)/i.test(model?.id || '');
+}
+
+function normalizeCandidate(entry) {
+  if (typeof entry === 'string') return { provider: 'openrouter', model: entry };
+  if (entry && typeof entry === 'object') {
+    return {
+      provider: String(entry.provider || 'openrouter'),
+      model: String(entry.model || entry.id || ''),
+    };
+  }
+  return { provider: 'openrouter', model: '' };
+}
+
+function candidateKey(candidate) {
+  return `${candidate.provider}:${candidate.model}`;
+}
+
+function candidateMetadata(candidate) {
+  return candidate.provider === 'openrouter' ? catalog.get(candidate.model) : null;
+}
+
+function candidateIsFree(candidate) {
+  const provider = PROVIDERS.get(candidate.provider);
+  if (!provider || !provider.apiKey) return false;
+  if (candidate.provider === 'openrouter') {
+    const model = catalog.get(candidate.model);
+    return !catalog.size || Boolean(model && isZeroCost(model) && isChatModel(model));
+  }
+  return Boolean(provider.freeModels?.has(candidate.model));
 }
 
 function loadDiscoveryState() {
@@ -131,55 +189,61 @@ function saveDiscoveryState() {
 }
 
 function configuredScore(id, configuredIndex) {
-  const explicit = Number(evaluationConfig.baselineScores?.[id]);
+  const separator = id.indexOf(':');
+  const modelId = separator >= 0 ? id.slice(separator + 1) : id;
+  const explicit = Number(
+    evaluationConfig.baselineScores?.[id] ??
+      evaluationConfig.baselineScores?.[modelId],
+  );
   if (Number.isFinite(explicit)) return explicit;
   return Math.max(30, 94 - Math.max(0, configuredIndex - 1) * 4);
 }
 
-function rankedModelScore(id, configured, configuredIndex) {
-  if (PINNED_MODELS.has(id)) return Number.POSITIVE_INFINITY;
-  if (configured.has(id)) return configuredScore(id, configuredIndex.get(id));
-  const evaluated = Number(modelEvaluations[id]?.score);
+function rankedModelScore(key, configured, configuredIndex) {
+  const separator = key.indexOf(':');
+  const modelId = separator >= 0 ? key.slice(separator + 1) : key;
+  if (PINNED_MODELS.has(key) || PINNED_MODELS.has(modelId)) return Number.POSITIVE_INFINITY;
+  if (configured.has(key)) return configuredScore(key, configuredIndex.get(key));
+  const evaluated = Number(modelEvaluations[modelId]?.score);
   return Number.isFinite(evaluated) ? evaluated : -1;
 }
 
-function routeModelIds(routeName) {
+function routeCandidates(routeName) {
   const configured = config.routes?.[routeName];
   if (!configured) return null;
-  const activeConfigured = catalog.size
-    ? configured.filter((id) => {
-        const model = catalog.get(id);
-        return model && isZeroCost(model) && isChatModel(model);
-      })
-    : configured;
+  const normalizedConfigured = configured.map(normalizeCandidate).filter((candidate) => candidate.model);
+  const activeConfigured = normalizedConfigured.filter(candidateIsFree);
   if (!DISCOVERY_ENABLED || routeName !== DISCOVERY_ROUTE) return activeConfigured;
 
-  const ids = [...activeConfigured];
-  const present = new Set(ids);
+  const candidates = [...activeConfigured];
+  const present = new Set(candidates.map(candidateKey));
   for (const id of discoveredModelIds) {
-    if (present.has(id)) continue;
+    const candidate = { provider: 'openrouter', model: id };
+    if (present.has(candidateKey(candidate))) continue;
     const model = catalog.get(id);
     if (catalog.size && (!model || !isZeroCost(model))) continue;
-    ids.push(id);
-    present.add(id);
+    candidates.push(candidate);
+    present.add(candidateKey(candidate));
   }
-  const configuredSet = new Set(configured);
-  const configuredIndex = new Map(configured.map((id, index) => [id, index]));
-  return ids
-    .map((id, originalIndex) => ({ id, originalIndex }))
+  const configuredKeys = normalizedConfigured.map(candidateKey);
+  const configuredSet = new Set(configuredKeys);
+  const configuredIndex = new Map(configuredKeys.map((key, index) => [key, index]));
+  return candidates
+    .map((candidate, originalIndex) => ({ candidate, originalIndex }))
     .sort((a, b) => {
       const scoreDifference =
-        rankedModelScore(b.id, configuredSet, configuredIndex) -
-        rankedModelScore(a.id, configuredSet, configuredIndex);
+        rankedModelScore(candidateKey(b.candidate), configuredSet, configuredIndex) -
+        rankedModelScore(candidateKey(a.candidate), configuredSet, configuredIndex);
       return scoreDifference || a.originalIndex - b.originalIndex;
     })
-    .map(({ id }) => id);
+    .map(({ candidate }) => candidate);
 }
 
 async function refreshCatalog(force = false) {
   if (!force && Date.now() - catalogFetchedAt < CATALOG_REFRESH_MS && catalog.size) return;
   try {
-    const response = await fetch(`${OPENROUTER_BASE_URL}/models`, {
+    const openrouter = PROVIDERS.get('openrouter');
+    const response = await fetch(`${openrouter.baseUrl}/models`, {
       headers: OPENROUTER_API_KEY
         ? { Authorization: `Bearer ${OPENROUTER_API_KEY}` }
         : undefined,
@@ -255,7 +319,10 @@ async function evaluateModel(modelId) {
   if (supported.has('reasoning') || supported.has('reasoning_effort')) {
     evaluationBody.reasoning = { effort: 'low' };
   }
-  const result = await attemptJson(modelId, evaluationBody);
+  const result = await attemptJson(
+    { provider: 'openrouter', model: modelId },
+    evaluationBody,
+  );
   const latencyMs = Date.now() - startedAt;
   if (!result.ok) {
     return {
@@ -307,6 +374,10 @@ async function performFreeModelDiscovery(forceCatalogRefresh = false) {
     if (!Array.isArray(configured)) {
       throw new Error(`discovery route does not exist: ${DISCOVERY_ROUTE}`);
     }
+    const configuredOpenRouterIds = configured
+      .map(normalizeCandidate)
+      .filter((candidate) => candidate.provider === 'openrouter')
+      .map((candidate) => candidate.model);
 
     const freeIds = [...catalog.values()]
       .filter((model) => isZeroCost(model) && isChatModel(model))
@@ -314,7 +385,7 @@ async function performFreeModelDiscovery(forceCatalogRefresh = false) {
       .filter((id) => typeof id === 'string' && id)
       .sort();
     const eligible = new Set(freeIds);
-    const allRouted = [...new Set([...configured, ...discoveredModelIds])];
+    const allRouted = [...new Set([...configuredOpenRouterIds, ...discoveredModelIds])];
     discoveryRemovedIds = allRouted.filter((id) => !eligible.has(id));
     const removedDiscovered = discoveredModelIds.filter((id) => !eligible.has(id));
     if (removedDiscovered.length) {
@@ -326,7 +397,7 @@ async function performFreeModelDiscovery(forceCatalogRefresh = false) {
         discoveryRemovedIds,
       );
     }
-    const routed = new Set([...configured, ...discoveredModelIds]);
+    const routed = new Set([...configuredOpenRouterIds, ...discoveredModelIds]);
     const additions = freeIds.filter((id) => !routed.has(id));
     if (additions.length) {
       discoveredModelIds.push(...additions);
@@ -419,22 +490,23 @@ function supportsRequest(model, needs) {
   return true;
 }
 
-function cooldownRemaining(modelId) {
-  const entry = cooldowns.get(modelId);
+function cooldownRemaining(candidate) {
+  const key = candidateKey(candidate);
+  const entry = cooldowns.get(key);
   if (!entry) return 0;
   const remaining = entry.until - Date.now();
   if (remaining <= 0) {
-    cooldowns.delete(modelId);
+    cooldowns.delete(key);
     return 0;
   }
   return remaining;
 }
 
-function setCooldown(modelId, kind, reason) {
+function setCooldown(candidate, kind, reason) {
   const durations = config.cooldownMs || {};
   const duration = Number(durations[kind] || 0);
   if (!duration) return;
-  cooldowns.set(modelId, {
+  cooldowns.set(candidateKey(candidate), {
     until: Date.now() + duration,
     kind,
     reason: String(reason || '').slice(0, 300),
@@ -442,36 +514,49 @@ function setCooldown(modelId, kind, reason) {
 }
 
 function candidateModels(requestedModel, body) {
-  const configured = routeModelIds(requestedModel);
-  if (!configured) return [requestedModel];
+  const configured = routeCandidates(requestedModel);
+  if (!configured) {
+    const tokenrouter = PROVIDERS.get('tokenrouter');
+    if (tokenrouter?.freeModels?.has(requestedModel)) {
+      return [{ provider: 'tokenrouter', model: requestedModel }];
+    }
+    return [{ provider: 'openrouter', model: requestedModel }];
+  }
 
   const needs = requestNeeds(body);
   const active = [];
   const skipped = [];
-  for (const id of configured) {
-    const model = catalog.get(id);
-    if (model && !isZeroCost(model)) {
-      skipped.push({ model: id, reason: 'not currently zero-cost' });
+  for (const candidate of configured) {
+    const model = candidateMetadata(candidate);
+    if (!candidateIsFree(candidate)) {
+      skipped.push({ model: candidateKey(candidate), reason: 'not currently zero-cost or missing key' });
       continue;
     }
     if (!supportsRequest(model, needs)) {
-      skipped.push({ model: id, reason: 'missing requested capability' });
+      skipped.push({ model: candidateKey(candidate), reason: 'missing requested capability' });
       continue;
     }
-    const remaining = cooldownRemaining(id);
+    const remaining = cooldownRemaining(candidate);
     if (remaining > 0) {
-      skipped.push({ model: id, reason: `cooldown ${Math.ceil(remaining / 1000)}s` });
+      skipped.push({
+        model: candidateKey(candidate),
+        reason: `cooldown ${Math.ceil(remaining / 1000)}s`,
+      });
       continue;
     }
-    active.push(id);
+    active.push(candidate);
   }
 
   // If every compatible model is cooling down, retry them in order instead of
   // turning a temporary cooldown into a hard outage.
   if (!active.length) {
-    for (const id of configured) {
-      const model = catalog.get(id);
-      if ((!model || isZeroCost(model)) && supportsRequest(model, needs)) active.push(id);
+    for (const candidate of configured) {
+      if (
+        candidateIsFree(candidate) &&
+        supportsRequest(candidateMetadata(candidate), needs)
+      ) {
+        active.push(candidate);
+      }
     }
   }
 
@@ -534,7 +619,7 @@ function errorSummary(status, raw) {
   }
 }
 
-async function fetchModel(modelId, body, clientSignal) {
+async function fetchModel(candidate, body, clientSignal) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('attempt timeout')), ATTEMPT_TIMEOUT_MS);
   const abortFromClient = () => controller.abort(new Error('client disconnected'));
@@ -544,10 +629,14 @@ async function fetchModel(modelId, body, clientSignal) {
     clientSignal?.removeEventListener('abort', abortFromClient);
   };
   try {
-    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    const provider = PROVIDERS.get(candidate.provider);
+    if (!provider?.baseUrl || !provider.apiKey) {
+      throw new Error(`provider ${candidate.provider} is not configured`);
+    }
+    const response = await fetch(`${provider.baseUrl}/chat/completions`, {
       method: 'POST',
-      headers: openRouterHeaders(),
-      body: JSON.stringify(sanitizeUpstreamBody(body, modelId)),
+      headers: providerHeaders(candidate.provider),
+      body: JSON.stringify(sanitizeUpstreamBody(body, candidate.model)),
       signal: controller.signal,
     });
     return { response, cleanup };
@@ -557,12 +646,12 @@ async function fetchModel(modelId, body, clientSignal) {
   }
 }
 
-async function attemptJson(modelId, body, clientSignal) {
+async function attemptJson(candidate, body, clientSignal) {
   let response;
   let cleanup = () => {};
   try {
     ({ response, cleanup } = await fetchModel(
-      modelId,
+      candidate,
       { ...body, stream: false },
       clientSignal,
     ));
@@ -621,12 +710,12 @@ async function attemptJson(modelId, body, clientSignal) {
   };
 }
 
-async function attemptStream(modelId, body, res, clientSignal) {
+async function attemptStream(candidate, body, res, clientSignal) {
   let response;
   let cleanup = () => {};
   try {
     ({ response, cleanup } = await fetchModel(
-      modelId,
+      candidate,
       { ...body, stream: true },
       clientSignal,
     ));
@@ -676,7 +765,7 @@ async function attemptStream(modelId, body, res, clientSignal) {
       cleanup();
       if (committed) {
         res.end();
-        return { ok: true, modelId, interrupted: true };
+        return { ok: true, candidate, interrupted: true };
       }
       return { ok: false, status: 502, reason: String(error), kind: 'serverError' };
     }
@@ -705,12 +794,13 @@ async function attemptStream(modelId, body, res, clientSignal) {
             'Content-Type': 'text/event-stream; charset=utf-8',
             'Cache-Control': 'no-cache, no-transform',
             Connection: 'keep-alive',
-            'X-Free-Router-Model': modelId,
+            'X-Free-Router-Model': candidate.model,
+            'X-Free-Router-Provider': candidate.provider,
           });
           for (const chunk of bufferedChunks) res.write(chunk);
           bufferedChunks.length = 0;
           committed = true;
-          log(`selected ${modelId} (stream)`);
+          log(`selected ${candidateKey(candidate)} (stream)`);
           break;
         }
       } catch {
@@ -722,7 +812,7 @@ async function attemptStream(modelId, body, res, clientSignal) {
   if (committed) {
     cleanup();
     res.end();
-    return { ok: true, modelId };
+    return { ok: true, candidate };
   }
   cleanup();
   return {
@@ -758,22 +848,26 @@ function routeStatus() {
   const now = Date.now();
   const routes = {};
   for (const name of Object.keys(config.routes || {})) {
-    const ids = routeModelIds(name) || [];
-    const configured = config.routes[name] || [];
-    const configuredSet = new Set(configured);
-    const configuredIndex = new Map(configured.map((id, index) => [id, index]));
-    routes[name] = ids.map((id, priority) => {
-      const model = catalog.get(id);
-      const cooldown = cooldowns.get(id);
+    const candidates = routeCandidates(name) || [];
+    const configured = (config.routes[name] || []).map(normalizeCandidate);
+    const configuredKeys = configured.map(candidateKey);
+    const configuredSet = new Set(configuredKeys);
+    const configuredIndex = new Map(configuredKeys.map((key, index) => [key, index]));
+    routes[name] = candidates.map((candidate, priority) => {
+      const key = candidateKey(candidate);
+      const model = candidateMetadata(candidate);
+      const cooldown = cooldowns.get(key);
+      const pinned = PINNED_MODELS.has(key) || PINNED_MODELS.has(candidate.model);
       return {
         priority: priority + 1,
-        id,
-        pinned: PINNED_MODELS.has(id),
-        score: PINNED_MODELS.has(id)
+        provider: candidate.provider,
+        id: candidate.model,
+        pinned,
+        score: pinned
           ? null
-          : rankedModelScore(id, configuredSet, configuredIndex),
-        scoreSource: configuredSet.has(id) ? 'baseline' : 'evaluation',
-        zeroCost: model ? isZeroCost(model) : null,
+          : rankedModelScore(key, configuredSet, configuredIndex),
+        scoreSource: configuredSet.has(key) ? 'baseline' : 'evaluation',
+        zeroCost: candidate.provider === 'openrouter' ? (model ? isZeroCost(model) : null) : true,
         supportsTools: model ? (model.supported_parameters || []).includes('tools') : null,
         cooldownSeconds:
           cooldown && cooldown.until > now ? Math.ceil((cooldown.until - now) / 1000) : 0,
@@ -785,15 +879,6 @@ function routeStatus() {
 }
 
 async function handleChat(req, res) {
-  if (!OPENROUTER_API_KEY) {
-    return sendJson(res, 503, {
-      error: {
-        message: 'OPENROUTER_API_KEY is not configured',
-        type: 'router_configuration_error',
-      },
-    });
-  }
-
   let body;
   try {
     body = await readJson(req);
@@ -816,35 +901,46 @@ async function handleChat(req, res) {
   }
 
   const failures = [];
+  const failedProviders = new Set();
   const clientController = new AbortController();
   res.on('close', () => {
     if (!res.writableEnded) clientController.abort();
   });
 
-  for (const modelId of candidates) {
+  for (const candidate of candidates) {
     if (clientController.signal.aborted) return;
-    log(`trying ${modelId} for ${requestedModel}`);
+    if (failedProviders.has(candidate.provider)) continue;
+    log(`trying ${candidateKey(candidate)} for ${requestedModel}`);
     const result = body.stream
-      ? await attemptStream(modelId, body, res, clientController.signal)
-      : await attemptJson(modelId, body, clientController.signal);
+      ? await attemptStream(candidate, body, res, clientController.signal)
+      : await attemptJson(candidate, body, clientController.signal);
 
     if (result.ok) {
       lastSelection = {
         route: requestedModel,
-        model: modelId,
+        provider: candidate.provider,
+        model: candidate.model,
         selectedAt: new Date().toISOString(),
       };
       if (!body.stream) {
-        log(`selected ${modelId}`);
-        return sendJson(res, 200, result.payload, { 'X-Free-Router-Model': modelId });
+        log(`selected ${candidateKey(candidate)}`);
+        return sendJson(res, 200, result.payload, {
+          'X-Free-Router-Model': candidate.model,
+          'X-Free-Router-Provider': candidate.provider,
+        });
       }
       return;
     }
 
-    failures.push({ model: modelId, status: result.status, reason: result.reason });
-    if (result.kind) setCooldown(modelId, result.kind, result.reason);
-    log(`failed ${modelId}: ${result.status} ${result.reason}`);
-    if (result.fatal) break;
+    failures.push({
+      provider: candidate.provider,
+      model: candidate.model,
+      status: result.status,
+      reason: result.reason,
+    });
+    if (result.kind) setCooldown(candidate, result.kind, result.reason);
+    log(`failed ${candidateKey(candidate)}: ${result.status} ${result.reason}`);
+    if (result.fatal) failedProviders.add(candidate.provider);
   }
 
   if (!res.headersSent) {
@@ -869,6 +965,12 @@ async function handler(req, res) {
       catalogModels: catalog.size,
       catalogFetchedAt: catalogFetchedAt ? new Date(catalogFetchedAt).toISOString() : null,
       catalogError: catalogError || null,
+      providers: Object.fromEntries(
+        [...PROVIDERS.entries()].map(([name, provider]) => [
+          name,
+          { configured: Boolean(provider.apiKey), baseUrl: provider.baseUrl },
+        ]),
+      ),
       discovery: {
         enabled: DISCOVERY_ENABLED,
         route: DISCOVERY_ROUTE,
@@ -894,8 +996,20 @@ async function handler(req, res) {
       created: 0,
       owned_by: 'openrouter-free-router',
     }));
+    const tokenrouter = PROVIDERS.get('tokenrouter');
+    const tokenRouterModels = tokenrouter?.apiKey
+      ? [...(tokenrouter.freeModels || [])].map((id) => ({
+          id,
+          object: 'model',
+          created: 0,
+          owned_by: 'tokenrouter',
+          context_length: 0,
+        }))
+      : [];
+    const tokenRouterIds = new Set(tokenRouterModels.map((model) => model.id));
     const concreteModels = [...catalog.values()]
       .filter((model) => isZeroCost(model) && isChatModel(model))
+      .filter((model) => !tokenRouterIds.has(model.id))
       .sort((a, b) => String(a.id).localeCompare(String(b.id)))
       .map((model) => ({
         id: model.id,
@@ -906,7 +1020,7 @@ async function handler(req, res) {
       }));
     return sendJson(res, 200, {
       object: 'list',
-      data: [...routeModels, ...concreteModels],
+      data: [...routeModels, ...tokenRouterModels, ...concreteModels],
     });
   }
   if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
@@ -937,6 +1051,7 @@ server.keepAliveTimeout = 5000;
 server.listen(PORT, HOST, async () => {
   log(`OpenRouter free router listening on http://${HOST}:${PORT}/v1`);
   if (!OPENROUTER_API_KEY) log('warning: OPENROUTER_API_KEY is missing');
+  if (!TOKENROUTER_API_KEY) log('warning: TOKENROUTER_API_KEY is missing');
   await refreshCatalog(true);
   await discoverFreeModels();
   scheduleNextDiscovery();
