@@ -62,6 +62,7 @@ let discoveryLastCheckedAt = 0;
 let discoveryError = '';
 let discoveryInFlight = null;
 let modelEvaluations = {};
+let lastSelection = null;
 
 function log(message, detail = undefined) {
   const prefix = `[${new Date().toISOString()}]`;
@@ -828,6 +829,11 @@ async function handleChat(req, res) {
       : await attemptJson(modelId, body, clientController.signal);
 
     if (result.ok) {
+      lastSelection = {
+        route: requestedModel,
+        model: modelId,
+        selectedAt: new Date().toISOString(),
+      };
       if (!body.stream) {
         log(`selected ${modelId}`);
         return sendJson(res, 200, result.payload, { 'X-Free-Router-Model': modelId });
@@ -876,19 +882,31 @@ async function handler(req, res) {
         evaluations: modelEvaluations,
         error: discoveryError || null,
       },
+      lastSelection,
       routes: routeStatus(),
     });
   }
   if (req.method === 'GET' && url.pathname === '/v1/models') {
     await refreshCatalog();
+    const routeModels = Object.keys(config.routes || {}).map((id) => ({
+      id,
+      object: 'model',
+      created: 0,
+      owned_by: 'openrouter-free-router',
+    }));
+    const concreteModels = [...catalog.values()]
+      .filter((model) => isZeroCost(model) && isChatModel(model))
+      .sort((a, b) => String(a.id).localeCompare(String(b.id)))
+      .map((model) => ({
+        id: model.id,
+        object: 'model',
+        created: Number(model.created || 0),
+        owned_by: model.id.split('/')[0] || 'openrouter',
+        context_length: Number(model.context_length || 0),
+      }));
     return sendJson(res, 200, {
       object: 'list',
-      data: Object.keys(config.routes || {}).map((id) => ({
-        id,
-        object: 'model',
-        created: 0,
-        owned_by: 'openrouter-free-router',
-      })),
+      data: [...routeModels, ...concreteModels],
     });
   }
   if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {

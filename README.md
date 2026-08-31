@@ -7,8 +7,6 @@ rate-limited, times out, or returns only reasoning with no content/tool call.
 ## Routes
 
 - `free-best`: strongest general/coding models first
-- `free-code`: coding-focused order
-- `free-fast`: low-latency models first
 
 Edit `config.json` to change ordering, timeout, and cooldowns.
 
@@ -79,6 +77,10 @@ GET  /v1/models
 POST /v1/chat/completions
 ```
 
+`GET /v1/models` returns both the route aliases and every currently free
+text-chat model from OpenRouter. A listed concrete model ID can be selected
+directly to bypass fallback routing.
+
 Inspect route health and cooldowns:
 
 ```bash
@@ -108,14 +110,6 @@ model_aliases:
   free-best:
     provider: custom
     model: free-best
-    base_url: http://127.0.0.1:8787/v1
-  free-code:
-    provider: custom
-    model: free-code
-    base_url: http://127.0.0.1:8787/v1
-  free-fast:
-    provider: custom
-    model: free-fast
     base_url: http://127.0.0.1:8787/v1
 ```
 

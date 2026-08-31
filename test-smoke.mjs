@@ -193,6 +193,13 @@ try {
       .addedModels[0],
     'mock-new',
   );
+  const modelsResponse = await fetch(`http://127.0.0.1:${routerPort}/v1/models`);
+  assert.equal(modelsResponse.status, 200);
+  const models = await modelsResponse.json();
+  assert.deepEqual(
+    models.data.map((model) => model.id),
+    ['test-route', 'mock-a', 'mock-new'],
+  );
   const request = {
     model: 'test-route',
     messages: [{ role: 'user', content: 'test' }],
@@ -226,7 +233,13 @@ try {
   assert.match(stream, /router-ok/);
   assert.doesNotMatch(stream, /thinking only/);
 
-  console.log('smoke test passed: discovery and empty-response fallback work');
+  const updatedHealth = await fetch(`http://127.0.0.1:${routerPort}/health`).then((res) =>
+    res.json(),
+  );
+  assert.equal(updatedHealth.lastSelection.route, 'test-route');
+  assert.equal(updatedHealth.lastSelection.model, 'mock-new');
+
+  console.log('smoke test passed: model listing, discovery, fallback, and selection tracking work');
 } finally {
   child.kill('SIGTERM');
   await close(mock);

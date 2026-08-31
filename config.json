@@ -41,25 +41,6 @@
       "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
       "dots-studio/dots-3-note-preview:free",
       "liquid/lfm-2.5-2.6b:free"
-    ],
-    "free-code": [
-      "stealth/ox-alpha",
-      "z-ai/glm-5.2:free",
-      "poolside/laguna-s-2.1:free",
-      "thinkingmachines/inkling:free",
-      "poolside/laguna-xs-2.1:free",
-      "cohere/north-mini-code:free",
-      "nvidia/nemotron-3-ultra-550b-a55b:free",
-      "thinkingmachines/inkling-small:free",
-      "google/gemma-4-31b-it:free"
-    ],
-    "free-fast": [
-      "nvidia/nemotron-3.5-lightning:free",
-      "google/gemma-4-31b-it:free",
-      "google/gemma-4-26b-a4b-it:free",
-      "poolside/laguna-xs-2.1:free",
-      "cohere/north-mini-code:free",
-      "liquid/lfm-2.5-2.6b:free"
     ]
   }
 }
