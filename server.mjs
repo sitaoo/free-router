@@ -7,13 +7,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || path.join(HERE, 'config.json');
 
 function loadEnvFile(file) {
   if (!fs.existsSync(file)) return;
   for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
     const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
-    if (!match || process.env[match[1]] !== undefined) continue;
+    if (!match) continue;
     let value = match[2];
     if (
       (value.startsWith('"') && value.endsWith('"')) ||
@@ -21,12 +20,21 @@ function loadEnvFile(file) {
     ) {
       value = value.slice(1, -1);
     }
+    if (!value || process.env[match[1]]) continue;
     process.env[match[1]] = value;
   }
 }
 
-loadEnvFile(path.join(os.homedir(), '.hermes', '.env'));
+const envCandidates = [
+  process.env.FREE_ROUTER_ENV,
+  path.join(HERE, '.env'),
+  path.join(os.homedir(), '.hermes', '.env'),
+];
+for (const file of envCandidates) {
+  if (file) loadEnvFile(file);
+}
 
+const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || path.join(HERE, 'config.json');
 const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 const HOST = process.env.FREE_ROUTER_HOST || config.host || '127.0.0.1';
 const PORT = Number(process.env.FREE_ROUTER_PORT || config.port || 8787);
@@ -103,9 +111,8 @@ function providerHeaders(providerName) {
   };
   if (providerName === 'openrouter') {
     headers['HTTP-Referer'] =
-      process.env.OPENROUTER_HTTP_REFERER ||
-      'https://github.com/NousResearch/hermes-agent';
-    headers['X-Title'] = process.env.OPENROUTER_APP_NAME || 'Hermes Agent';
+      process.env.OPENROUTER_HTTP_REFERER || `http://${HOST}:${PORT}`;
+    headers['X-Title'] = process.env.OPENROUTER_APP_NAME || 'Free Router';
   }
   return headers;
 }
@@ -961,7 +968,7 @@ async function handler(req, res) {
     await discoverFreeModels();
     return sendJson(res, 200, {
       ok: true,
-      service: 'openrouter-free-router',
+      service: 'free-router',
       catalogModels: catalog.size,
       catalogFetchedAt: catalogFetchedAt ? new Date(catalogFetchedAt).toISOString() : null,
       catalogError: catalogError || null,
@@ -994,7 +1001,7 @@ async function handler(req, res) {
       id,
       object: 'model',
       created: 0,
-      owned_by: 'openrouter-free-router',
+      owned_by: 'free-router',
     }));
     const tokenrouter = PROVIDERS.get('tokenrouter');
     const tokenRouterModels = tokenrouter?.apiKey
@@ -1049,7 +1056,7 @@ server.headersTimeout = 65000;
 server.keepAliveTimeout = 5000;
 
 server.listen(PORT, HOST, async () => {
-  log(`OpenRouter free router listening on http://${HOST}:${PORT}/v1`);
+  log(`Free Router listening on http://${HOST}:${PORT}/v1`);
   if (!OPENROUTER_API_KEY) log('warning: OPENROUTER_API_KEY is missing');
   if (!TOKENROUTER_API_KEY) log('warning: TOKENROUTER_API_KEY is missing');
   await refreshCatalog(true);

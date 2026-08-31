@@ -1,0 +1,16 @@
+[Unit]
+Description=Free Router local model gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/free-router
+EnvironmentFile=-%h/.hermes/.env
+EnvironmentFile=-%h/free-router/.env
+ExecStart=/usr/bin/node %h/free-router/server.mjs
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

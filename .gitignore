@@ -1,3 +1,5 @@
+.env
+.env.local
 router.log
 router.pid
 discovered-free-models.json

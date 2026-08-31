@@ -2,10 +2,18 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [ "$(id -u)" -eq 0 ]; then
+  owner="$(stat -c '%U' "$DIR")"
+  if [ -n "$owner" ] && [ "$owner" != "root" ] && command -v runuser >/dev/null 2>&1; then
+    exec runuser -u "$owner" -- "$DIR/stop.sh" "$@"
+  fi
+fi
+
 PID_FILE="$DIR/router.pid"
 
 if [ ! -s "$PID_FILE" ]; then
-  echo "openrouter-free-router is not running"
+  echo "free-router is not running"
   exit 0
 fi
 
@@ -18,4 +26,4 @@ if kill -0 "$PID" 2>/dev/null; then
   done
 fi
 rm -f "$PID_FILE"
-echo "openrouter-free-router stopped"
+echo "free-router stopped"
