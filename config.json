@@ -3,10 +3,22 @@
   "port": 8787,
   "attemptTimeoutMs": 180000,
   "catalogRefreshMs": 900000,
+  "defaultProvider": "openrouter",
   "providers": {
     "openrouter": {
+      "catalog": true,
       "baseUrl": "https://openrouter.ai/api/v1",
-      "keyEnv": "OPENROUTER_API_KEY"
+      "keyEnv": "OPENROUTER_API_KEY",
+      "headers": {
+        "HTTP-Referer": {
+          "env": "OPENROUTER_HTTP_REFERER",
+          "default": "${origin}"
+        },
+        "X-Title": {
+          "env": "OPENROUTER_APP_NAME",
+          "default": "Free Router"
+        }
+      }
     },
     "tokenrouter": {
       "baseUrl": "https://api.tokenrouter.com/v1",
@@ -14,10 +26,22 @@
       "freeModels": [
         "z-ai/glm-5.3-free"
       ]
+    },
+    "bai": {
+      "baseUrl": "https://api.b.ai/v1",
+      "keyEnv": "BAI_API_KEY",
+      "freeModels": [
+        "glm-5.3-flash",
+        "deepseek-v4-flash",
+        "qwen3.8-flash",
+        "hy3",
+        "mimo-v2.5"
+      ]
     }
   },
   "discovery": {
     "enabled": true,
+    "provider": "openrouter",
     "intervalMs": 604800000,
     "route": "free-best",
     "stateFile": "discovered-free-models.json",
@@ -25,7 +49,8 @@
       "enabled": true,
       "maxTokens": 4000,
       "pinnedModels": [
-        "tokenrouter:z-ai/glm-5.3-free"
+        "tokenrouter:z-ai/glm-5.3-free",
+        "bai:glm-5.3-flash"
       ]
     }
   },
@@ -43,8 +68,28 @@
         "provider": "tokenrouter",
         "model": "z-ai/glm-5.3-free"
       },
+      {
+        "provider": "bai",
+        "model": "glm-5.3-flash"
+      },
+      {
+        "provider": "bai",
+        "model": "deepseek-v4-flash"
+      },
       "stealth/ox-alpha",
       "z-ai/glm-5.2:free",
+      {
+        "provider": "bai",
+        "model": "qwen3.8-flash"
+      },
+      {
+        "provider": "bai",
+        "model": "hy3"
+      },
+      {
+        "provider": "bai",
+        "model": "mimo-v2.5"
+      },
       "poolside/laguna-s-2.1:free",
       "thinkingmachines/inkling:free",
       "thinkingmachines/inkling-small:free",

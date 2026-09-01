@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "OpenAI-compatible local gateway that routes to TokenRouter and OpenRouter free models",
+  "description": "OpenAI-compatible local gateway that ranks free models across pluggable providers",
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check test-smoke.mjs",
+    "check": "node --check providers.mjs && node --check proxy.mjs && node --check server.mjs && node --check test-smoke.mjs",
     "test": "node test-smoke.mjs"
   },
   "engines": {

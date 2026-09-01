@@ -147,10 +147,73 @@ const tokenRouterMock = http.createServer(async (req, res) => {
   res.writeHead(404).end();
 });
 
+let baiRequests = 0;
+const baiMock = http.createServer(async (req, res) => {
+  if (req.method === 'POST' && req.url === '/v1/chat/completions') {
+    baiRequests += 1;
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (body.stream) {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(
+        `data: ${JSON.stringify({
+          model: body.model,
+          choices: [{ delta: { content: 'bai-ok' }, finish_reason: null }],
+        })}\n\n`,
+      );
+      res.end('data: [DONE]\n\n');
+      return;
+    }
+    res.setHeader('Content-Type', 'application/json');
+    res.end(
+      JSON.stringify({
+        model: body.model,
+        choices: [
+          {
+            message: { role: 'assistant', content: 'bai-ok' },
+            finish_reason: 'stop',
+          },
+        ],
+      }),
+    );
+    return;
+  }
+  res.writeHead(404).end();
+});
+
+let extraRequests = 0;
+const extraMock = http.createServer(async (req, res) => {
+  if (req.method === 'POST' && req.url === '/v1/chat/completions') {
+    extraRequests += 1;
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    res.setHeader('Content-Type', 'application/json');
+    res.end(
+      JSON.stringify({
+        model: body.model,
+        choices: [
+          {
+            message: { role: 'assistant', content: 'extra-ok' },
+            finish_reason: 'stop',
+          },
+        ],
+      }),
+    );
+    return;
+  }
+  res.writeHead(404).end();
+});
+
 await listen(mock);
 const mockPort = mock.address().port;
 await listen(tokenRouterMock);
 const tokenRouterPort = tokenRouterMock.address().port;
+await listen(baiMock);
+const baiPort = baiMock.address().port;
+await listen(extraMock);
+const extraPort = extraMock.address().port;
 
 const portProbe = http.createServer();
 await listen(portProbe);
@@ -166,8 +229,10 @@ fs.writeFileSync(
     port: routerPort,
     attemptTimeoutMs: 5000,
     catalogRefreshMs: 1000,
+    defaultProvider: 'openrouter',
     providers: {
       openrouter: {
+        catalog: true,
         baseUrl: `http://127.0.0.1:${mockPort}/api/v1`,
         keyEnv: 'OPENROUTER_API_KEY',
       },
@@ -176,15 +241,26 @@ fs.writeFileSync(
         keyEnv: 'TOKENROUTER_API_KEY',
         freeModels: ['z-ai/glm-5.3-free'],
       },
+      bai: {
+        baseUrl: `http://127.0.0.1:${baiPort}/v1`,
+        keyEnv: 'BAI_API_KEY',
+        freeModels: ['glm-5.3-flash'],
+      },
+      extra: {
+        baseUrl: `http://127.0.0.1:${extraPort}/v1`,
+        keyEnv: 'EXTRA_API_KEY',
+        freeModels: ['extra-1'],
+      },
     },
     discovery: {
       enabled: true,
+      provider: 'openrouter',
       intervalMs: 604800000,
       route: 'test-route',
       stateFile: 'discovered-free-models.json',
       evaluation: {
         enabled: true,
-        pinnedModels: ['tokenrouter:z-ai/glm-5.3-free'],
+        pinnedModels: ['tokenrouter:z-ai/glm-5.3-free', 'bai:glm-5.3-flash'],
         baselineScores: { 'mock-b': 80 },
       },
     },
@@ -192,8 +268,10 @@ fs.writeFileSync(
     routes: {
       'test-route': [
         { provider: 'tokenrouter', model: 'z-ai/glm-5.3-free' },
+        { provider: 'bai', model: 'glm-5.3-flash' },
         'mock-a',
         'mock-b',
+        { provider: 'extra', model: 'extra-1' },
       ],
     },
   }),
@@ -206,6 +284,10 @@ const child = spawn(process.execPath, [path.join(HERE, 'server.mjs')], {
     OPENROUTER_BASE_URL: `http://127.0.0.1:${mockPort}/api/v1`,
     TOKENROUTER_API_KEY: 'token-test-key',
     TOKENROUTER_BASE_URL: `http://127.0.0.1:${tokenRouterPort}/api/v1`,
+    BAI_API_KEY: 'bai-test-key',
+    BAI_BASE_URL: `http://127.0.0.1:${baiPort}/v1`,
+    EXTRA_API_KEY: 'extra-test-key',
+    EXTRA_BASE_URL: `http://127.0.0.1:${extraPort}/v1`,
     FREE_ROUTER_CONFIG: testConfig,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -223,7 +305,10 @@ async function waitForHealth() {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try {
       const response = await fetch(`http://127.0.0.1:${routerPort}/health`);
-      if (response.ok) return response.json();
+      if (response.ok) {
+        const health = await response.json();
+        if (health.discovery?.lastCheckedAt) return health;
+      }
     } catch {
       // Service is still starting.
     }
@@ -236,10 +321,20 @@ try {
   const health = await waitForHealth();
   assert.deepEqual(health.discovery.addedModels, ['mock-new']);
   assert.deepEqual(
-    health.routes['test-route'].map((entry) => entry.id),
-    ['z-ai/glm-5.3-free', 'mock-a', 'mock-new'],
+    health.routes['test-route'].map((entry) => `${entry.provider}:${entry.id}`),
+    [
+      'tokenrouter:z-ai/glm-5.3-free',
+      'bai:glm-5.3-flash',
+      'openrouter:mock-new',
+      'openrouter:mock-a',
+      'extra:extra-1',
+    ],
   );
-  assert.equal(health.routes['test-route'][0].provider, 'tokenrouter');
+  assert.equal(health.defaultProvider, 'openrouter');
+  assert.equal(health.discovery.provider, 'openrouter');
+  assert.equal(health.providers.openrouter.kind, 'catalog');
+  assert.equal(health.providers.extra.kind, 'static');
+  assert.equal(health.providers.extra.configured, true);
   assert.deepEqual(health.discovery.removedModels, ['mock-b']);
   assert.equal(health.discovery.evaluations['mock-new'].status, 'scored');
   assert.equal(
@@ -252,7 +347,7 @@ try {
   const models = await modelsResponse.json();
   assert.deepEqual(
     models.data.map((model) => model.id),
-    ['test-route', 'z-ai/glm-5.3-free', 'mock-a', 'mock-new'],
+    ['test-route', 'z-ai/glm-5.3-free', 'glm-5.3-flash', 'extra-1', 'mock-a', 'mock-new'],
   );
   const request = {
     model: 'test-route',
@@ -268,10 +363,11 @@ try {
     },
   );
   assert.equal(jsonResponse.status, 200);
-  assert.equal(jsonResponse.headers.get('x-free-router-model'), 'mock-new');
+  assert.equal(jsonResponse.headers.get('x-free-router-provider'), 'bai');
+  assert.equal(jsonResponse.headers.get('x-free-router-model'), 'glm-5.3-flash');
   const json = await jsonResponse.json();
-  assert.equal(json.model, 'mock-new');
-  assert.equal(json.choices[0].message.content, 'router-ok');
+  assert.equal(json.model, 'glm-5.3-flash');
+  assert.equal(json.choices[0].message.content, 'bai-ok');
 
   const streamResponse = await fetch(
     `http://127.0.0.1:${routerPort}/v1/chat/completions`,
@@ -282,9 +378,10 @@ try {
     },
   );
   assert.equal(streamResponse.status, 200);
-  assert.equal(streamResponse.headers.get('x-free-router-model'), 'mock-new');
+  assert.equal(streamResponse.headers.get('x-free-router-provider'), 'bai');
+  assert.equal(streamResponse.headers.get('x-free-router-model'), 'glm-5.3-flash');
   const stream = await streamResponse.text();
-  assert.match(stream, /router-ok/);
+  assert.match(stream, /bai-ok/);
   assert.doesNotMatch(stream, /thinking only/);
 
   const directTokenRouterResponse = await fetch(
@@ -314,12 +411,52 @@ try {
   assert.equal(updatedHealth.lastSelection.route, 'z-ai/glm-5.3-free');
   assert.equal(updatedHealth.lastSelection.provider, 'tokenrouter');
   assert.equal(updatedHealth.lastSelection.model, 'z-ai/glm-5.3-free');
-  assert.ok(tokenRouterRequests >= 3);
+  const directBaiResponse = await fetch(
+    `http://127.0.0.1:${routerPort}/v1/chat/completions`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'glm-5.3-flash',
+        messages: [{ role: 'user', content: 'bai-success' }],
+      }),
+    },
+  );
+  assert.equal(directBaiResponse.status, 200);
+  assert.equal(directBaiResponse.headers.get('x-free-router-provider'), 'bai');
+  assert.equal((await directBaiResponse.json()).choices[0].message.content, 'bai-ok');
 
-  console.log('smoke test passed: multi-provider routing, fallback, discovery, and tracking work');
+  const afterBaiHealth = await fetch(`http://127.0.0.1:${routerPort}/health`).then((res) =>
+    res.json(),
+  );
+  assert.equal(afterBaiHealth.lastSelection.provider, 'bai');
+  assert.equal(afterBaiHealth.lastSelection.model, 'glm-5.3-flash');
+
+  const directExtraResponse = await fetch(
+    `http://127.0.0.1:${routerPort}/v1/chat/completions`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'extra-1',
+        messages: [{ role: 'user', content: 'extra-success' }],
+      }),
+    },
+  );
+  assert.equal(directExtraResponse.status, 200);
+  assert.equal(directExtraResponse.headers.get('x-free-router-provider'), 'extra');
+  assert.equal((await directExtraResponse.json()).choices[0].message.content, 'extra-ok');
+  assert.ok(extraRequests >= 1);
+
+  assert.ok(tokenRouterRequests >= 3);
+  assert.ok(baiRequests >= 3);
+
+  console.log('smoke test passed: pluggable providers, ranking, fallback, discovery, and tracking work');
 } finally {
   child.kill('SIGTERM');
   await close(mock);
   await close(tokenRouterMock);
+  await close(baiMock);
+  await close(extraMock);
   fs.rmSync(tempDir, { recursive: true, force: true });
 }

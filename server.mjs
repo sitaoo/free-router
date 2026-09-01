@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createProviderRegistry, isChatModel, isZeroCost } from './providers.mjs';
+import { installUpstreamProxy } from './proxy.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -33,6 +35,10 @@ for (const file of envCandidates) {
   if (file) loadEnvFile(file);
 }
 
+installUpstreamProxy((message) => {
+  console.log(`[${new Date().toISOString()}]`, message);
+});
+
 const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || path.join(HERE, 'config.json');
 const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 const HOST = process.env.FREE_ROUTER_HOST || config.host || '127.0.0.1';
@@ -41,35 +47,8 @@ const ATTEMPT_TIMEOUT_MS = Number(
   process.env.FREE_ROUTER_ATTEMPT_TIMEOUT_MS || config.attemptTimeoutMs || 180000,
 );
 const CATALOG_REFRESH_MS = Number(config.catalogRefreshMs || 900000);
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
-const TOKENROUTER_API_KEY = process.env.TOKENROUTER_API_KEY || '';
-const providerConfig = config.providers || {};
-const PROVIDERS = new Map([
-  [
-    'openrouter',
-    {
-      baseUrl: (
-        process.env.OPENROUTER_BASE_URL ||
-        providerConfig.openrouter?.baseUrl ||
-        'https://openrouter.ai/api/v1'
-      ).replace(/\/+$/, ''),
-      apiKey: OPENROUTER_API_KEY,
-      freeModels: null,
-    },
-  ],
-  [
-    'tokenrouter',
-    {
-      baseUrl: (
-        process.env.TOKENROUTER_BASE_URL ||
-        providerConfig.tokenrouter?.baseUrl ||
-        'https://api.tokenrouter.com/v1'
-      ).replace(/\/+$/, ''),
-      apiKey: TOKENROUTER_API_KEY,
-      freeModels: new Set(providerConfig.tokenrouter?.freeModels || []),
-    },
-  ],
-]);
+const registry = createProviderRegistry(config, { host: HOST, port: PORT });
+const PROVIDERS = registry.providers;
 const discoveryConfig = config.discovery || {};
 const DISCOVERY_ENABLED = discoveryConfig.enabled !== false;
 const DISCOVERY_INTERVAL_MS = Number(discoveryConfig.intervalMs || 7 * 24 * 60 * 60 * 1000);
@@ -81,12 +60,9 @@ const DISCOVERY_STATE_PATH = path.resolve(
 const evaluationConfig = discoveryConfig.evaluation || {};
 const EVALUATION_ENABLED = evaluationConfig.enabled !== false;
 const EVALUATION_MAX_TOKENS = Number(evaluationConfig.maxTokens || 4000);
-const PINNED_MODELS = new Set(evaluationConfig.pinnedModels || ['stealth/ox-alpha']);
+const PINNED_MODELS = new Set(evaluationConfig.pinnedModels || []);
 
 const cooldowns = new Map();
-let catalog = new Map();
-let catalogFetchedAt = 0;
-let catalogError = '';
 let discoveredModelIds = [];
 let discoverySeenIds = [];
 let discoveryRemovedIds = [];
@@ -102,42 +78,15 @@ function log(message, detail = undefined) {
   else console.log(prefix, message, detail);
 }
 
-function providerHeaders(providerName) {
-  const provider = PROVIDERS.get(providerName);
-  const headers = {
-    Authorization: `Bearer ${provider?.apiKey || ''}`,
-    'Content-Type': 'application/json',
-  };
-  if (providerName === 'openrouter') {
-    headers['HTTP-Referer'] =
-      process.env.OPENROUTER_HTTP_REFERER || `http://${HOST}:${PORT}`;
-    headers['X-Title'] = process.env.OPENROUTER_APP_NAME || 'Free Router';
-  }
-  return headers;
-}
-
-function isZeroCost(model) {
-  const prompt = Number(model?.pricing?.prompt);
-  const completion = Number(model?.pricing?.completion);
-  return Number.isFinite(prompt) && Number.isFinite(completion) && prompt === 0 && completion === 0;
-}
-
-function isChatModel(model) {
-  const outputs = model?.architecture?.output_modalities || ['text'];
-  if (!outputs.includes('text') || outputs.some((modality) => modality !== 'text')) return false;
-  if (model?.architecture?.tokenizer === 'Router') return false;
-  return !/(?:content[-_ ]?safety|moderation|guard)(?:[:/_-]|$)/i.test(model?.id || '');
-}
-
 function normalizeCandidate(entry) {
-  if (typeof entry === 'string') return { provider: 'openrouter', model: entry };
+  if (typeof entry === 'string') return { provider: registry.defaultProvider, model: entry };
   if (entry && typeof entry === 'object') {
     return {
-      provider: String(entry.provider || 'openrouter'),
+      provider: String(entry.provider || registry.defaultProvider),
       model: String(entry.model || entry.id || ''),
     };
   }
-  return { provider: 'openrouter', model: '' };
+  return { provider: registry.defaultProvider, model: '' };
 }
 
 function candidateKey(candidate) {
@@ -145,17 +94,15 @@ function candidateKey(candidate) {
 }
 
 function candidateMetadata(candidate) {
-  return candidate.provider === 'openrouter' ? catalog.get(candidate.model) : null;
+  return registry.metadata(candidate);
 }
 
 function candidateIsFree(candidate) {
-  const provider = PROVIDERS.get(candidate.provider);
-  if (!provider || !provider.apiKey) return false;
-  if (candidate.provider === 'openrouter') {
-    const model = catalog.get(candidate.model);
-    return !catalog.size || Boolean(model && isZeroCost(model) && isChatModel(model));
-  }
-  return Boolean(provider.freeModels?.has(candidate.model));
+  return registry.isFree(candidate);
+}
+
+function discoveredCandidate(id) {
+  return registry.parsePrefixed(id) || { provider: registry.discoveryProvider, model: id };
 }
 
 function loadDiscoveryState() {
@@ -237,10 +184,11 @@ function routeCandidates(routeName) {
   const candidates = [...activeConfigured];
   const present = new Set(candidates.map(candidateKey));
   for (const id of discoveredModelIds) {
-    const candidate = { provider: 'openrouter', model: id };
+    const candidate = discoveredCandidate(id);
     if (present.has(candidateKey(candidate))) continue;
-    const model = catalog.get(id);
-    if (catalog.size && (!model || !isZeroCost(model))) continue;
+    const model = candidateMetadata(candidate);
+    const provider = PROVIDERS.get(candidate.provider);
+    if (provider?.usesCatalog && provider.catalog.size && (!model || !isZeroCost(model))) continue;
     candidates.push(candidate);
     present.add(candidateKey(candidate));
   }
@@ -259,26 +207,7 @@ function routeCandidates(routeName) {
 }
 
 async function refreshCatalog(force = false) {
-  if (!force && Date.now() - catalogFetchedAt < CATALOG_REFRESH_MS && catalog.size) return;
-  try {
-    const openrouter = PROVIDERS.get('openrouter');
-    const response = await fetch(`${openrouter.baseUrl}/models`, {
-      headers: OPENROUTER_API_KEY
-        ? { Authorization: `Bearer ${OPENROUTER_API_KEY}` }
-        : undefined,
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const payload = await response.json();
-    catalog = new Map((payload.data || []).map((model) => [model.id, model]));
-    catalogFetchedAt = Date.now();
-    catalogError = '';
-    const freeCount = [...catalog.values()].filter(isZeroCost).length;
-    log(`catalog refreshed: ${catalog.size} models, ${freeCount} zero-cost`);
-  } catch (error) {
-    catalogError = error instanceof Error ? error.message : String(error);
-    log(`catalog refresh failed; retaining previous catalog: ${catalogError}`);
-  }
+  await registry.refreshCatalogs(force, CATALOG_REFRESH_MS, log);
 }
 
 function evaluationText(payload) {
@@ -316,7 +245,8 @@ function metadataScore(model) {
 
 async function evaluateModel(modelId) {
   const startedAt = Date.now();
-  const model = catalog.get(modelId);
+  const candidate = { provider: registry.discoveryProvider, model: modelId };
+  const model = candidateMetadata(candidate);
   const supported = new Set(model?.supported_parameters || []);
   const evaluationBody = {
     messages: [
@@ -338,10 +268,7 @@ async function evaluateModel(modelId) {
   if (supported.has('reasoning') || supported.has('reasoning_effort')) {
     evaluationBody.reasoning = { effort: 'low' };
   }
-  const result = await attemptJson(
-    { provider: 'openrouter', model: modelId },
-    evaluationBody,
-  );
+  const result = await attemptJson(candidate, evaluationBody);
   const latencyMs = Date.now() - startedAt;
   if (!result.ok) {
     return {
@@ -362,7 +289,7 @@ async function evaluateModel(modelId) {
   if (Number(answers?.sequence) === 42) benchmarkScore += 10;
   if (Number(answers?.binary) === 55) benchmarkScore += 10;
 
-  const modelMetadataScore = metadataScore(catalog.get(modelId));
+  const modelMetadataScore = metadataScore(candidateMetadata(candidate));
   const latencyScore = latencyMs <= 5000 ? 15 : latencyMs <= 15000 ? 10 : latencyMs <= 30000 ? 5 : 0;
   const score = Math.round((benchmarkScore + modelMetadataScore + latencyScore) * 10) / 10;
   return {
@@ -386,16 +313,22 @@ async function performFreeModelDiscovery(forceCatalogRefresh = false) {
   }
 
   try {
-    if (forceCatalogRefresh || !catalog.size) await refreshCatalog(true);
-    if (!catalog.size || catalogError) throw new Error(catalogError || 'catalog is empty');
+    if (forceCatalogRefresh || !registry.discoveryCatalog()?.catalog.size) {
+      await refreshCatalog(true);
+    }
+    const catalogProvider = registry.discoveryCatalog();
+    const catalog = catalogProvider?.catalog || new Map();
+    if (!catalog.size || catalogProvider?.catalogError) {
+      throw new Error(catalogProvider?.catalogError || 'catalog is empty');
+    }
 
     const configured = config.routes?.[DISCOVERY_ROUTE];
     if (!Array.isArray(configured)) {
       throw new Error(`discovery route does not exist: ${DISCOVERY_ROUTE}`);
     }
-    const configuredOpenRouterIds = configured
+    const configuredCatalogIds = configured
       .map(normalizeCandidate)
-      .filter((candidate) => candidate.provider === 'openrouter')
+      .filter((candidate) => candidate.provider === registry.discoveryProvider)
       .map((candidate) => candidate.model);
 
     const freeIds = [...catalog.values()]
@@ -404,7 +337,7 @@ async function performFreeModelDiscovery(forceCatalogRefresh = false) {
       .filter((id) => typeof id === 'string' && id)
       .sort();
     const eligible = new Set(freeIds);
-    const allRouted = [...new Set([...configuredOpenRouterIds, ...discoveredModelIds])];
+    const allRouted = [...new Set([...configuredCatalogIds, ...discoveredModelIds])];
     discoveryRemovedIds = allRouted.filter((id) => !eligible.has(id));
     const removedDiscovered = discoveredModelIds.filter((id) => !eligible.has(id));
     if (removedDiscovered.length) {
@@ -416,7 +349,7 @@ async function performFreeModelDiscovery(forceCatalogRefresh = false) {
         discoveryRemovedIds,
       );
     }
-    const routed = new Set([...configuredOpenRouterIds, ...discoveredModelIds]);
+    const routed = new Set([...configuredCatalogIds, ...discoveredModelIds]);
     const additions = freeIds.filter((id) => !routed.has(id));
     if (additions.length) {
       discoveredModelIds.push(...additions);
@@ -534,14 +467,10 @@ function setCooldown(candidate, kind, reason) {
 
 function candidateModels(requestedModel, body) {
   const configured = routeCandidates(requestedModel);
-  if (!configured) {
-    const tokenrouter = PROVIDERS.get('tokenrouter');
-    if (tokenrouter?.freeModels?.has(requestedModel)) {
-      return [{ provider: 'tokenrouter', model: requestedModel }];
-    }
-    return [{ provider: 'openrouter', model: requestedModel }];
-  }
+  return filterCandidates(configured || registry.directCandidates(requestedModel), body, requestedModel);
+}
 
+function filterCandidates(configured, body, requestedModel) {
   const needs = requestNeeds(body);
   const active = [];
   const skipped = [];
@@ -652,9 +581,9 @@ async function fetchModel(candidate, body, clientSignal) {
     if (!provider?.baseUrl || !provider.apiKey) {
       throw new Error(`provider ${candidate.provider} is not configured`);
     }
-    const response = await fetch(`${provider.baseUrl}/chat/completions`, {
+    const response = await fetch(registry.chatUrl(candidate.provider), {
       method: 'POST',
-      headers: providerHeaders(candidate.provider),
+      headers: registry.headers(candidate.provider),
       body: JSON.stringify(sanitizeUpstreamBody(body, candidate.model)),
       signal: controller.signal,
     });
@@ -886,7 +815,11 @@ function routeStatus() {
           ? null
           : rankedModelScore(key, configuredSet, configuredIndex),
         scoreSource: configuredSet.has(key) ? 'baseline' : 'evaluation',
-        zeroCost: candidate.provider === 'openrouter' ? (model ? isZeroCost(model) : null) : true,
+        zeroCost: PROVIDERS.get(candidate.provider)?.usesCatalog
+          ? model
+            ? isZeroCost(model)
+            : null
+          : true,
         supportsTools: model ? (model.supported_parameters || []).includes('tools') : null,
         cooldownSeconds:
           cooldown && cooldown.until > now ? Math.ceil((cooldown.until - now) / 1000) : 0,
@@ -979,17 +912,16 @@ async function handler(req, res) {
     return sendJson(res, 200, {
       ok: true,
       service: 'free-router',
-      catalogModels: catalog.size,
-      catalogFetchedAt: catalogFetchedAt ? new Date(catalogFetchedAt).toISOString() : null,
-      catalogError: catalogError || null,
-      providers: Object.fromEntries(
-        [...PROVIDERS.entries()].map(([name, provider]) => [
-          name,
-          { configured: Boolean(provider.apiKey), baseUrl: provider.baseUrl },
-        ]),
-      ),
+      defaultProvider: registry.defaultProvider,
+      catalogModels: registry.discoveryCatalog()?.catalog.size || 0,
+      catalogFetchedAt: registry.discoveryCatalog()?.catalogFetchedAt
+        ? new Date(registry.discoveryCatalog().catalogFetchedAt).toISOString()
+        : null,
+      catalogError: registry.discoveryCatalog()?.catalogError || null,
+      providers: registry.health(),
       discovery: {
         enabled: DISCOVERY_ENABLED,
+        provider: registry.discoveryProvider,
         route: DISCOVERY_ROUTE,
         intervalMs: DISCOVERY_INTERVAL_MS,
         lastCheckedAt: discoveryLastCheckedAt
@@ -1013,31 +945,17 @@ async function handler(req, res) {
       created: 0,
       owned_by: 'free-router',
     }));
-    const tokenrouter = PROVIDERS.get('tokenrouter');
-    const tokenRouterModels = tokenrouter?.apiKey
-      ? [...(tokenrouter.freeModels || [])].map((id) => ({
-          id,
-          object: 'model',
-          created: 0,
-          owned_by: 'tokenrouter',
-          context_length: 0,
-        }))
-      : [];
-    const tokenRouterIds = new Set(tokenRouterModels.map((model) => model.id));
-    const concreteModels = [...catalog.values()]
-      .filter((model) => isZeroCost(model) && isChatModel(model))
-      .filter((model) => !tokenRouterIds.has(model.id))
-      .sort((a, b) => String(a.id).localeCompare(String(b.id)))
-      .map((model) => ({
-        id: model.id,
-        object: 'model',
-        created: Number(model.created || 0),
-        owned_by: model.id.split('/')[0] || 'openrouter',
-        context_length: Number(model.context_length || 0),
-      }));
+    const listed = registry.listListedModels();
+    const catalogModels = registry.listCatalogModels(listed.ids).map((model) => ({
+      id: model.id,
+      object: model.object,
+      created: model.created,
+      owned_by: model.owned_by,
+      context_length: model.context_length,
+    }));
     return sendJson(res, 200, {
       object: 'list',
-      data: [...routeModels, ...tokenRouterModels, ...concreteModels],
+      data: [...routeModels, ...listed.models, ...catalogModels],
     });
   }
   if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
@@ -1067,8 +985,9 @@ server.keepAliveTimeout = 5000;
 
 server.listen(PORT, HOST, async () => {
   log(`Free Router listening on http://${HOST}:${PORT}/v1`);
-  if (!OPENROUTER_API_KEY) log('warning: OPENROUTER_API_KEY is missing');
-  if (!TOKENROUTER_API_KEY) log('warning: TOKENROUTER_API_KEY is missing');
+  for (const provider of PROVIDERS.values()) {
+    if (!provider.apiKey) log(`warning: ${provider.keyEnv} is missing`);
+  }
   await refreshCatalog(true);
   await discoverFreeModels();
   scheduleNextDiscovery();
