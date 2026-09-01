@@ -148,12 +148,14 @@ const tokenRouterMock = http.createServer(async (req, res) => {
 });
 
 let baiRequests = 0;
+let lastBaiBody = null;
 const baiMock = http.createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/v1/chat/completions') {
     baiRequests += 1;
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    lastBaiBody = body;
     if (body.stream) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.write(
@@ -447,6 +449,32 @@ try {
   assert.equal(directExtraResponse.headers.get('x-free-router-provider'), 'extra');
   assert.equal((await directExtraResponse.json()).choices[0].message.content, 'extra-ok');
   assert.ok(extraRequests >= 1);
+
+  const leakResponse = await fetch(
+    `http://127.0.0.1:${routerPort}/v1/chat/completions`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'glm-5.3-flash',
+        messages: [
+          {
+            role: 'user',
+            content: 'here is bai-test-key in chat',
+          },
+          {
+            role: 'tool',
+            content: 'BAI_API_KEY=bai-test-key\nOPENROUTER_API_KEY=test-key',
+          },
+        ],
+      }),
+    },
+  );
+  assert.equal(leakResponse.status, 200);
+  const leaked = JSON.stringify(lastBaiBody);
+  assert.equal(leaked.includes('bai-test-key'), false);
+  assert.equal(leaked.includes('test-key'), false);
+  assert.match(leaked, /\[REDACTED\]/);
 
   assert.ok(tokenRouterRequests >= 3);
   assert.ok(baiRequests >= 3);

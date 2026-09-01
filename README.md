@@ -243,7 +243,11 @@ journalctl --user -u free-router -f
 7. Tries remaining models in that unified order.
 8. Applies per-provider/model cooldowns after rate limits, timeouts, server failures, and empty
    successful responses.
-9. Buffers reasoning-only stream chunks. Nothing is sent to the client until a
+9. Before sending a request upstream, redacts values of `*_API_KEY` / `*_TOKEN` /
+   `*_SECRET` / `*_PASSWORD` from the local environment, and `NAME=...` assignment
+   lines for those names. This cannot stop Hermes from reading `.env` locally; it
+   only keeps those values out of OpenRouter, TokenRouter, and B.AI payloads.
+10. Buffers reasoning-only stream chunks. Nothing is sent to the client until a
    model emits content or a tool call, so an empty model can still be replaced.
 
 When a concrete model ID is requested instead of a route alias, the gateway

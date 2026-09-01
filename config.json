@@ -3,6 +3,7 @@
   "port": 8787,
   "attemptTimeoutMs": 180000,
   "catalogRefreshMs": 900000,
+  "redactSecrets": true,
   "defaultProvider": "openrouter",
   "providers": {
     "openrouter": {

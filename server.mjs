@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createProviderRegistry, isChatModel, isZeroCost } from './providers.mjs';
 import { installUpstreamProxy } from './proxy.mjs';
+import { createSecretRedactor } from './redact.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -61,6 +62,7 @@ const evaluationConfig = discoveryConfig.evaluation || {};
 const EVALUATION_ENABLED = evaluationConfig.enabled !== false;
 const EVALUATION_MAX_TOKENS = Number(evaluationConfig.maxTokens || 4000);
 const PINNED_MODELS = new Set(evaluationConfig.pinnedModels || []);
+const secretRedactor = config.redactSecrets === false ? null : createSecretRedactor();
 
 const cooldowns = new Map();
 let discoveredModelIds = [];
@@ -513,10 +515,18 @@ function filterCandidates(configured, body, requestedModel) {
 }
 
 function sanitizeUpstreamBody(body, modelId) {
-  const upstream = { ...body, model: modelId };
+  const upstream = JSON.parse(
+    JSON.stringify({
+      ...body,
+      model: modelId,
+    }),
+  );
   delete upstream.models;
   delete upstream.route;
-  return upstream;
+  if (!secretRedactor) return upstream;
+  const { value, count } = secretRedactor.redact(upstream);
+  if (count) log(`redacted ${count} secret occurrence(s) before upstream`);
+  return value;
 }
 
 function usefulMessage(payload) {
