@@ -7,6 +7,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { normalizeModelSlug } from './providers.mjs';
+
+assert.equal(normalizeModelSlug('google/gemini-3.8-flash:free'), 'gemini-3.8-flash');
+assert.equal(normalizeModelSlug('gemini-3.8-flash'), 'gemini-3.8-flash');
+assert.equal(normalizeModelSlug('acme/extra-1:free'), 'extra-1');
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -23,7 +28,7 @@ const mock = http.createServer(async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     res.end(
       JSON.stringify({
-        data: ['mock-a', 'mock-b', 'mock-new', 'mock-audio'].map((id) => ({
+        data: ['mock-a', 'mock-b', 'mock-new', 'mock-audio', 'acme/extra-1:free'].map((id) => ({
           id,
           pricing:
             id === 'mock-b'
@@ -191,6 +196,14 @@ const extraMock = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const shouldFail = body.messages?.some(
+      (message) => message.content === 'force-extra-failure',
+    );
+    if (shouldFail) {
+      res.writeHead(429, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'extra rate limited' } }));
+      return;
+    }
     res.setHeader('Content-Type', 'application/json');
     res.end(
       JSON.stringify({
@@ -330,6 +343,7 @@ try {
       'openrouter:mock-new',
       'openrouter:mock-a',
       'extra:extra-1',
+      'openrouter:acme/extra-1:free',
     ],
   );
   assert.equal(health.defaultProvider, 'openrouter');
@@ -349,7 +363,15 @@ try {
   const models = await modelsResponse.json();
   assert.deepEqual(
     models.data.map((model) => model.id),
-    ['test-route', 'z-ai/glm-5.3-free', 'glm-5.3-flash', 'extra-1', 'mock-a', 'mock-new'],
+    [
+      'test-route',
+      'z-ai/glm-5.3-free',
+      'glm-5.3-flash',
+      'extra-1',
+      'acme/extra-1:free',
+      'mock-a',
+      'mock-new',
+    ],
   );
   const request = {
     model: 'test-route',
@@ -449,6 +471,25 @@ try {
   assert.equal(directExtraResponse.headers.get('x-free-router-provider'), 'extra');
   assert.equal((await directExtraResponse.json()).choices[0].message.content, 'extra-ok');
   assert.ok(extraRequests >= 1);
+
+  const extraFailoverResponse = await fetch(
+    `http://127.0.0.1:${routerPort}/v1/chat/completions`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'extra-1',
+        messages: [{ role: 'user', content: 'force-extra-failure' }],
+      }),
+    },
+  );
+  assert.equal(extraFailoverResponse.status, 200);
+  assert.equal(extraFailoverResponse.headers.get('x-free-router-provider'), 'openrouter');
+  assert.equal(extraFailoverResponse.headers.get('x-free-router-model'), 'acme/extra-1:free');
+  assert.equal(
+    (await extraFailoverResponse.json()).choices[0].message.content,
+    'router-ok',
+  );
 
   const leakResponse = await fetch(
     `http://127.0.0.1:${routerPort}/v1/chat/completions`,

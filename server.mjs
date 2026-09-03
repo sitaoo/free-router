@@ -5,7 +5,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createProviderRegistry, isChatModel, isZeroCost } from './providers.mjs';
+import {
+  createProviderRegistry,
+  isChatModel,
+  isZeroCost,
+  normalizeModelSlug,
+} from './providers.mjs';
 import { installUpstreamProxy } from './proxy.mjs';
 import { createSecretRedactor } from './redact.mjs';
 
@@ -36,12 +41,14 @@ for (const file of envCandidates) {
   if (file) loadEnvFile(file);
 }
 
-installUpstreamProxy((message) => {
-  console.log(`[${new Date().toISOString()}]`, message);
-});
-
 const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || path.join(HERE, 'config.json');
 const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+installUpstreamProxy(
+  (message) => {
+    console.log(`[${new Date().toISOString()}]`, message);
+  },
+  { socksFirstHosts: config.socksFirstHosts || [] },
+);
 const HOST = process.env.FREE_ROUTER_HOST || config.host || '127.0.0.1';
 const PORT = Number(process.env.FREE_ROUTER_PORT || config.port || 8787);
 const ATTEMPT_TIMEOUT_MS = Number(
@@ -93,6 +100,11 @@ function normalizeCandidate(entry) {
 
 function candidateKey(candidate) {
   return `${candidate.provider}:${candidate.model}`;
+}
+
+function keySlug(key) {
+  const separator = String(key).indexOf(':');
+  return normalizeModelSlug(separator >= 0 ? key.slice(separator + 1) : key);
 }
 
 function candidateMetadata(candidate) {
@@ -168,12 +180,91 @@ function configuredScore(id, configuredIndex) {
 }
 
 function rankedModelScore(key, configured, configuredIndex) {
-  const separator = key.indexOf(':');
-  const modelId = separator >= 0 ? key.slice(separator + 1) : key;
+  const slug = keySlug(key);
+  const modelId = key.includes(':') ? key.slice(key.indexOf(':') + 1) : key;
   if (PINNED_MODELS.has(key) || PINNED_MODELS.has(modelId)) return Number.POSITIVE_INFINITY;
   if (configured.has(key)) return configuredScore(key, configuredIndex.get(key));
+  for (const [configuredKey, index] of configuredIndex) {
+    if (keySlug(configuredKey) === slug) return configuredScore(configuredKey, index);
+  }
   const evaluated = Number(modelEvaluations[modelId]?.score);
   return Number.isFinite(evaluated) ? evaluated : -1;
+}
+
+function scoreSourceFor(key, configured) {
+  if (configured.has(key)) return 'baseline';
+  const slug = keySlug(key);
+  for (const configuredKey of configured) {
+    if (keySlug(configuredKey) === slug) return 'baseline';
+  }
+  return 'evaluation';
+}
+
+function groupRank(group, configuredSet, configuredIndex) {
+  let pinned = false;
+  let pinIndex = Number.POSITIVE_INFINITY;
+  let configuredIdx = Number.POSITIVE_INFINITY;
+  let configuredKey = '';
+  let evalScore = -1;
+  for (const { candidate, originalIndex } of group.members) {
+    const key = candidateKey(candidate);
+    if (PINNED_MODELS.has(key) || PINNED_MODELS.has(candidate.model)) {
+      pinned = true;
+      pinIndex = Math.min(pinIndex, originalIndex);
+    }
+    if (configuredSet.has(key) && configuredIndex.get(key) < configuredIdx) {
+      configuredIdx = configuredIndex.get(key);
+      configuredKey = key;
+    }
+    const evaluated = Number(modelEvaluations[candidate.model]?.score);
+    if (Number.isFinite(evaluated)) evalScore = Math.max(evalScore, evaluated);
+  }
+  for (const [key, index] of configuredIndex) {
+    if (keySlug(key) !== group.slug || index >= configuredIdx) continue;
+    configuredIdx = index;
+    configuredKey = key;
+  }
+  const score = pinned
+    ? Number.POSITIVE_INFINITY
+    : configuredIdx !== Number.POSITIVE_INFINITY
+      ? configuredScore(configuredKey, configuredIdx)
+      : evalScore;
+  return { pinned, score, tie: pinned ? pinIndex : group.firstIndex };
+}
+
+function orderByModelThenProvider(candidates, configuredSet, configuredIndex) {
+  const groups = new Map();
+  candidates.forEach((candidate, originalIndex) => {
+    const slug = normalizeModelSlug(candidate.model) || candidateKey(candidate);
+    let group = groups.get(slug);
+    if (!group) {
+      group = { slug, members: [], firstIndex: originalIndex };
+      groups.set(slug, group);
+    }
+    group.members.push({ candidate, originalIndex });
+  });
+  const ranked = [...groups.values()].sort((left, right) => {
+    const a = groupRank(left, configuredSet, configuredIndex);
+    const b = groupRank(right, configuredSet, configuredIndex);
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    if (a.pinned) return a.tie - b.tie;
+    return b.score - a.score || a.tie - b.tie;
+  });
+  const expanded = [];
+  const present = new Set();
+  const emit = (candidate) => {
+    const key = candidateKey(candidate);
+    if (present.has(key)) return;
+    present.add(key);
+    expanded.push(candidate);
+  };
+  for (const group of ranked) {
+    for (const { candidate } of group.members.sort((a, b) => a.originalIndex - b.originalIndex)) {
+      emit(candidate);
+    }
+    for (const offering of registry.offeringsForSlug(group.slug)) emit(offering);
+  }
+  return expanded;
 }
 
 function routeCandidates(routeName) {
@@ -181,7 +272,12 @@ function routeCandidates(routeName) {
   if (!configured) return null;
   const normalizedConfigured = configured.map(normalizeCandidate).filter((candidate) => candidate.model);
   const activeConfigured = normalizedConfigured.filter(candidateIsFree);
-  if (!DISCOVERY_ENABLED || routeName !== DISCOVERY_ROUTE) return activeConfigured;
+  const configuredKeys = normalizedConfigured.map(candidateKey);
+  const configuredSet = new Set(configuredKeys);
+  const configuredIndex = new Map(configuredKeys.map((key, index) => [key, index]));
+  if (!DISCOVERY_ENABLED || routeName !== DISCOVERY_ROUTE) {
+    return orderByModelThenProvider(activeConfigured, configuredSet, configuredIndex);
+  }
 
   const candidates = [...activeConfigured];
   const present = new Set(candidates.map(candidateKey));
@@ -194,18 +290,7 @@ function routeCandidates(routeName) {
     candidates.push(candidate);
     present.add(candidateKey(candidate));
   }
-  const configuredKeys = normalizedConfigured.map(candidateKey);
-  const configuredSet = new Set(configuredKeys);
-  const configuredIndex = new Map(configuredKeys.map((key, index) => [key, index]));
-  return candidates
-    .map((candidate, originalIndex) => ({ candidate, originalIndex }))
-    .sort((a, b) => {
-      const scoreDifference =
-        rankedModelScore(candidateKey(b.candidate), configuredSet, configuredIndex) -
-        rankedModelScore(candidateKey(a.candidate), configuredSet, configuredIndex);
-      return scoreDifference || a.originalIndex - b.originalIndex;
-    })
-    .map(({ candidate }) => candidate);
+  return orderByModelThenProvider(candidates, configuredSet, configuredIndex);
 }
 
 async function refreshCatalog(force = false) {
@@ -352,7 +437,15 @@ async function performFreeModelDiscovery(forceCatalogRefresh = false) {
       );
     }
     const routed = new Set([...configuredCatalogIds, ...discoveredModelIds]);
-    const additions = freeIds.filter((id) => !routed.has(id));
+    const knownSlugs = new Set(
+      [
+        ...configured.map(normalizeCandidate).map((candidate) => normalizeModelSlug(candidate.model)),
+        ...discoveredModelIds.map((id) => normalizeModelSlug(id)),
+      ].filter(Boolean),
+    );
+    const additions = freeIds.filter(
+      (id) => !routed.has(id) && !knownSlugs.has(normalizeModelSlug(id)),
+    );
     if (additions.length) {
       discoveredModelIds.push(...additions);
       log(`discovered ${additions.length} free model(s); evaluating for ${DISCOVERY_ROUTE}`, additions);
@@ -824,7 +917,7 @@ function routeStatus() {
         score: pinned
           ? null
           : rankedModelScore(key, configuredSet, configuredIndex),
-        scoreSource: configuredSet.has(key) ? 'baseline' : 'evaluation',
+        scoreSource: scoreSourceFor(key, configuredSet),
         zeroCost: PROVIDERS.get(candidate.provider)?.usesCatalog
           ? model
             ? isZeroCost(model)

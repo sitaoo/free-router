@@ -149,15 +149,27 @@ function socksFetch(url, init = {}) {
   });
 }
 
-export function installUpstreamProxy(log = console.log) {
+function hostMatches(hostname, hosts) {
+  const host = String(hostname || '').toLowerCase();
+  for (const raw of hosts) {
+    const rule = String(raw || '').toLowerCase().replace(/^\./, '');
+    if (!rule) continue;
+    if (host === rule || host.endsWith(`.${rule}`)) return true;
+  }
+  return false;
+}
+
+export function installUpstreamProxy(log = console.log, options = {}) {
   const proxy = proxyFromEnv();
   if (!proxy) return false;
   const nativeFetch = globalThis.fetch.bind(globalThis);
   const bypass = noProxyList();
+  const socksFirstHosts = options.socksFirstHosts || [];
   globalThis.fetch = async (input, init) => {
     const href = typeof input === 'string' || input instanceof URL ? String(input) : input.url;
     const url = new URL(href);
     if (shouldBypassProxy(url.hostname, bypass)) return nativeFetch(input, init);
+    if (hostMatches(url.hostname, socksFirstHosts)) return socksFetch(url, init || {});
     try {
       return await nativeFetch(input, init);
     } catch (error) {
@@ -165,6 +177,10 @@ export function installUpstreamProxy(log = console.log) {
       return socksFetch(url, init || {});
     }
   };
-  log('upstream SOCKS5 fallback enabled when DNS fails');
+  log(
+    socksFirstHosts.length
+      ? `upstream SOCKS5 enabled (DNS fallback; first-hop hosts: ${socksFirstHosts.join(', ')})`
+      : 'upstream SOCKS5 fallback enabled when DNS fails',
+  );
   return true;
 }

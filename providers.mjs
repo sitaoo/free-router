@@ -17,6 +17,14 @@ function envName(providerName, suffix) {
   return `${String(providerName).replace(/-/g, '_').toUpperCase()}_${suffix}`;
 }
 
+export function normalizeModelSlug(id) {
+  let slug = String(id || '').toLowerCase().trim();
+  slug = slug.replace(/:free$/, '');
+  const slash = slug.lastIndexOf('/');
+  if (slash >= 0) slug = slug.slice(slash + 1);
+  return slug;
+}
+
 function resolveHeaderValue(spec, { host, port }) {
   const origin = `http://${host}:${port}`;
   const expand = (value) => (value === '${origin}' ? origin : value);
@@ -125,29 +133,51 @@ export function createProviderRegistry(config, { host, port }) {
     return { provider: providerName, model };
   }
 
+  function offeringsForSlug(slug) {
+    const normalized = String(slug || '');
+    if (!normalized) return [];
+    const offerings = [];
+    const seen = new Set();
+    for (const provider of providers.values()) {
+      if (!provider.apiKey) continue;
+      if (provider.usesCatalog) {
+        if (!provider.catalog) continue;
+        for (const model of provider.catalog.values()) {
+          if (normalizeModelSlug(model.id) !== normalized) continue;
+          if (!isZeroCost(model) || !isChatModel(model)) continue;
+          const key = `${provider.name}:${model.id}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          offerings.push({ provider: provider.name, model: model.id });
+        }
+        continue;
+      }
+      for (const id of provider.freeModels) {
+        if (normalizeModelSlug(id) !== normalized) continue;
+        const key = `${provider.name}:${id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        offerings.push({ provider: provider.name, model: id });
+      }
+    }
+    return offerings;
+  }
+
   function directCandidates(requestedModel) {
     const prefixed = parsePrefixed(requestedModel);
     if (prefixed) return [prefixed];
-    const matches = [];
-    const seen = new Set();
-    const add = (candidate) => {
-      const key = `${candidate.provider}:${candidate.model}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      matches.push(candidate);
-    };
-    for (const provider of providers.values()) {
-      if (!provider.apiKey || provider.usesCatalog) continue;
-      if (!provider.freeModels.has(requestedModel)) continue;
-      add({ provider: provider.name, model: requestedModel });
+    const slug = normalizeModelSlug(requestedModel);
+    const offerings = offeringsForSlug(slug);
+    if (!offerings.length) {
+      return [{ provider: defaultProvider, model: requestedModel }];
     }
-    for (const provider of providers.values()) {
-      if (!provider.apiKey || !provider.usesCatalog) continue;
-      add({ provider: provider.name, model: requestedModel });
+    const exact = [];
+    const rest = [];
+    for (const offering of offerings) {
+      if (offering.model === requestedModel) exact.push(offering);
+      else rest.push(offering);
     }
-    return matches.length
-      ? matches
-      : [{ provider: defaultProvider, model: requestedModel }];
+    return [...exact, ...rest];
   }
 
   async function refreshProviderCatalog(provider, force, catalogRefreshMs) {
@@ -270,6 +300,7 @@ export function createProviderRegistry(config, { host, port }) {
     metadata,
     isFree,
     parsePrefixed,
+    offeringsForSlug,
     directCandidates,
     refreshCatalogs,
     listListedModels,

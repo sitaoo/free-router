@@ -4,6 +4,9 @@
   "attemptTimeoutMs": 180000,
   "catalogRefreshMs": 900000,
   "redactSecrets": true,
+  "socksFirstHosts": [
+    "generativelanguage.googleapis.com"
+  ],
   "defaultProvider": "openrouter",
   "providers": {
     "openrouter": {
@@ -38,6 +41,16 @@
         "hy3",
         "mimo-v2.5"
       ]
+    },
+    "gemini": {
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "keyEnv": "GEMINI_API_KEY",
+      "freeModels": [
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite"
+      ]
     }
   },
   "discovery": {
@@ -50,6 +63,8 @@
       "enabled": true,
       "maxTokens": 4000,
       "pinnedModels": [
+        "gemini:gemini-3.8-flash",
+        "gemini:gemini-3.7-flash",
         "tokenrouter:z-ai/glm-5.3-free",
         "bai:glm-5.3-flash"
       ]
@@ -66,12 +81,28 @@
   "routes": {
     "free-best": [
       {
+        "provider": "gemini",
+        "model": "gemini-3.8-flash"
+      },
+      {
+        "provider": "gemini",
+        "model": "gemini-3.7-flash"
+      },
+      {
         "provider": "tokenrouter",
         "model": "z-ai/glm-5.3-free"
       },
       {
         "provider": "bai",
         "model": "glm-5.3-flash"
+      },
+      {
+        "provider": "gemini",
+        "model": "gemini-3.5-flash-lite"
+      },
+      {
+        "provider": "gemini",
+        "model": "gemini-3.1-flash-lite"
       },
       {
         "provider": "bai",

@@ -1,10 +1,11 @@
 # Free Router
 
 Local OpenAI-compatible gateway. Providers are pluggable and sit side by
-side. `free-best` is one ranked list across all of them; the first currently
-free, capable, not-cooling-down candidate wins. If a provider is unavailable,
-rate-limited, times out, or returns only reasoning with no content or tool
-call, the next model in that shared ranking is tried.
+side. `free-best` ranks **models**, then tries every provider that currently
+offers that same model for free. The first currently free, capable,
+not-cooling-down candidate wins. If a provider is unavailable, rate-limited,
+times out, or returns only reasoning with no content or tool call, the next
+provider for that model is tried, then the next model in the ranking.
 
 Point any OpenAI-compatible client at `http://127.0.0.1:8787/v1` and use the
 `free-best` model.
@@ -30,6 +31,7 @@ cp .env.example .env
 | `OPENROUTER_API_KEY` | Yes, for OpenRouter fallbacks and model discovery | [openrouter.ai/keys](https://openrouter.ai/keys) |
 | `TOKENROUTER_API_KEY` | No | Your TokenRouter account |
 | `BAI_API_KEY` | No | [chat.b.ai](https://chat.b.ai) API keys. One key covers all official B.AI models |
+| `GEMINI_API_KEY` | No | [Google AI Studio](https://aistudio.google.com/apikey). Free-tier Flash-Lite is quota-limited, not unlimited |
 
 Any later provider named `foo` reads `FOO_API_KEY` and `FOO_BASE_URL` unless
 you override `keyEnv` / `baseUrlEnv` in config.
@@ -125,8 +127,9 @@ POST /v1/chat/completions
 
 `GET /v1/models` returns the route alias, each static provider's `freeModels`,
 and every currently free text-chat model from catalog providers. A listed
-concrete model ID can be selected directly to bypass fallback routing. Prefix
-with `provider:` when the same ID could exist on more than one provider.
+concrete model ID can be selected directly; the gateway then tries every
+provider that currently offers that same model. Prefix with `provider:` to
+force a single provider.
 
 ```bash
 curl -s http://127.0.0.1:8787/health | jq
@@ -134,11 +137,14 @@ curl -s http://127.0.0.1:8787/health | jq
 
 ## Routes
 
-- `free-best`: one ranked list across every configured provider
+- `free-best`: one ranked list of models; the same model can be tried from
+  more than one provider
 
 Edit `config.json` to change ordering, timeout, and cooldowns. Pin entries with
 `provider:model` in `discovery.evaluation.pinnedModels`. Models without a key,
-or that are no longer free, are skipped.
+or that are no longer free, are skipped. IDs that differ only by org prefix or
+a `:free` suffix (for example `gemini-3.8-flash` and
+`google/gemini-3.8-flash:free`) count as the same model.
 
 ## Add a provider
 
@@ -200,6 +206,8 @@ Configure the schedule and destination route in `config.json`:
     "enabled": true,
     "maxTokens": 4000,
     "pinnedModels": [
+      "gemini:gemini-3.8-flash",
+      "gemini:gemini-3.7-flash",
       "tokenrouter:z-ai/glm-5.3-free",
       "bai:glm-5.3-flash"
     ]
@@ -229,27 +237,33 @@ journalctl --user -u free-router -f
 
 ## Routing behavior
 
-1. Builds one candidate list from `free-best` across every configured
-   provider. Pinned models stay first, in config order; the rest follow
-   baseline rank and discovery scores.
-2. Skips a provider when its API key is missing.
-3. Refreshes catalog providers every 15 minutes.
-4. Collects newly free catalog text models weekly, evaluates them once, and inserts them
-   into `free-best` by score.
-5. Removes catalog models that are no longer free, available, or text-chat compatible
+1. Ranks **models** from `free-best`. Pinned models stay first, in config
+   order; the rest follow baseline rank and discovery scores.
+2. At each model, tries every provider that currently lists it as a free
+   text-chat model. The configured provider is first; other listings for the
+   same slug follow. Catalog IDs are matched after stripping an org prefix
+   and a trailing `:free`, so a later free OpenRouter copy of a Google or
+   B.AI model is tried immediately after the original instead of as a
+   separate rank.
+3. Skips a provider when its API key is missing.
+4. Refreshes catalog providers every 15 minutes.
+5. Collects newly free catalog text models weekly, evaluates them once, and inserts them
+   into `free-best` by score. A catalog listing of a model that is already
+   ranked is attached to that model instead of being evaluated as a new one.
+6. Removes catalog models that are no longer free, available, or text-chat compatible
    from effective routes.
-6. Removes models missing capabilities required by the request, such as tools
+7. Removes models missing capabilities required by the request, such as tools
    or image input.
-7. Tries remaining models in that unified order.
-8. Applies per-provider/model cooldowns after rate limits, timeouts, server failures, and empty
+8. Tries remaining candidates in that unified order.
+9. Applies per-provider/model cooldowns after rate limits, timeouts, server failures, and empty
    successful responses.
-9. Before sending a request upstream, redacts values of `*_API_KEY` / `*_TOKEN` /
+10. Before sending a request upstream, redacts values of `*_API_KEY` / `*_TOKEN` /
    `*_SECRET` / `*_PASSWORD` from the local environment, and `NAME=...` assignment
    lines for those names. This cannot stop Hermes from reading `.env` locally; it
    only keeps those values out of OpenRouter, TokenRouter, and B.AI payloads.
-10. Buffers reasoning-only stream chunks. Nothing is sent to the client until a
+11. Buffers reasoning-only stream chunks. Nothing is sent to the client until a
    model emits content or a tool call, so an empty model can still be replaced.
 
 When a concrete model ID is requested instead of a route alias, the gateway
-sends it to a matching static listing, then to catalog providers.
-Use `provider:model` to force a provider.
+tries every provider that currently offers that same model. Use
+`provider:model` to force a single provider.
