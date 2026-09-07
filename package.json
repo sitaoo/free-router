@@ -6,7 +6,8 @@
   "description": "OpenAI-compatible local gateway that ranks free models across pluggable providers",
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check providers.mjs && node --check proxy.mjs && node --check redact.mjs && node --check server.mjs && node --check test-smoke.mjs",
+    "models": "node list-models.mjs",
+    "check": "node --check providers.mjs && node --check proxy.mjs && node --check redact.mjs && node --check server.mjs && node --check list-models.mjs && node --check test-smoke.mjs",
     "test": "node test-smoke.mjs"
   },
   "engines": {

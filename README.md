@@ -67,6 +67,14 @@ Foreground:
 node server.mjs
 ```
 
+List the current `free-best` priority (same order the gateway will try models):
+
+```bash
+./models.sh
+./models.sh --ready-only
+npm run models -- --json
+```
+
 ## Use with any OpenAI-compatible client
 
 The local server does not authenticate callers. Keep it bound to localhost.
