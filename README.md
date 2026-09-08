@@ -61,6 +61,33 @@ The gateway listens on `127.0.0.1:8787` by default. Stop it with `./stop.sh`.
 Run these scripts as a normal user. If started as root, they re-exec as the
 directory owner and refuse to stay root.
 
+## Run with Docker
+
+```bash
+git clone https://github.com/www222fff/free-router.git
+cd free-router
+cp .env.example .env
+# edit .env and set the keys you have
+docker compose up -d
+```
+
+The gateway is reachable at `http://127.0.0.1:8787/v1`, the same address as
+the non-Docker run. Keys are injected at runtime from `.env` and never baked
+into the image. Weekly-discovery state is kept in the `fr-state` volume and
+survives rebuilds.
+
+```bash
+docker compose ps
+docker compose logs -f
+docker compose down
+```
+
+To pick up code changes, rebuild and recreate:
+
+```bash
+docker compose up -d --build
+```
+
 Foreground:
 
 ```bash
