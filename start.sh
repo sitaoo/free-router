@@ -39,7 +39,7 @@ load_env() {
 load_env "${HOME}/.hermes/.env"
 load_env "$DIR/.env"
 
-nohup node "$DIR/server.mjs" >/dev/null 2>&1 &
+nohup node "$DIR/server.mjs" >>"$DIR/router.log" 2>&1 &
 PID=$!
 echo "$PID" >"$PID_FILE"
 

@@ -7,10 +7,76 @@ export function isZeroCost(model) {
 }
 
 export function isChatModel(model) {
+  // A catalog that states which generation methods a model supports is
+  // authoritative; guessing from modalities is only for catalogs that do not.
+  if (typeof model?.chatCapable === 'boolean') return model.chatCapable;
   const outputs = model?.architecture?.output_modalities || ['text'];
   if (!outputs.includes('text') || outputs.some((modality) => modality !== 'text')) return false;
   if (model?.architecture?.tokenizer === 'Router') return false;
   return !/(?:content[-_ ]?safety|moderation|guard)(?:[:/_-]|$)/i.test(model?.id || '');
+}
+
+// A catalog that lists parameters can rule a model out. Missing or empty means
+// the listing did not say, which is not the same as "cannot use tools".
+export function supportsRequest(model, needs) {
+  if (!model) return true;
+  const listed = model.supported_parameters;
+  if (Array.isArray(listed) && listed.length) {
+    const supported = new Set(listed);
+    if (needs.tools && !supported.has('tools')) return false;
+    if (
+      needs.responseFormat &&
+      !supported.has('response_format') &&
+      !supported.has('structured_outputs')
+    ) {
+      return false;
+    }
+  }
+  const inputs = model.architecture?.input_modalities;
+  if (Array.isArray(inputs) && inputs.length) {
+    const allowed = new Set(inputs);
+    for (const modality of needs.modalities || []) {
+      if (!allowed.has(modality)) return false;
+    }
+  }
+  return true;
+}
+
+// Google's native /v1beta/models speaks a different dialect than the
+// OpenAI-compatible listing: models[] keyed by `name`, capabilities in
+// `supportedGenerationMethods`, and no pricing at all. Normalizing here keeps
+// the rest of the router on one model shape.
+export function normalizeCatalogPayload(payload) {
+  if (Array.isArray(payload?.data)) {
+    return {
+      shape: 'openai',
+      models: payload.data.filter((model) => model && typeof model.id === 'string'),
+      nextPageToken: '',
+    };
+  }
+  if (!Array.isArray(payload?.models)) return { shape: 'unknown', models: [], nextPageToken: '' };
+  const models = [];
+  for (const raw of payload.models) {
+    if (!raw || typeof raw.name !== 'string') continue;
+    const methods = Array.isArray(raw.supportedGenerationMethods)
+      ? raw.supportedGenerationMethods
+      : [];
+    models.push({
+      id: raw.name.replace(/^models\//, ''),
+      name: raw.displayName || '',
+      description: raw.description || '',
+      context_length: Number(raw.inputTokenLimit || 0),
+      max_output_tokens: Number(raw.outputTokenLimit || 0),
+      // Text chat is exactly `generateContent`. Embeddings expose
+      // `embedContent`, video `predictLongRunning`, live audio
+      // `bidiGenerateContent`, and none of those belong in a chat route.
+      chatCapable: methods.includes('generateContent'),
+      supportedGenerationMethods: methods,
+      // supported_parameters is omitted on purpose: this listing does not
+      // describe OpenAI-style tools, and an empty list would skip the model.
+    });
+  }
+  return { shape: 'google', models, nextPageToken: String(payload.nextPageToken || '') };
 }
 
 function envName(providerName, suffix) {
@@ -54,6 +120,11 @@ export function createProviderRegistry(config, { host, port }) {
     const keyEnv = cfg.keyEnv || envName(name, 'API_KEY');
     const baseUrlEnv = cfg.baseUrlEnv || envName(name, 'BASE_URL');
     const usesCatalog = cfg.catalog === true;
+    // Fetching /models and deciding what is free are separate powers. Only a
+    // catalog that publishes per-token prices can decide freeness by itself;
+    // for the rest `freeModels` stays the allowlist and the catalog is used
+    // solely to notice models that disappeared upstream.
+    const catalogHasPricing = usesCatalog && cfg.pricing !== false;
     const baseUrl = String(process.env[baseUrlEnv] || cfg.baseUrl || '').replace(/\/+$/, '');
     if (!baseUrl) throw new Error(`provider ${name} is missing baseUrl`);
     providers.set(name, {
@@ -61,14 +132,26 @@ export function createProviderRegistry(config, { host, port }) {
       keyEnv,
       baseUrlEnv,
       usesCatalog,
-      discover: usesCatalog && cfg.discover !== false,
+      catalogHasPricing,
+      // Adding unknown models from a catalog is only safe where prices are
+      // published, so a priced catalog is a precondition for that route in.
+      discover: catalogHasPricing && cfg.discover !== false,
+      // The other way in: no prices, so ask the provider directly whether it
+      // will serve the model for free. Opt-in, since it spends a request per
+      // candidate and is only sound on a key with no billing attached.
+      probeFreeTier: usesCatalog && !catalogHasPricing && cfg.probeFreeTier === true,
       chatPath: cfg.chatPath || '/chat/completions',
       modelsPath: cfg.modelsPath || '/models',
+      // Some providers serve a richer catalog outside the OpenAI-compatible
+      // prefix used for chat, on its own auth scheme.
+      modelsUrl: String(cfg.modelsUrl || ''),
+      modelsKeyHeader: String(cfg.modelsKeyHeader || ''),
       extraHeaders: cfg.headers && typeof cfg.headers === 'object' ? cfg.headers : {},
       baseUrl,
       apiKey: process.env[keyEnv] || '',
       freeModels: new Set(cfg.freeModels || []),
       catalog: usesCatalog ? new Map() : null,
+      catalogSlugs: usesCatalog ? new Map() : null,
       catalogFetchedAt: 0,
       catalogError: '',
     });
@@ -80,7 +163,7 @@ export function createProviderRegistry(config, { host, port }) {
   }
   const defaultProvider =
     configuredDefault ||
-    [...providers.values()].find((provider) => provider.usesCatalog)?.name ||
+    [...providers.values()].find((provider) => provider.catalogHasPricing)?.name ||
     [...providers.keys()][0];
 
   const configuredDiscovery = config.discovery?.provider;
@@ -109,19 +192,49 @@ export function createProviderRegistry(config, { host, port }) {
     return resolved;
   }
 
+  // Providers disagree on how to spell the same model: Gemini's OpenAI-compat
+  // catalog returns "models/gemini-3.8-flash" where config.json says
+  // "gemini-3.8-flash". Fall back to the slug so a naming difference does not
+  // read as a model that vanished upstream.
+  function catalogEntry(provider, modelId) {
+    if (!provider?.catalog) return null;
+    const exact = provider.catalog.get(modelId);
+    if (exact) return exact;
+    const slug = normalizeModelSlug(modelId);
+    return (slug && provider.catalogSlugs?.get(slug)) || null;
+  }
+
   function metadata(candidate) {
     const provider = get(candidate.provider);
-    return provider?.usesCatalog ? provider.catalog.get(candidate.model) : null;
+    return provider?.usesCatalog ? catalogEntry(provider, candidate.model) : null;
   }
 
   function isFree(candidate) {
     const provider = get(candidate.provider);
     if (!provider || !provider.apiKey) return false;
-    if (provider.usesCatalog) {
+    if (provider.catalogHasPricing) {
       const model = provider.catalog.get(candidate.model);
       return !provider.catalog.size || Boolean(model && isZeroCost(model) && isChatModel(model));
     }
-    return provider.freeModels.has(candidate.model);
+    if (!provider.freeModels.has(candidate.model)) return false;
+    // A catalog that failed to load must not empty the route, so absence only
+    // counts as removal when we actually hold a catalog to check against.
+    if (!provider.usesCatalog || !provider.catalog.size) return true;
+    return Boolean(catalogEntry(provider, candidate.model));
+  }
+
+  // Allowlisted models the provider no longer offers. Attempting these wastes
+  // an upstream round trip and a cooldown slot on a guaranteed 404.
+  function unavailableFreeModels() {
+    const missing = [];
+    for (const provider of providers.values()) {
+      if (!provider.usesCatalog || provider.catalogHasPricing) continue;
+      if (!provider.apiKey || !provider.catalog.size) continue;
+      for (const id of provider.freeModels) {
+        if (!catalogEntry(provider, id)) missing.push(`${provider.name}:${id}`);
+      }
+    }
+    return missing.sort();
   }
 
   function parsePrefixed(requestedModel) {
@@ -140,7 +253,7 @@ export function createProviderRegistry(config, { host, port }) {
     const seen = new Set();
     for (const provider of providers.values()) {
       if (!provider.apiKey) continue;
-      if (provider.usesCatalog) {
+      if (provider.catalogHasPricing) {
         if (!provider.catalog) continue;
         for (const model of provider.catalog.values()) {
           if (normalizeModelSlug(model.id) !== normalized) continue;
@@ -154,6 +267,7 @@ export function createProviderRegistry(config, { host, port }) {
       }
       for (const id of provider.freeModels) {
         if (normalizeModelSlug(id) !== normalized) continue;
+        if (provider.usesCatalog && provider.catalog.size && !catalogEntry(provider, id)) continue;
         const key = `${provider.name}:${id}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -180,6 +294,30 @@ export function createProviderRegistry(config, { host, port }) {
     return [...exact, ...rest];
   }
 
+  function catalogUrl(provider) {
+    return provider.modelsUrl || joinUrl(provider.baseUrl, provider.modelsPath);
+  }
+
+  function catalogHeaders(provider) {
+    if (!provider.apiKey) return undefined;
+    // Google's native endpoint rejects a Bearer token with 401 and wants its
+    // own header. Keeping the key out of the query string keeps it out of logs.
+    if (provider.modelsKeyHeader) return { [provider.modelsKeyHeader]: provider.apiKey };
+    return { Authorization: `Bearer ${provider.apiKey}` };
+  }
+
+  async function fetchCatalogPage(provider, pageToken) {
+    const url = new URL(catalogUrl(provider));
+    if (provider.modelsUrl) url.searchParams.set('pageSize', '1000');
+    if (pageToken) url.searchParams.set('pageToken', pageToken);
+    const response = await fetch(url, {
+      headers: catalogHeaders(provider),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return normalizeCatalogPayload(await response.json());
+  }
+
   async function refreshProviderCatalog(provider, force, catalogRefreshMs) {
     if (!provider.usesCatalog) return;
     if (
@@ -190,17 +328,31 @@ export function createProviderRegistry(config, { host, port }) {
       return;
     }
     try {
-      const response = await fetch(joinUrl(provider.baseUrl, provider.modelsPath), {
-        headers: provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : undefined,
-        signal: AbortSignal.timeout(30000),
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload = await response.json();
-      provider.catalog = new Map((payload.data || []).map((model) => [model.id, model]));
+      const listed = [];
+      let pageToken = '';
+      // A truncated listing is indistinguishable from models withdrawn
+      // upstream, so follow pagination rather than trusting the first page.
+      for (let page = 0; page < 10; page += 1) {
+        const result = await fetchCatalogPage(provider, pageToken);
+        if (result.shape === 'unknown') throw new Error('unrecognised catalog response shape');
+        listed.push(...result.models);
+        pageToken = result.nextPageToken;
+        if (!pageToken) break;
+      }
+      if (!listed.length) throw new Error('catalog response listed no models');
+      provider.catalog = new Map(listed.map((model) => [model.id, model]));
+      provider.catalogSlugs = new Map();
+      for (const model of listed) {
+        const slug = normalizeModelSlug(model.id);
+        if (slug && !provider.catalogSlugs.has(slug)) provider.catalogSlugs.set(slug, model);
+      }
       provider.catalogFetchedAt = Date.now();
       provider.catalogError = '';
-      const freeCount = [...provider.catalog.values()].filter(isZeroCost).length;
-      return { name: provider.name, size: provider.catalog.size, freeCount };
+      const freeCount = provider.catalogHasPricing
+        ? [...provider.catalog.values()].filter(isZeroCost).length
+        : null;
+      const chatCount = [...provider.catalog.values()].filter(isChatModel).length;
+      return { name: provider.name, size: provider.catalog.size, freeCount, chatCount };
     } catch (error) {
       provider.catalogError = error instanceof Error ? error.message : String(error);
       throw new Error(`${provider.name}: ${provider.catalogError}`);
@@ -213,7 +365,11 @@ export function createProviderRegistry(config, { host, port }) {
       try {
         const result = await refreshProviderCatalog(provider, force, catalogRefreshMs);
         if (result) {
-          log(`catalog refreshed (${result.name}): ${result.size} models, ${result.freeCount} zero-cost`);
+          const detail =
+            result.freeCount === null
+              ? `${result.chatCount} chat-capable, no prices published`
+              : `${result.freeCount} zero-cost`;
+          log(`catalog refreshed (${result.name}): ${result.size} models, ${detail}`);
         }
       } catch (error) {
         log(
@@ -229,9 +385,10 @@ export function createProviderRegistry(config, { host, port }) {
     const models = [];
     const ids = new Set();
     for (const provider of providers.values()) {
-      if (!provider.apiKey || provider.usesCatalog) continue;
+      if (!provider.apiKey || provider.catalogHasPricing) continue;
       for (const id of provider.freeModels) {
         if (ids.has(id)) continue;
+        if (provider.usesCatalog && provider.catalog.size && !catalogEntry(provider, id)) continue;
         ids.add(id);
         models.push({
           id,
@@ -249,7 +406,7 @@ export function createProviderRegistry(config, { host, port }) {
     const models = [];
     const seen = new Set(excludeIds);
     for (const provider of providers.values()) {
-      if (!provider.usesCatalog || !provider.catalog) continue;
+      if (!provider.catalogHasPricing || !provider.catalog) continue;
       for (const model of provider.catalog.values()) {
         if (!isZeroCost(model) || !isChatModel(model) || seen.has(model.id)) continue;
         seen.add(model.id);
@@ -267,15 +424,27 @@ export function createProviderRegistry(config, { host, port }) {
     return models;
   }
 
+  // 'catalog' lets prices decide what is free; 'static' trusts the freeModels
+  // allowlist; 'static+catalog' trusts the allowlist but still consults the
+  // catalog to drop models the provider stopped offering.
+  function providerKind(provider) {
+    if (provider.catalogHasPricing) return 'catalog';
+    return provider.usesCatalog ? 'static+catalog' : 'static';
+  }
+
   function health() {
+    const unavailable = new Set(unavailableFreeModels());
     return Object.fromEntries(
       [...providers.entries()].map(([name, provider]) => [
         name,
         {
           configured: Boolean(provider.apiKey),
-          kind: provider.usesCatalog ? 'catalog' : 'static',
+          kind: providerKind(provider),
           baseUrl: provider.baseUrl,
-          freeModels: provider.usesCatalog ? undefined : [...provider.freeModels],
+          freeModels: provider.catalogHasPricing ? undefined : [...provider.freeModels],
+          unavailableModels: provider.catalogHasPricing
+            ? undefined
+            : [...provider.freeModels].filter((id) => unavailable.has(`${name}:${id}`)),
           catalogModels: provider.usesCatalog ? provider.catalog.size : undefined,
           catalogFetchedAt:
             provider.usesCatalog && provider.catalogFetchedAt
@@ -289,6 +458,24 @@ export function createProviderRegistry(config, { host, port }) {
 
   function discoveryCatalog() {
     return get(discoveryProvider);
+  }
+
+  // Applied to the live provider and to process.env, so a key set at runtime
+  // works on the next request without a restart.
+  function setApiKey(name, key) {
+    const provider = get(name);
+    if (!provider) return false;
+    const value = String(key || '');
+    provider.apiKey = value;
+    if (value) process.env[provider.keyEnv] = value;
+    else delete process.env[provider.keyEnv];
+    if (provider.usesCatalog && !value) {
+      provider.catalog = new Map();
+      provider.catalogSlugs = new Map();
+      provider.catalogFetchedAt = 0;
+      provider.catalogError = '';
+    }
+    return true;
   }
 
   return {
@@ -307,6 +494,10 @@ export function createProviderRegistry(config, { host, port }) {
     listCatalogModels,
     health,
     discoveryCatalog,
+    catalogEntry,
+    unavailableFreeModels,
+    providerKind,
+    setApiKey,
     chatUrl(name) {
       const provider = get(name);
       return provider ? joinUrl(provider.baseUrl, provider.chatPath) : '';

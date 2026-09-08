@@ -7,11 +7,231 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { normalizeModelSlug } from './providers.mjs';
+import { isChatModel, normalizeCatalogPayload, normalizeModelSlug, supportsRequest } from './providers.mjs';
+import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
+import { displayPath, maskSecret, validateSecret } from './ui.mjs';
 
 assert.equal(normalizeModelSlug('google/gemini-3.8-flash:free'), 'gemini-3.8-flash');
 assert.equal(normalizeModelSlug('gemini-3.8-flash'), 'gemini-3.8-flash');
 assert.equal(normalizeModelSlug('acme/extra-1:free'), 'extra-1');
+
+// Google's native listing, in the shape the live API returns it.
+const googleCatalog = normalizeCatalogPayload({
+  models: [
+    {
+      name: 'models/gemini-3.8-flash',
+      displayName: 'Gemini 3.8 Flash',
+      description: 'Fast general model.',
+      inputTokenLimit: 1048576,
+      outputTokenLimit: 65536,
+      supportedGenerationMethods: ['generateContent', 'countTokens'],
+    },
+    {
+      name: 'models/gemini-embedding-2',
+      supportedGenerationMethods: ['embedContent', 'countTextTokens'],
+    },
+    {
+      name: 'models/veo-3.1-generate-preview',
+      supportedGenerationMethods: ['predictLongRunning'],
+    },
+    {
+      name: 'models/gemini-3.1-flash-live-preview',
+      supportedGenerationMethods: ['bidiGenerateContent'],
+    },
+  ],
+});
+assert.equal(googleCatalog.shape, 'google');
+// The "models/" prefix is dropped so catalog IDs match what config.json and
+// the chat endpoint use.
+assert.deepEqual(
+  googleCatalog.models.map((model) => model.id),
+  ['gemini-3.8-flash', 'gemini-embedding-2', 'veo-3.1-generate-preview', 'gemini-3.1-flash-live-preview'],
+);
+assert.equal(googleCatalog.models[0].context_length, 1048576);
+// Declared generation methods decide chat capability; embeddings, video, and
+// live audio are excluded without naming them anywhere.
+assert.deepEqual(googleCatalog.models.map(isChatModel), [true, false, false, false]);
+// A listing with no prices must never read as free.
+assert.equal(googleCatalog.models[0].pricing, undefined);
+// And no OpenAI-style parameter list: treating that as "no tools" would skip
+// Gemini on every agent request and dump traffic onto whatever has no catalog.
+assert.equal(googleCatalog.models[0].supported_parameters, undefined);
+{
+  const tools = { tools: true, responseFormat: false, modalities: new Set() };
+  const images = { tools: false, responseFormat: false, modalities: new Set(['image']) };
+  assert.equal(supportsRequest(googleCatalog.models[0], tools), true);
+  assert.equal(supportsRequest(googleCatalog.models[0], images), true);
+  assert.equal(supportsRequest({ supported_parameters: [] }, tools), true);
+  assert.equal(supportsRequest(null, tools), true);
+  assert.equal(supportsRequest({ supported_parameters: ['response_format'] }, tools), false);
+  assert.equal(supportsRequest({ supported_parameters: ['tools'] }, tools), true);
+  assert.equal(
+    supportsRequest({ architecture: { input_modalities: ['text'] } }, images),
+    false,
+  );
+}
+
+const openaiCatalog = normalizeCatalogPayload({ data: [{ id: 'a' }, { nope: 1 }] });
+assert.equal(openaiCatalog.shape, 'openai');
+assert.deepEqual(openaiCatalog.models.map((model) => model.id), ['a']);
+assert.equal(normalizeCatalogPayload({ weird: true }).shape, 'unknown');
+
+// `generateContent` is necessary but not sufficient: Google serves images,
+// speech, and music through the same method, so the exclusion patterns in
+// config.json carry the rest. These are the real IDs the live listing returns.
+{
+  const patterns = JSON.parse(
+    fs.readFileSync(new URL('config.json', import.meta.url), 'utf8'),
+  ).discovery.exclude.modelPatterns.map((source) => new RegExp(source, 'i'));
+  const excluded = (id) => patterns.some((pattern) => pattern.test(`gemini:${id}`));
+
+  for (const id of [
+    'gemini-2.5-flash-preview-tts',
+    'gemini-3.1-flash-tts-preview',
+    'gemini-3-pro-image',
+    'gemini-3.1-flash-lite-image',
+    'nano-banana-pro-preview',
+    'lyria-3.5',
+    'lyria-3-clip-preview',
+    'gemini-3.5-transcribe',
+    'gemini-robotics-er-2-preview',
+    'gemini-2.5-computer-use-preview-10-2025',
+    'deep-research-pro-preview-12-2025',
+    'antigravity-preview-05-2026',
+    // Moving aliases: they resolve to a concrete model that is ranked and
+    // quota-tracked separately, so routing both double-counts one allowance.
+    'gemini-flash-latest',
+    'gemini-pro-latest',
+  ]) {
+    assert.equal(excluded(id), true, `should be excluded: ${id}`);
+  }
+
+  for (const id of [
+    'gemini-3.8-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-2.5-pro',
+    'gemini-3.1-pro-preview',
+    'gemma-4-31b-it',
+    'gemini-omni-flash-preview',
+  ]) {
+    assert.equal(excluded(id), false, `should stay a candidate: ${id}`);
+  }
+}
+
+// Verbatim from a live 429 for gemini-3.1-pro-preview on a free-tier key.
+const noFreeTierBody = {
+  error: {
+    code: 429,
+    message:
+      'You exceeded your current quota, please check your plan and billing details. ' +
+      '\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.1-pro' +
+      '\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.1-pro' +
+      '\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-3.1-pro' +
+      '\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-3.1-pro' +
+      '\nPlease retry in 56.713473252s.',
+    status: 'RESOURCE_EXHAUSTED',
+    details: [
+      { '@type': 'type.googleapis.com/google.rpc.Help', links: [] },
+      {
+        '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+        violations: [
+          {
+            quotaMetric: 'generativelanguage.googleapis.com/generate_content_free_tier_requests',
+            quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier',
+          },
+          {
+            quotaMetric: 'generativelanguage.googleapis.com/generate_content_free_tier_requests',
+            quotaId: 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier',
+          },
+          {
+            quotaMetric:
+              'generativelanguage.googleapis.com/generate_content_free_tier_input_token_count',
+            quotaId: 'GenerateContentInputTokensPerModelPerMinute-FreeTier',
+          },
+          {
+            quotaMetric:
+              'generativelanguage.googleapis.com/generate_content_free_tier_input_token_count',
+            quotaId: 'GenerateContentInputTokensPerModelPerDay-FreeTier',
+          },
+        ],
+      },
+      { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '56.713473252s' },
+    ],
+  },
+};
+const noFreeTier = parseQuotaFailure(noFreeTierBody);
+assert.equal(noFreeTier.noFreeTier, true);
+assert.equal(noFreeTier.dailyRequestLimit, null);
+assert.equal(noFreeTier.exhaustedWindow, '');
+assert.equal(noFreeTier.retryDelayMs, 56714);
+// The per-day requests allowance is paired with its window, not just its number.
+assert.equal(
+  noFreeTier.limits.find((entry) => entry.quotaId.startsWith('GenerateRequestsPerDay')).window,
+  'day',
+);
+
+// Same shape, but the allowance exists and is merely spent: this must not be
+// mistaken for a model that has no free tier.
+const exhaustedBody = structuredClone(noFreeTierBody);
+exhaustedBody.error.message = exhaustedBody.error.message
+  .replace(/generate_content_free_tier_requests, limit: 0/g, 'generate_content_free_tier_requests, limit: 20')
+  .replace(
+    /generate_content_free_tier_input_token_count, limit: 0/g,
+    'generate_content_free_tier_input_token_count, limit: 1000000',
+  );
+const exhausted = parseQuotaFailure(exhaustedBody);
+assert.equal(exhausted.noFreeTier, false);
+assert.equal(exhausted.dailyRequestLimit, 20);
+assert.equal(exhausted.exhaustedWindow, 'day');
+
+// The decisive case: one free-tier allowance is spent while another reads
+// zero. Only a model with no nonzero allowance anywhere lacks a free tier, so
+// treating "any zero" as proof would permanently drop a working model.
+const mixedBody = structuredClone(noFreeTierBody);
+mixedBody.error.message = mixedBody.error.message.replace(
+  /generate_content_free_tier_requests, limit: 0/g,
+  'generate_content_free_tier_requests, limit: 20',
+);
+const mixed = parseQuotaFailure(mixedBody);
+assert.equal(mixed.noFreeTier, false);
+assert.equal(mixed.dailyRequestLimit, 20);
+
+assert.equal(parseQuotaFailure({ error: { message: 'nothing to do with quota' } }), null);
+
+assert.match(
+  permanentRejection(404, {
+    error: { message: 'This model models/gemini-2.5-pro is no longer available to new users.' },
+  }),
+  /withdrawn/,
+);
+assert.match(permanentRejection(404, {}), /not served here/);
+assert.match(
+  permanentRejection(400, { error: { message: 'This model only supports Interactions API.' } }),
+  /not a chat/,
+);
+assert.equal(permanentRejection(429, { error: { message: 'quota' } }), '');
+
+// A daily quota resets at Pacific midnight, so the wait is until that boundary
+// rather than a fixed interval. In September that is UTC-7, and the result
+// carries a one minute cushion so the retry lands past the boundary.
+const minute = 60000;
+// 23:50 Pacific: ten minutes left in the quota day.
+assert.equal(msUntilQuotaReset(Date.parse('2026-09-08T06:50:00Z')), 11 * minute);
+// 01:05 Pacific: almost a full day to wait, and notably not a fixed 10 minutes.
+assert.equal(msUntilQuotaReset(Date.parse('2026-09-08T08:05:00Z')), (22 * 60 + 56) * minute);
+
+// Paths shown in the interface or the log must not carry the username.
+assert.equal(displayPath(path.join(os.homedir(), 'free-router', '.env')), '~/free-router/.env');
+assert.equal(displayPath(os.homedir()), '~');
+assert.equal(displayPath('/etc/free-router/.env'), '/etc/free-router/.env');
+assert.equal(displayPath(''), '');
+
+assert.equal(maskSecret('').length, 0);
+assert.equal(maskSecret('short'), '***** (5)');
+assert.equal(maskSecret('sk-or-v1-0123456789abcdef'), 'sk-or********cdef (25)');
+assert.equal(maskSecret('sk-or-v1-0123456789abcdef').includes('0123456789'), false);
+assert.match(validateSecret('ok\nNODE_OPTIONS=x'), /newline/);
+assert.equal(validateSecret('sk-normal-key'), '');
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -28,8 +248,19 @@ const mock = http.createServer(async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     res.end(
       JSON.stringify({
-        data: ['mock-a', 'mock-b', 'mock-new', 'mock-audio', 'acme/extra-1:free'].map((id) => ({
+        data: [
+          'mock-a',
+          'mock-b',
+          'mock-new',
+          'mock-audio',
+          'acme/extra-1:free',
+          'mock-domain',
+        ].map((id) => ({
           id,
+          description:
+            id === 'mock-domain'
+              ? 'A finance-focused mixture-of-experts model for investment research.'
+              : 'A general purpose text model.',
           pricing:
             id === 'mock-b'
               ? { prompt: '0.000001', completion: '0.000001' }
@@ -67,6 +298,9 @@ const mock = http.createServer(async (req, res) => {
                   path: 10,
                   sequence: 42,
                   binary: 55,
+                  derange: 44,
+                  recur: 26,
+                  modpow: 49,
                 }),
               },
               finish_reason: 'stop',
@@ -154,13 +388,47 @@ const tokenRouterMock = http.createServer(async (req, res) => {
 
 let baiRequests = 0;
 let lastBaiBody = null;
+let lastBaiAuth = '';
 const baiMock = http.createServer(async (req, res) => {
+  // A price-free catalog, in the shape Gemini's OpenAI-compat endpoint returns:
+  // ids carry a "models/" prefix and glm-withdrawn is simply absent.
+  if (req.method === 'GET' && req.url === '/v1/models') {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(
+      JSON.stringify({
+        object: 'list',
+        data: [
+          { id: 'models/glm-5.3-flash', object: 'model', owned_by: 'bai' },
+          // Not in freeModels, so these three are probe candidates: one is
+          // served, one has no free allowance, one is not a chat model at all.
+          { id: 'models/glm-5.3-pro', object: 'model', owned_by: 'bai' },
+          { id: 'models/glm-5.3-paid', object: 'model', owned_by: 'bai' },
+          {
+            id: 'models/glm-5.3-embed',
+            object: 'model',
+            architecture: { output_modalities: ['embedding'] },
+          },
+        ],
+      }),
+    );
+    return;
+  }
   if (req.method === 'POST' && req.url === '/v1/chat/completions') {
     baiRequests += 1;
+    lastBaiAuth = req.headers.authorization || '';
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     lastBaiBody = body;
+    // Probes address a model by the id the catalog published, prefix included.
+    if (normalizeModelSlug(body.model) === 'glm-5.3-paid') {
+      res.writeHead(429, { 'Content-Type': 'application/json' });
+      // Wrapped in an array, the way Gemini's OpenAI-compatible layer returns
+      // errors. Read as an object, `error.message` is missing and the whole
+      // reason for the refusal is lost.
+      res.end(JSON.stringify([quotaRejection(0)]));
+      return;
+    }
     if (body.stream) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.write(
@@ -191,6 +459,13 @@ const baiMock = http.createServer(async (req, res) => {
 
 let extraRequests = 0;
 const extraMock = http.createServer(async (req, res) => {
+  // A catalog that cannot be fetched must not empty the route: freeModels stays
+  // authoritative and availability checking is simply skipped.
+  if (req.method === 'GET' && req.url === '/v1/models') {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: 'catalog unavailable' } }));
+    return;
+  }
   if (req.method === 'POST' && req.url === '/v1/chat/completions') {
     extraRequests += 1;
     const chunks = [];
@@ -221,8 +496,55 @@ const extraMock = http.createServer(async (req, res) => {
   res.writeHead(404).end();
 });
 
+// Mimics Gemini's quota rejection so the two meanings of 429 can be told apart
+// end to end: no free allowance at all, versus today's allowance spent.
+function quotaRejection(limit) {
+  const metric = (suffix) => `generativelanguage.googleapis.com/generate_content_${suffix}`;
+  const lines = [
+    `${metric('free_tier_requests')}, limit: ${limit}`,
+    `${metric('free_tier_requests')}, limit: ${limit}`,
+    `${metric('free_tier_input_token_count')}, limit: ${limit === 0 ? 0 : 1000000}`,
+    `${metric('free_tier_input_token_count')}, limit: ${limit === 0 ? 0 : 1000000}`,
+  ].map((line) => `* Quota exceeded for metric: ${line}, model: mock`);
+  return {
+    error: {
+      code: 429,
+      status: 'RESOURCE_EXHAUSTED',
+      message: `You exceeded your current quota.\n${lines.join('\n')}\nPlease retry in 42.5s.`,
+      details: [
+        {
+          '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+          violations: [
+            ['free_tier_requests', 'GenerateRequestsPerDayPerProjectPerModel-FreeTier'],
+            ['free_tier_requests', 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier'],
+            ['free_tier_input_token_count', 'GenerateContentInputTokensPerModelPerMinute-FreeTier'],
+            ['free_tier_input_token_count', 'GenerateContentInputTokensPerModelPerDay-FreeTier'],
+          ].map(([suffix, quotaId]) => ({ quotaMetric: metric(suffix), quotaId })),
+        },
+        { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '42.5s' },
+      ],
+    },
+  };
+}
+
+let quotaRequests = 0;
+const quotaMock = http.createServer(async (req, res) => {
+  if (req.method === 'POST' && req.url === '/v1/chat/completions') {
+    quotaRequests += 1;
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const model = JSON.parse(Buffer.concat(chunks).toString('utf8')).model;
+    res.writeHead(429, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(quotaRejection(model === 'no-free-tier' ? 0 : 20)));
+    return;
+  }
+  res.writeHead(404).end();
+});
+
 await listen(mock);
 const mockPort = mock.address().port;
+await listen(quotaMock);
+const quotaPort = quotaMock.address().port;
 await listen(tokenRouterMock);
 const tokenRouterPort = tokenRouterMock.address().port;
 await listen(baiMock);
@@ -248,6 +570,7 @@ fs.writeFileSync(
     providers: {
       openrouter: {
         catalog: true,
+        pricing: true,
         baseUrl: `http://127.0.0.1:${mockPort}/api/v1`,
         keyEnv: 'OPENROUTER_API_KEY',
       },
@@ -257,14 +580,26 @@ fs.writeFileSync(
         freeModels: ['z-ai/glm-5.3-free'],
       },
       bai: {
+        catalog: true,
+        pricing: false,
+        probeFreeTier: true,
         baseUrl: `http://127.0.0.1:${baiPort}/v1`,
         keyEnv: 'BAI_API_KEY',
-        freeModels: ['glm-5.3-flash'],
+        freeModels: ['glm-5.3-flash', 'glm-withdrawn'],
       },
       extra: {
+        catalog: true,
+        pricing: false,
         baseUrl: `http://127.0.0.1:${extraPort}/v1`,
         keyEnv: 'EXTRA_API_KEY',
         freeModels: ['extra-1'],
+      },
+      // No dailyLimits entry anywhere in this config: the limit for
+      // daily-exhausted has to be learned from the provider's own 429.
+      quotamock: {
+        baseUrl: `http://127.0.0.1:${quotaPort}/v1`,
+        keyEnv: 'QUOTAMOCK_API_KEY',
+        freeModels: ['no-free-tier', 'daily-exhausted'],
       },
     },
     discovery: {
@@ -273,13 +608,23 @@ fs.writeFileSync(
       intervalMs: 604800000,
       route: 'test-route',
       stateFile: 'discovered-free-models.json',
+      exclude: {
+        textPatterns: ['\\b(finance|medicine)[\\s-]*focused\\b'],
+      },
       evaluation: {
         enabled: true,
         pinnedModels: ['tokenrouter:z-ai/glm-5.3-free', 'bai:glm-5.3-flash'],
         baselineScores: { 'mock-b': 80 },
+        usageWeight: 12,
+        usageMinRequests: 2,
       },
     },
     cooldownMs: {},
+    usage: {
+      retentionDays: 3,
+      timezone: 'UTC',
+      dailyLimits: { 'bai:glm-5.3-flash': 5, 'tokenrouter:*': 50 },
+    },
     routes: {
       'test-route': [
         { provider: 'tokenrouter', model: 'z-ai/glm-5.3-free' },
@@ -287,6 +632,9 @@ fs.writeFileSync(
         'mock-a',
         'mock-b',
         { provider: 'extra', model: 'extra-1' },
+        { provider: 'bai', model: 'glm-withdrawn' },
+        { provider: 'quotamock', model: 'no-free-tier' },
+        { provider: 'quotamock', model: 'daily-exhausted' },
       ],
     },
   }),
@@ -303,6 +651,8 @@ const child = spawn(process.execPath, [path.join(HERE, 'server.mjs')], {
     BAI_BASE_URL: `http://127.0.0.1:${baiPort}/v1`,
     EXTRA_API_KEY: 'extra-test-key',
     EXTRA_BASE_URL: `http://127.0.0.1:${extraPort}/v1`,
+    QUOTAMOCK_API_KEY: 'quota-test-key',
+    QUOTAMOCK_BASE_URL: `http://127.0.0.1:${quotaPort}/v1`,
     FREE_ROUTER_CONFIG: testConfig,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -334,23 +684,93 @@ async function waitForHealth() {
 
 try {
   const health = await waitForHealth();
-  assert.deepEqual(health.discovery.addedModels, ['mock-new']);
+  // mock-new came from the priced catalog; glm-5.3-pro came from asking bai to
+  // serve a model its price-free catalog says nothing about.
+  assert.deepEqual(health.discovery.addedModels, ['mock-new', 'bai:models/glm-5.3-pro']);
+
+  const probeVerdicts = health.discovery.modelVerdicts;
+  assert.equal(probeVerdicts['bai:models/glm-5.3-pro'].free, true);
+  assert.match(probeVerdicts['bai:models/glm-5.3-pro'].reason, /served a free-tier request/);
+  // Answered 429 with every free-tier limit at zero, so it never enters a route.
+  assert.equal(probeVerdicts['bai:models/glm-5.3-paid'].free, false);
+  assert.equal(
+    health.routes['test-route'].some((entry) => entry.id.includes('glm-5.3-paid')),
+    false,
+  );
+  // Not a chat model, so it was filtered out before any request was spent on it.
+  assert.equal(probeVerdicts['bai:models/glm-5.3-embed'], undefined);
+  // Already configured under a bare id, so the prefixed catalog entry for the
+  // same model must not be probed again or added a second time.
+  assert.equal(probeVerdicts['bai:models/glm-5.3-flash'], undefined);
+  assert.equal(
+    health.routes['test-route'].filter((entry) => entry.id.includes('glm-5.3-flash')).length,
+    1,
+  );
+  // A domain-tuned model is free and chat-capable, but must not be auto-routed
+  // or spend an evaluation on it.
+  assert.deepEqual(health.discovery.excludedModels, ['mock-domain']);
+  assert.equal(health.discovery.evaluations['mock-domain'], undefined);
+  assert.equal(
+    health.routes['test-route'].some((entry) => entry.id === 'mock-domain'),
+    false,
+  );
+  // mock-new aces the benchmark but the low latency weight no longer lets it
+  // leapfrog mock-a, whose configured anchor score is 90. The quotamock pair
+  // is still present here: nothing has asked them anything yet.
   assert.deepEqual(
     health.routes['test-route'].map((entry) => `${entry.provider}:${entry.id}`),
     [
       'tokenrouter:z-ai/glm-5.3-free',
       'bai:glm-5.3-flash',
-      'openrouter:mock-new',
       'openrouter:mock-a',
+      'openrouter:mock-new',
       'extra:extra-1',
       'openrouter:acme/extra-1:free',
+      'quotamock:no-free-tier',
+      'quotamock:daily-exhausted',
+      'bai:models/glm-5.3-pro',
     ],
   );
+  const mockNewEvaluation = health.discovery.evaluations['mock-new'];
+  assert.equal(mockNewEvaluation.version, 2);
+  assert.equal(mockNewEvaluation.benchmarkScore, 65);
+  assert.equal(mockNewEvaluation.metadataScore, 12);
+  assert.equal(mockNewEvaluation.latencyScore, 6);
+  assert.equal(mockNewEvaluation.score, 83);
   assert.equal(health.defaultProvider, 'openrouter');
   assert.equal(health.discovery.provider, 'openrouter');
   assert.equal(health.providers.openrouter.kind, 'catalog');
-  assert.equal(health.providers.extra.kind, 'static');
+  assert.equal(health.providers.tokenrouter.kind, 'static');
   assert.equal(health.providers.extra.configured, true);
+
+  // Only a provider that publishes prices may contribute new models; the others
+  // consult their catalog purely to notice withdrawals.
+  assert.deepEqual(health.discovery.addsFrom, ['openrouter']);
+  assert.deepEqual(health.discovery.availabilityOnly, ['bai', 'extra']);
+  assert.equal(health.providers.bai.kind, 'static+catalog');
+
+  // glm-5.3-flash is listed upstream as "models/glm-5.3-flash": a spelling
+  // difference must not read as a withdrawal.
+  assert.deepEqual(health.providers.bai.unavailableModels, ['glm-withdrawn']);
+  assert.deepEqual(health.discovery.unavailableModels, ['bai:glm-withdrawn']);
+  assert.equal(
+    health.routes['test-route'].some((entry) => entry.id === 'glm-withdrawn'),
+    false,
+  );
+  // An allowlisted model is free by configuration, so a catalog without prices
+  // must not make it look paid.
+  assert.equal(
+    health.routes['test-route'].find((entry) => entry.id === 'glm-5.3-flash').zeroCost,
+    true,
+  );
+  // extra's catalog request fails, which must leave its allowlist authoritative
+  // instead of dropping the provider from the route.
+  assert.equal(health.providers.extra.kind, 'static+catalog');
+  assert.deepEqual(health.providers.extra.unavailableModels, []);
+  assert.equal(
+    health.routes['test-route'].some((entry) => entry.id === 'extra-1'),
+    true,
+  );
   assert.deepEqual(health.discovery.removedModels, ['mock-b']);
   assert.equal(health.discovery.evaluations['mock-new'].status, 'scored');
   assert.equal(
@@ -361,6 +781,8 @@ try {
   const modelsResponse = await fetch(`http://127.0.0.1:${routerPort}/v1/models`);
   assert.equal(modelsResponse.status, 200);
   const models = await modelsResponse.json();
+  // Exclusion only removes a model from automatic ranking. It stays listed and
+  // callable by explicit ID, since asking for it by name is a deliberate choice.
   assert.deepEqual(
     models.data.map((model) => model.id),
     [
@@ -368,8 +790,11 @@ try {
       'z-ai/glm-5.3-free',
       'glm-5.3-flash',
       'extra-1',
+      'no-free-tier',
+      'daily-exhausted',
       'acme/extra-1:free',
       'mock-a',
+      'mock-domain',
       'mock-new',
     ],
   );
@@ -491,6 +916,51 @@ try {
     'router-ok',
   );
 
+  // Both quota models are in the route and both answer 429, but the reasons
+  // differ and so must the consequences.
+  for (const model of ['no-free-tier', 'daily-exhausted']) {
+    const response = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: `quotamock:${model}`,
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    assert.equal(response.status, 502);
+  }
+
+  const quotaHealth = await (await fetch(`http://127.0.0.1:${routerPort}/health`)).json();
+  const verdicts = quotaHealth.discovery.modelVerdicts;
+
+  // limit: 0 on every free-tier metric means waiting can never help, so the
+  // model is dropped from the route rather than retried forever.
+  assert.equal(verdicts['quotamock:no-free-tier'].free, false);
+  assert.match(verdicts['quotamock:no-free-tier'].reason, /no free-tier allowance/);
+  assert.equal(
+    quotaHealth.routes['test-route'].some((entry) => entry.id === 'no-free-tier'),
+    false,
+  );
+
+  // A positive limit proves the opposite: the model is free, just spent. It
+  // stays in the route and the reported number becomes the daily limit, even
+  // though no dailyLimits entry exists for it in config.
+  assert.equal(verdicts['quotamock:daily-exhausted'].free, true);
+  assert.equal(verdicts['quotamock:daily-exhausted'].dailyRequestLimit, 20);
+  const exhaustedEntry = quotaHealth.routes['test-route'].find(
+    (entry) => entry.id === 'daily-exhausted',
+  );
+  assert.equal(exhaustedEntry.usage.dailyLimit, 20);
+  assert.equal(exhaustedEntry.usage.dailyLimitSource, 'provider');
+  assert.equal(
+    quotaHealth.usage.models.find((entry) => entry.key === 'quotamock:daily-exhausted')
+      .dailyLimitSource,
+    'provider',
+  );
+  // Exhausted for the day, so the wait runs to the quota reset rather than the
+  // 42.5s the provider suggested for its per-minute window.
+  assert.ok(exhaustedEntry.cooldownSeconds > 3600, `cooldown ${exhaustedEntry.cooldownSeconds}`);
+
   const leakResponse = await fetch(
     `http://127.0.0.1:${routerPort}/v1/chat/completions`,
     {
@@ -520,12 +990,251 @@ try {
   assert.ok(tokenRouterRequests >= 3);
   assert.ok(baiRequests >= 3);
 
-  console.log('smoke test passed: pluggable providers, ranking, fallback, discovery, and tracking work');
+  const usageHealth = await fetch(`http://127.0.0.1:${routerPort}/health`).then((res) =>
+    res.json(),
+  );
+  const usage = usageHealth.usage;
+  assert.equal(usage.timezone, 'UTC');
+  assert.equal(usage.retentionDays, 3);
+  assert.equal(usage.days.length, 3);
+  const usageByKey = new Map(usage.models.map((entry) => [entry.key, entry]));
+  assert.deepEqual(
+    [...usageByKey.keys()].sort(),
+    [
+      'bai:glm-5.3-flash',
+      // A probe spends a real request, so it is counted like any other.
+      'bai:models/glm-5.3-paid',
+      'bai:models/glm-5.3-pro',
+      'extra:extra-1',
+      'openrouter:acme/extra-1:free',
+      'openrouter:mock-new',
+      'quotamock:daily-exhausted',
+      'quotamock:no-free-tier',
+      'tokenrouter:z-ai/glm-5.3-free',
+    ],
+  );
+  // The discovery evaluation burns real quota, so it has to be counted too.
+  assert.equal(usageByKey.get('openrouter:mock-new').ok, 1);
+  assert.equal(usageByKey.get('bai:glm-5.3-flash').ok, 4);
+  assert.equal(usageByKey.get('bai:glm-5.3-flash').fail, 0);
+  assert.equal(usageByKey.get('tokenrouter:z-ai/glm-5.3-free').ok, 1);
+  assert.equal(usageByKey.get('tokenrouter:z-ai/glm-5.3-free').counts.rateLimit, 2);
+  assert.equal(usageByKey.get('extra:extra-1').counts.rateLimit, 1);
+  // Eight from routing, plus the successful probe of bai's glm-5.3-pro.
+  assert.equal(usage.days[0].ok, 9);
+  // Three routing failures, the two deliberate quota rejections, and the probe
+  // that found glm-5.3-paid has no free allowance.
+  assert.equal(usage.days[0].fail, 6);
+  assert.equal(usage.days[0].topModel.key, 'bai:glm-5.3-flash');
+
+  // A daily limit only counts attempts the provider actually served, so the
+  // two tokenrouter 429s stay out of the consumed total.
+  assert.equal(usageByKey.get('bai:glm-5.3-flash').dailyLimit, 5);
+  assert.equal(usageByKey.get('bai:glm-5.3-flash').dailyLimitSource, 'config');
+  assert.equal(usageByKey.get('bai:glm-5.3-flash').remainingToday, 1);
+  assert.equal(usageByKey.get('tokenrouter:z-ai/glm-5.3-free').dailyLimit, 50);
+  assert.equal(usageByKey.get('tokenrouter:z-ai/glm-5.3-free').remainingToday, 49);
+  assert.equal(usageByKey.get('extra:extra-1').dailyLimit, null);
+  assert.equal(usageByKey.get('extra:extra-1').remainingToday, null);
+  // A 429 never reaches the model, so it does not burn today's consumed count.
+  assert.equal(usageByKey.get('quotamock:no-free-tier').today.consumed, 0);
+
+  const routeEntry = usageHealth.routes['test-route'].find(
+    (entry) => `${entry.provider}:${entry.id}` === 'bai:glm-5.3-flash',
+  );
+  assert.equal(routeEntry.usage.today.ok, 4);
+  assert.equal(routeEntry.usage.remainingToday, 1);
+
+  const routeByKey = new Map(
+    usageHealth.routes['test-route'].map((entry) => [`${entry.provider}:${entry.id}`, entry]),
+  );
+  // extra:extra-1 served 1 of 2 attempts, so reliability drags its score down
+  // by the full clamped weight.
+  const extraEntry = routeByKey.get('extra:extra-1');
+  assert.equal(extraEntry.baseScore, 82);
+  assert.equal(extraEntry.scoreAdjustment, -12);
+  assert.equal(extraEntry.score, 70);
+  // Pinned models are exempt from reliability adjustment.
+  assert.equal(routeByKey.get('bai:glm-5.3-flash').scoreAdjustment, 0);
+  // A group is ranked by its best provider, so the sibling's clean record keeps
+  // the pair in place instead of the whole model sinking.
+  assert.equal(routeByKey.get('openrouter:acme/extra-1:free').scoreAdjustment, 0);
+  // Both quotamock models answered 429 earlier, yet only the one with no free
+  // allowance is gone. The exhausted one is still a free model and comes back
+  // when its quota resets, so it keeps its place.
+  assert.deepEqual(
+    usageHealth.routes['test-route'].map((entry) => `${entry.provider}:${entry.id}`),
+    [
+      'tokenrouter:z-ai/glm-5.3-free',
+      'bai:glm-5.3-flash',
+      'openrouter:mock-a',
+      'openrouter:mock-new',
+      'extra:extra-1',
+      'openrouter:acme/extra-1:free',
+      'quotamock:daily-exhausted',
+      'bai:models/glm-5.3-pro',
+    ],
+  );
+
+  const statePath = path.join(tempDir, 'discovered-free-models.json');
+  const today = new Date().toISOString().slice(0, 10);
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    if (persisted.usage?.[today]?.['bai:glm-5.3-flash']?.ok === 4) break;
+    if (attempt === 39) throw new Error('usage counters were never persisted');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  const base = `http://127.0.0.1:${routerPort}`;
+  const pageResponse = await fetch(`${base}/`);
+  assert.equal(pageResponse.status, 200);
+  assert.match(pageResponse.headers.get('content-type'), /text\/html/);
+  assert.match(pageResponse.headers.get('content-security-policy'), /default-src 'none'/);
+  const pageHtml = await pageResponse.text();
+  assert.match(pageHtml, /Provider keys/);
+  assert.match(pageHtml, /Route priority/);
+  assert.equal(pageHtml.includes('Today\'s quota'), false);
+  // The page is a template string; an apostrophe in a JS string must not be
+  // written as \', or the browser sees a truncated literal and the UI is blank.
+  const pageScript = pageHtml.split('<script>')[1]?.split('</script>')[0];
+  assert.ok(pageScript);
+  new Function(pageScript);
+
+  const uiState = await fetch(`${base}/api/state`).then((res) => res.json());
+  const uiProviders = new Map(uiState.providers.map((entry) => [entry.name, entry]));
+  assert.equal(uiProviders.get('bai').configured, true);
+  // Gemini is listed first when present; this test config has no gemini, so the
+  // first row stays whoever was declared first.
+  if (uiProviders.has('gemini')) assert.equal(uiState.providers[0].name, 'gemini');
+  assert.equal(uiProviders.get('bai').keyEnv, 'BAI_API_KEY');
+  // The real key must never leave the process, only a recognisable stub.
+  assert.equal(uiProviders.get('bai').maskedKey.includes('bai-test-key'), false);
+  assert.equal(JSON.stringify(uiState).includes('bai-test-key'), false);
+  assert.ok(uiState.usage.models.length > 0);
+  assert.ok(uiState.routes.length > 0);
+
+  // The interface warns about a rejection only when it contradicts config.json.
+  // quotamock:no-free-tier was written into the route by hand, so its refusal is
+  // worth surfacing; bai's glm-5.3-paid was merely a probe candidate, and
+  // listing every one of those would bury the case that needs attention.
+  assert.deepEqual(
+    uiState.excludedByProvider.map((entry) => entry.key),
+    ['quotamock:no-free-tier'],
+  );
+  assert.match(uiState.excludedByProvider[0].reason, /no free-tier allowance/);
+  // Still recorded in full for diagnosis, just not shown as a warning.
+  const fullVerdicts = await (await fetch(`${base}/health`)).json();
+  assert.equal(fullVerdicts.discovery.modelVerdicts['bai:models/glm-5.3-paid'].free, false);
+
+  // A browser request from another site must be rejected before it can write.
+  const csrf = await fetch(`${base}/api/keys`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'cross-site' },
+    body: JSON.stringify({ provider: 'bai', key: 'attacker-key' }),
+  });
+  assert.equal(csrf.status, 403);
+  // fetch() silently drops a Host override, so this one needs a raw request.
+  const rebind = await new Promise((resolve, reject) => {
+    const request = http.request(
+      {
+        host: '127.0.0.1',
+        port: routerPort,
+        path: '/api/state',
+        method: 'GET',
+        headers: { Host: 'evil.example.com' },
+      },
+      (response) => {
+        response.resume();
+        response.on('end', () => resolve(response.statusCode));
+      },
+    );
+    request.on('error', reject);
+    request.end();
+  });
+  assert.equal(rebind, 403);
+  const badOrigin = await fetch(`${base}/api/keys`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example.com' },
+    body: JSON.stringify({ provider: 'bai', key: 'attacker-key' }),
+  });
+  assert.equal(badOrigin.status, 403);
+
+  // Only known providers, so the env file cannot gain arbitrary variables.
+  const unknownProvider = await fetch(`${base}/api/keys`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider: 'NODE_OPTIONS', key: '--require /tmp/evil.js' }),
+  });
+  assert.equal(unknownProvider.status, 400);
+  const newlineInjection = await fetch(`${base}/api/keys`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider: 'bai', key: 'ok\nNODE_OPTIONS=--require /tmp/evil.js' }),
+  });
+  assert.equal(newlineInjection.status, 400);
+
+  const envPath = path.join(tempDir, '.env');
+  assert.equal(fs.existsSync(envPath), false);
+
+  const saved = await fetch(`${base}/api/keys`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
+    body: JSON.stringify({ provider: 'bai', key: 'bai-rotated-key' }),
+  });
+  assert.equal(saved.status, 200);
+  const envBody = fs.readFileSync(envPath, 'utf8');
+  assert.equal(envBody, 'BAI_API_KEY=bai-rotated-key\n');
+  assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+  assert.equal(process.env.NODE_OPTIONS, undefined);
+
+  // The new key has to apply without a restart, and the redactor has to learn
+  // it so it cannot leak back out through an upstream payload.
+  await fetch(`${base}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'glm-5.3-flash',
+      messages: [{ role: 'user', content: 'echo bai-rotated-key please' }],
+    }),
+  });
+  assert.equal(lastBaiAuth, 'Bearer bai-rotated-key');
+  assert.equal(JSON.stringify(lastBaiBody).includes('bai-rotated-key'), false);
+
+  const cleared = await fetch(`${base}/api/keys`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider: 'bai', key: '' }),
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal(fs.readFileSync(envPath, 'utf8'), '');
+  const afterClear = await fetch(`${base}/api/state`).then((res) => res.json());
+  assert.equal(
+    afterClear.providers.find((entry) => entry.name === 'bai').configured,
+    false,
+  );
+
+  console.log(
+    'smoke test passed: pluggable providers, ranking, fallback, discovery, usage counters, and tracking work',
+  );
 } finally {
   child.kill('SIGTERM');
+  // Wait for the router to exit so its shutdown state write cannot race the
+  // temp directory cleanup.
+  await new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) return resolve();
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      resolve();
+    }, 3000);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
   await close(mock);
   await close(tokenRouterMock);
   await close(baiMock);
   await close(extraMock);
-  fs.rmSync(tempDir, { recursive: true, force: true });
+  await close(quotaMock);
+  fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 3 });
 }

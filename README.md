@@ -75,6 +75,52 @@ List the current `free-best` priority (same order the gateway will try models):
 npm run models -- --json
 ```
 
+See where requests actually landed, and how much of today's quota is left:
+
+```bash
+./models.sh --usage
+```
+
+## Web interface
+
+Open <http://127.0.0.1:8787/> to set provider keys and read usage. A saved key
+is written to the env file and applied to the running process immediately, so
+no restart is needed.
+
+```json
+"ui": {
+  "enabled": true,
+  "envFile": ".env"
+}
+```
+
+Set `enabled: false` to remove `/` and `/api/*` entirely.
+
+### Why this needs care
+
+The router does not authenticate callers, and a page open in your browser can
+send requests to localhost. Since `start.sh` sources the env file with
+`set -a`, being able to write an arbitrary variable there would mean code
+execution on the next start. The write path is therefore constrained:
+
+- Keys are addressed **by provider name**, never by raw variable name. The
+  server resolves `keyEnv` from `config.json`, so nothing outside a configured
+  provider's key variable can ever be written.
+- Values containing a newline or NUL are rejected, so one field cannot append
+  a second assignment.
+- The env file is written atomically with mode `0600`, and an existing file is
+  chmod'ed down to match.
+- `/` and `/api/*` require the peer to be on loopback, the `Host` header to be
+  a loopback name (blocking DNS rebinding), and the request not to be
+  cross-site per `Origin` / `Sec-Fetch-Site` (blocking CSRF). A plain `curl`
+  call sends neither header and still works.
+- Keys are returned masked, never in full.
+- The secret redactor is rebuilt after a key change, so a key added through the
+  UI is still stripped from upstream payloads.
+
+The `/v1/*` endpoints are deliberately left unguarded so existing clients keep
+working unchanged.
+
 ## Use with any OpenAI-compatible client
 
 The local server does not authenticate callers. Keep it bound to localhost.
@@ -128,6 +174,9 @@ The selected upstream is returned in `X-Free-Router-Provider` and
 ## Endpoints
 
 ```text
+GET  /                       web interface
+GET  /api/state              providers (masked keys), usage, route priority
+POST /api/keys               { "provider": "gemini", "key": "..." }
 GET  /health
 GET  /v1/models
 POST /v1/chat/completions
@@ -160,8 +209,9 @@ No code change is needed for an OpenAI-compatible `/chat/completions` endpoint.
 The registry in `providers.mjs` loads every block under `config.json`
 `providers`.
 
-1. Add a provider object. Use `"catalog": true` if it exposes `GET /models`
-   with zero-cost pricing, otherwise list `freeModels`.
+1. Add a provider object. Set `"catalog": true` if it exposes `GET /models`.
+   Add `"pricing": true` only when that response carries per-token prices;
+   otherwise keep `freeModels` as the allowlist (see below).
 2. Insert `{ "provider": "<name>", "model": "<id>" }` into `routes.free-best`
    where you want it ranked. Bare strings belong to `defaultProvider`.
 3. Optionally pin `name:model` in `discovery.evaluation.pinnedModels`.
@@ -177,26 +227,161 @@ The registry in `providers.mjs` loads every block under `config.json`
 ```
 
 Optional fields: `keyEnv`, `baseUrlEnv`, `headers`, `chatPath`, `modelsPath`,
-and `discover: false` to keep a catalog provider out of weekly discovery.
-Weekly discovery runs against `discovery.provider` (default: first catalog
-provider).
+`discover: false` to keep a priced catalog provider out of discovery, and
+`probeFreeTier: true` to let a price-free catalog contribute models by probing.
 
-## Weekly free-model discovery
+Two fields cover a catalog served outside the chat prefix, on its own auth:
+`modelsUrl` for an absolute listing URL and `modelsKeyHeader` for the header
+carrying the key. Gemini needs both, because its native listing is the only
+place `supportedGenerationMethods` appears and it answers `401` to a Bearer
+token. Either response shape is accepted: OpenAI's `data[].id` or Google's
+`models[].name`.
 
-The router checks the discovery catalog provider once a week for newly free
-text-generation models. Each new model receives one cached hybrid evaluation
+### What each provider contributes to discovery
+
+`catalog` and `pricing` are separate switches, because fetching `/models` and
+being able to tell free from paid are separate capabilities.
+
+| `kind` | Config | Free models come from | Discovery role |
+|---|---|---|---|
+| `catalog` | `catalog: true, pricing: true` | zero-priced catalog entries | adds and removes models |
+| `static+catalog` | `catalog: true, pricing: false` | `freeModels`, plus anything the provider serves for free | removals, and additions when `probeFreeTier` is on |
+| `static` | neither | `freeModels` | none |
+
+Only OpenRouter publishes prices, so only OpenRouter can add unknown models
+from a catalog alone. Gemini's and TokenRouter's `/models` carry no `pricing`
+field and mix free and paid models, so auto-adding from the listing could route
+traffic to a billed model. Their catalogs are still fetched for two things:
+dropping a `freeModels` entry that has disappeared upstream, and supplying
+candidates for probing (below). A withdrawn model returns automatically once
+the provider lists it again.
+
+A catalog that fails to load, returns nothing, or belongs to a provider with no
+key changes nothing: `freeModels` stays authoritative. Removal requires a
+catalog that actually loaded, so an upstream outage cannot empty a route.
+
+Model IDs are matched by slug, so Gemini listing `models/gemini-3.8-flash`
+against a configured `gemini-3.8-flash` is not read as a withdrawal.
+
+`/health` reports this under `discovery.addsFrom`,
+`discovery.availabilityOnly`, and `discovery.unavailableModels`; the web UI
+shows withdrawn models next to the owning provider.
+
+## Free-model discovery
+
+The router checks each `discover`-enabled catalog provider every `discovery.intervalMs`
+(currently every 2 days) for newly free text-generation models. Each new model receives one cached hybrid evaluation
 using deterministic reasoning/instruction checks, response latency, context
 size, and tool/structured output support. Its score places it among the
-manually ranked models in `free-best`. Existing models are not reevaluated or
-reordered during later checks. Failed or rate-limited new model evaluations
-stay at the end.
+manually ranked models in `free-best`.
+
+Scores are made of three parts, capped so no single part can dominate:
+
+| Part | Max | Notes |
+|---|---|---|
+| benchmark | 65 | 10 deterministic items; the 3 hardest carry 28 points |
+| metadata | 20 | tools, structured output, context length, modality, recency |
+| latency | 6 | one cold sample, so deliberately a small tiebreaker |
+
+A model is re-evaluated when its stored score is missing, still `pending`, or
+was produced by an older benchmark version. Without this, a model whose single
+evaluation attempt hit a 429 would keep the fallback score of `-1` and stay
+last forever, because it was already tracked and so never looked like a new
+discovery again. At most `evaluation.maxPerRun` models are evaluated per run.
+
+Ranking also reacts to real traffic. Once a model has at least
+`evaluation.usageMinRequests` recorded attempts in the usage window, its
+success rate shifts its score by up to `evaluation.usageWeight` points: 100%
+success adds the full weight, 80% is neutral, 60% or worse subtracts the full
+weight. Pinned models are exempt. When one model is offered by several
+providers, the group is ranked by its best provider, so one bad provider does
+not sink the model. `./models.sh` shows the current shift in the `rank+-`
+column, and `/health` reports `baseScore` and `scoreAdjustment` per entry.
+
+### Asking a provider what is free
+
+A provider without prices in its catalog can still answer the question, just
+not in the listing. With `probeFreeTier: true`, each unknown chat model gets one
+real request and the reply is read as the answer:
+
+| Reply | Meaning | Effect |
+|---|---|---|
+| `200` | served on this key | free; enters the route with its evaluation score |
+| `429`, every free-tier `limit: 0` | no free allowance exists | dropped from routes |
+| `429`, some `limit` above `0` | free, but spent for now | kept; the number becomes its daily limit |
+| `404` | not served, or withdrawn | dropped from routes |
+| `400` "only supports Interactions API" | not a chat model | dropped from routes |
+| timeout, `5xx` | says nothing | no verdict; retried next run |
+
+This is only sound on a key with no billing enabled, which is why it is opt-in
+per provider: with billing on, a served request proves the model runs, not that
+it was free.
+
+Each verdict is cached in the state file, so a model costs one probe ever rather
+than one per run, and `evaluation.maxPerRun` caps a single run. A "not free"
+verdict expires after `discovery.verdictRetryMs` (defaulting to the discovery
+interval) so a provider blip cannot retire a model permanently; a "free" verdict
+does not expire, because ordinary traffic revisits it and a later refusal
+replaces it.
+
+Verdicts outrank `freeModels` in both directions. That is the point: an
+allowlist in `config.json` is a guess about someone else's pricing, while a
+quota figure is that provider stating its own terms.
+
+The candidate list is narrowed before anything is sent. Google's native listing
+marks capability in `supportedGenerationMethods`, so embedding, video, and live
+audio models are dropped without naming them. Image, speech, music,
+transcription, and agent-only models share the `generateContent` method with
+ordinary chat models, so `discovery.exclude.modelPatterns` carries those, along
+with `-latest` aliases that would double-count one allowance with the concrete
+model they resolve to.
+
+### Daily limits the provider reported
+
+`usage.dailyLimits` in `config.json` is a starting guess. When a provider
+refuses a request and states the real allowance, that number replaces the
+configured one for that model. `/health` marks which is in use: `reported` came
+from the provider, `configured` is still the local guess.
+
+The same reply drives the cooldown. A spent daily quota waits until the quota
+day rolls over in `usage.timezone` rather than a fixed interval, so the router
+neither retries all night for nothing nor idles past the reset. A per-minute
+limit uses the `retryDelay` the provider asked for.
+
+### Excluding domain-specific models
+
+A narrow, domain-tuned model aces a generic benchmark and then lands high in
+the ranking even though it is a bad default for general traffic. `discovery.exclude`
+keeps those out:
+
+- `modelPatterns`: case-insensitive regexes matched against the model ID.
+- `textPatterns`: case-insensitive regexes matched against the catalog `name`
+  and `description`. This is the more durable check, because a vendor's naming
+  suffix changes but the description keeps saying what the model is for.
+
+Two boundaries are deliberate. Anything listed in `config.json` routes is
+exempt, so an explicit entry always beats the filter. And exclusion only
+removes a model from automatic ranking: it stays in `GET /v1/models` and can
+still be called by its exact ID, since naming it is a deliberate choice.
+
+Filtering applies both when building a route and during collection, so a new
+pattern takes effect on restart instead of after the next collection.
+`/health` lists the current matches under `discovery.excludedModels`.
+
+`evaluation.baselineScores` overrides a score outright, keyed by
+`provider:model` or by the bare model ID. It applies to discovered models as
+well as configured ones, and takes precedence over the evaluation score, so it
+is the way to bury a model whose automatic score you do not trust.
 
 If a routed catalog model becomes paid, disappears, or stops qualifying as a
 text chat model, the next catalog check removes it from every effective route
 automatically. It remains in `config.json` as ranking history and becomes
-active again only if that catalog lists it as free in the future. Static
-provider candidates stay in the ranking as long as they are listed under
-`freeModels` and a key is set.
+active again only if that catalog lists it as free in the future.
+
+Candidates from a `static` provider stay in the ranking as long as they are
+listed under `freeModels` and a key is set. On a `static+catalog` provider they
+must additionally still appear in the fetched catalog; those that do not are
+reported under `discovery.unavailableModels`.
 
 Discovery and evaluation state is stored in `discovered-free-models.json` and
 survives service restarts. That file is gitignored.
@@ -207,12 +392,21 @@ Configure the schedule and destination route in `config.json`:
 "discovery": {
   "enabled": true,
   "provider": "openrouter",
-  "intervalMs": 604800000,
+  "intervalMs": 172800000,
   "route": "free-best",
   "stateFile": "discovered-free-models.json",
+  "exclude": {
+    "modelPatterns": [],
+    "textPatterns": [
+      "\\b(finance|medicine|legal)[\\s-]*(focused|specific)\\b"
+    ]
+  },
   "evaluation": {
     "enabled": true,
     "maxTokens": 4000,
+    "maxPerRun": 8,
+    "usageWeight": 12,
+    "usageMinRequests": 20,
     "pinnedModels": [
       "gemini:gemini-3.8-flash",
       "gemini:gemini-3.7-flash",
@@ -225,8 +419,51 @@ Configure the schedule and destination route in `config.json`:
 
 `/health` reports the last collection time, free models seen, scores, route
 priority, and models removed because they are no longer free. Existing route
-positions act as baseline score anchors; optional `baselineScores` entries
-under `evaluation` can override an individual model's anchor score.
+positions act as baseline score anchors, decreasing by 4 per position from 94
+down to a floor of 30.
+
+Evaluation requests are counted in the usage statistics like any other request,
+because they consume the same provider quota.
+
+## Request history and daily quota
+
+Every upstream attempt is counted per day and per `provider:model`, so you can
+see which models actually served this week's traffic and how close a provider
+is to its free daily cap. Counters live in the same `discovered-free-models.json`
+state file, are written back at most once every 1.5 seconds, and are pruned to
+`usage.retentionDays`.
+
+```bash
+./models.sh            # priority list with today / 7d / fail columns
+./models.sh --usage    # per-day and per-model history
+```
+
+```json
+"usage": {
+  "retentionDays": 7,
+  "timezone": "America/Los_Angeles",
+  "dailyLimits": {
+    "gemini:gemini-3.8-flash": 20,
+    "gemini:gemini-3.5-flash-lite": 200
+  }
+}
+```
+
+- `timezone` decides when the day rolls over. Gemini free-tier request-per-day
+  counters reset at midnight Pacific, so keep it at `America/Los_Angeles` even
+  if the host runs elsewhere. Omit the field to use the host's local date.
+- `dailyLimits` keys are matched as `provider:model`, then bare `model`, then
+  `provider:*`. Limits are informational only; the router does not stop sending
+  once a limit is reached, because the numbers are hand-maintained.
+- The `today` column and `remainingToday` count only quota-consuming attempts.
+  Rate limits, 404s, and 403s are excluded because the provider rejected them
+  before running the model.
+- Failure buckets are `rateLimit`, `timeout`, `serverError`, `empty`,
+  `notFound`, `forbidden`, `aborted`, and `other`, which is what makes it
+  visible *why* a request fell through to a lower-priority model.
+
+`GET /health` exposes the same data under `usage`, and each route entry carries
+its own `usage` block.
 
 ## systemd user service
 
@@ -255,7 +492,7 @@ journalctl --user -u free-router -f
    separate rank.
 3. Skips a provider when its API key is missing.
 4. Refreshes catalog providers every 15 minutes.
-5. Collects newly free catalog text models weekly, evaluates them once, and inserts them
+5. Collects newly free catalog text models every `discovery.intervalMs`, evaluates them, and inserts them
    into `free-best` by score. A catalog listing of a model that is already
    ranked is attached to that model instead of being evaluated as a new one.
 6. Removes catalog models that are no longer free, available, or text-chat compatible
