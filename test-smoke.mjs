@@ -771,6 +771,7 @@ try {
     health.routes['test-route'].some((entry) => entry.id === 'extra-1'),
     true,
   );
+  assert.ok(health.providers.extra.catalogError);
   assert.deepEqual(health.discovery.removedModels, ['mock-b']);
   assert.equal(health.discovery.evaluations['mock-new'].status, 'scored');
   assert.equal(

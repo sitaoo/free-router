@@ -327,9 +327,9 @@ function renderProviders() {
     } else {
       hint.textContent = 'Not set. This provider and its models are skipped.';
     }
-    if (provider.catalogError) {
+    if (provider.catalogError && !provider.catalogModels) {
       hint.appendChild(document.createTextNode('  '));
-      hint.appendChild(pill('catalog error', 'bad'));
+      hint.appendChild(pill('catalog unreachable', 'bad'));
     }
     fieldCell.appendChild(hint);
 

@@ -153,6 +153,7 @@ export function createProviderRegistry(config, { host, port }) {
       catalog: usesCatalog ? new Map() : null,
       catalogSlugs: usesCatalog ? new Map() : null,
       catalogFetchedAt: 0,
+      catalogAttemptedAt: 0,
       catalogError: '',
     });
   }
@@ -322,11 +323,12 @@ export function createProviderRegistry(config, { host, port }) {
     if (!provider.usesCatalog) return;
     if (
       !force &&
-      Date.now() - provider.catalogFetchedAt < catalogRefreshMs &&
-      provider.catalog.size
+      Date.now() - provider.catalogAttemptedAt < catalogRefreshMs &&
+      (provider.catalog.size || provider.catalogError)
     ) {
       return;
     }
+    provider.catalogAttemptedAt = Date.now();
     try {
       const listed = [];
       let pageToken = '';
@@ -473,6 +475,7 @@ export function createProviderRegistry(config, { host, port }) {
       provider.catalog = new Map();
       provider.catalogSlugs = new Map();
       provider.catalogFetchedAt = 0;
+      provider.catalogAttemptedAt = 0;
       provider.catalogError = '';
     }
     return true;
