@@ -1,0 +1,22 @@
+services:
+  free-router:
+    build: .
+    container_name: free-router
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - FREE_ROUTER_HOST=0.0.0.0
+      - FREE_ROUTER_PORT=8787
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - fr-state:/app/discovered-free-models.json
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  fr-state:
