@@ -73,8 +73,9 @@ docker compose up -d
 
 The gateway is reachable at `http://127.0.0.1:8787/v1`, the same address as
 the non-Docker run. Keys are injected at runtime from `.env` and never baked
-into the image. Weekly-discovery state is kept in the `fr-state` volume and
-survives rebuilds.
+into the image. Weekly-discovery state is ephemeral: it lives inside the
+container and is reset on rebuild (the gateway re-discovers free models on
+the weekly schedule).
 
 ```bash
 docker compose ps
