@@ -19,24 +19,12 @@ import {
   readThoughtSignature,
   rememberSignaturesFromPayload,
 } from './thought-signature.mjs';
-import {
-  CLIENT_VERSION,
-  formatFullVersion,
-  formatSubVersion,
-  formatTag,
-  formatVersion,
-  versionInfo,
-} from './version.mjs';
 import { displayPath, maskSecret, validateSecret } from './ui.mjs';
 
-assert.equal(CLIENT_VERSION, 1_000_000);
-assert.equal(formatVersion(), '1.0.0');
-assert.equal(formatTag(), 'v1.0');
-assert.equal(formatFullVersion(), '1.0.0');
-assert.equal(formatSubVersion(), '/FreeRouter:1.0.0/');
-assert.equal(formatTag({ major: 1, minor: 0, revision: 0, build: 1, release: false }), 'v1.0rc1');
-assert.equal(formatTag({ major: 1, minor: 0, revision: 1, build: 0, release: true }), 'v1.0.1');
-assert.equal(versionInfo().packed, 1_000_000);
+const PACKAGE_VERSION = JSON.parse(
+  fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'package.json'), 'utf8'),
+).version;
+assert.match(PACKAGE_VERSION, /^\d+\.\d+\.\d+$/);
 
 assert.equal(normalizeModelSlug('google/gemini-3.8-flash:free'), 'gemini-3.8-flash');
 assert.equal(normalizeModelSlug('gemini-3.8-flash'), 'gemini-3.8-flash');
@@ -930,6 +918,7 @@ async function waitForHealth() {
 
 try {
   const health = await waitForHealth();
+  assert.equal(health.version, PACKAGE_VERSION);
   // mock-new came from the priced catalog; glm-5.3-pro came from asking bai to
   // serve a model its price-free catalog says nothing about.
   assert.deepEqual(health.discovery.addedModels, ['mock-new', 'bai:models/glm-5.3-pro']);
