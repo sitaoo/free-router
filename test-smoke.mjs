@@ -19,7 +19,24 @@ import {
   readThoughtSignature,
   rememberSignaturesFromPayload,
 } from './thought-signature.mjs';
+import {
+  CLIENT_VERSION,
+  formatFullVersion,
+  formatSubVersion,
+  formatTag,
+  formatVersion,
+  versionInfo,
+} from './version.mjs';
 import { displayPath, maskSecret, validateSecret } from './ui.mjs';
+
+assert.equal(CLIENT_VERSION, 1_000_000);
+assert.equal(formatVersion(), '1.0.0');
+assert.equal(formatTag(), 'v1.0');
+assert.equal(formatFullVersion(), '1.0.0');
+assert.equal(formatSubVersion(), '/FreeRouter:1.0.0/');
+assert.equal(formatTag({ major: 1, minor: 0, revision: 0, build: 1, release: false }), 'v1.0rc1');
+assert.equal(formatTag({ major: 1, minor: 0, revision: 1, build: 0, release: true }), 'v1.0.1');
+assert.equal(versionInfo().packed, 1_000_000);
 
 assert.equal(normalizeModelSlug('google/gemini-3.8-flash:free'), 'gemini-3.8-flash');
 assert.equal(normalizeModelSlug('gemini-3.8-flash'), 'gemini-3.8-flash');

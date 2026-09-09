@@ -182,6 +182,26 @@ GET  /v1/models
 POST /v1/chat/completions
 ```
 
+`GET /health` includes a Bitcoin-style `version` object: packed
+`CLIENT_VERSION`, display string `1.0.0`, and tag `v1.0`.
+
+## Versioning
+
+Versions follow [Bitcoin Core](https://github.com/bitcoin/bitcoin): four
+integers in `version.mjs` packed as
+`major * 1_000_000 + minor * 10_000 + revision * 100 + build`.
+
+| Field | Meaning |
+| --- | --- |
+| major | incompatible change |
+| minor | features |
+| revision | fixes |
+| build | release-candidate number when `CLIENT_VERSION_IS_RELEASE` is false |
+
+A release with revision 0 is tagged `vMAJOR.MINOR` (`v1.0`). A patch is
+`v1.0.1`. An RC is `v1.0rc1`, same spelling as `v23.0rc1`. Do not move a
+tag; cut the next number.
+
 `GET /v1/models` returns the route alias, each static provider's `freeModels`,
 and every currently free text-chat model from catalog providers. A listed
 concrete model ID can be selected directly; the gateway then tries every

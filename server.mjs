@@ -24,6 +24,7 @@ import {
   rememberSignaturesFromPayload,
 } from './thought-signature.mjs';
 import { displayPath, maskSecret, renderPage, updateEnvFile, validateSecret } from './ui.mjs';
+import { formatFullVersion, formatSubVersion, versionInfo } from './version.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1817,6 +1818,7 @@ async function handler(req, res) {
     return sendJson(res, 200, {
       ok: true,
       service: 'free-router',
+      version: versionInfo(),
       defaultProvider: registry.defaultProvider,
       catalogModels: registry.discoveryCatalog()?.catalog.size || 0,
       catalogFetchedAt: registry.discoveryCatalog()?.catalogFetchedAt
@@ -1899,7 +1901,7 @@ server.headersTimeout = 65000;
 server.keepAliveTimeout = 5000;
 
 server.listen(PORT, HOST, async () => {
-  log(`Free Router listening on http://${HOST}:${PORT}/v1`);
+  log(`Free Router ${formatFullVersion()} (${formatSubVersion()}) listening on http://${HOST}:${PORT}/v1`);
   if (UI_ENABLED) log(`web interface on http://${HOST}:${PORT}/`);
   for (const provider of PROVIDERS.values()) {
     if (!provider.apiKey) log(`warning: ${provider.keyEnv} is missing`);
