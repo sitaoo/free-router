@@ -548,3 +548,11 @@ journalctl --user -u free-router -f
 When a concrete model ID is requested instead of a route alias, the gateway
 tries every provider that currently offers that same model. Use
 `provider:model` to force a single provider.
+
+## Star History
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=www222fff/free-router&type=Date&theme=dark" />
+  <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=www222fff/free-router&type=Date" />
+  <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=www222fff/free-router&type=Date" />
+</picture>
