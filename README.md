@@ -508,6 +508,11 @@ journalctl --user -u free-router -f
    only keeps those values out of OpenRouter, TokenRouter, and B.AI payloads.
 11. Buffers reasoning-only stream chunks. Nothing is sent to the client until a
    model emits content or a tool call, so an empty model can still be replaced.
+12. On Gemini tool-call follow-ups, reattaches `extra_content.google.thought_signature`
+   that OpenAI-only clients drop. Cached signatures from the previous Gemini
+   response are preferred; otherwise Google's `skip_thought_signature_validator`
+   sentinel is used so the request is not a quota-burning 400. If Gemini still
+   returns that 400, remaining Gemini models for the same request are skipped.
 
 When a concrete model ID is requested instead of a route alias, the gateway
 tries every provider that currently offers that same model. Use

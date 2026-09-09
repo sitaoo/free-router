@@ -9,6 +9,16 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isChatModel, normalizeCatalogPayload, normalizeModelSlug, supportsRequest } from './providers.mjs';
 import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
+import {
+  SKIP_THOUGHT_SIGNATURE,
+  createStreamSignatureExtractor,
+  createThoughtSignatureCache,
+  injectThoughtSignatures,
+  isMissingThoughtSignatureError,
+  providerNeedsThoughtSignatures,
+  readThoughtSignature,
+  rememberSignaturesFromPayload,
+} from './thought-signature.mjs';
 import { displayPath, maskSecret, validateSecret } from './ui.mjs';
 
 assert.equal(normalizeModelSlug('google/gemini-3.8-flash:free'), 'gemini-3.8-flash');
@@ -232,6 +242,100 @@ assert.equal(maskSecret('sk-or-v1-0123456789abcdef'), 'sk-or********cdef (25)');
 assert.equal(maskSecret('sk-or-v1-0123456789abcdef').includes('0123456789'), false);
 assert.match(validateSecret('ok\nNODE_OPTIONS=x'), /newline/);
 assert.equal(validateSecret('sk-normal-key'), '');
+
+assert.equal(providerNeedsThoughtSignatures({ name: 'gemini', baseUrl: 'http://127.0.0.1' }), true);
+assert.equal(
+  providerNeedsThoughtSignatures({
+    name: 'google',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  }),
+  true,
+);
+assert.equal(providerNeedsThoughtSignatures({ name: 'bai', baseUrl: 'https://api.b.ai/v1' }), false);
+assert.equal(
+  isMissingThoughtSignatureError(
+    400,
+    'Function call is missing a thought_signature in functionCall parts',
+  ),
+  true,
+);
+assert.equal(isMissingThoughtSignatureError(400, 'bad request'), false);
+assert.equal(isMissingThoughtSignatureError(429, 'thought_signature'), false);
+
+{
+  const cache = createThoughtSignatureCache(2);
+  cache.remember('a', 'sig-a');
+  cache.remember('b', 'sig-b');
+  cache.remember('c', 'sig-c');
+  assert.equal(cache.lookup('a'), '');
+  assert.equal(cache.lookup('c'), 'sig-c');
+  const body = {
+    messages: [
+      { role: 'user', content: 'hi' },
+      {
+        role: 'assistant',
+        tool_calls: [
+          {
+            id: 'call_keep',
+            type: 'function',
+            function: { name: 'search_files', arguments: '{}' },
+            extra_content: { google: { thought_signature: 'KEEP' } },
+          },
+          {
+            id: 'call_cached',
+            type: 'function',
+            function: { name: 'terminal', arguments: '{}' },
+          },
+          {
+            id: 'call_skip',
+            type: 'function',
+            function: { name: 'other', arguments: '{}' },
+          },
+        ],
+      },
+    ],
+  };
+  cache.remember('call_cached', 'CACHED');
+  injectThoughtSignatures(body, cache);
+  assert.equal(readThoughtSignature(body.messages[1].tool_calls[0]), 'KEEP');
+  assert.equal(readThoughtSignature(body.messages[1].tool_calls[1]), 'CACHED');
+  assert.equal(readThoughtSignature(body.messages[1].tool_calls[2]), SKIP_THOUGHT_SIGNATURE);
+}
+
+{
+  const cache = createThoughtSignatureCache();
+  rememberSignaturesFromPayload(
+    {
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: 'call_json',
+                extra_content: { google: { thoughtSignature: 'JSON-SIG' } },
+              },
+            ],
+          },
+        },
+      ],
+    },
+    cache,
+  );
+  assert.equal(cache.lookup('call_json'), 'JSON-SIG');
+  const streamCache = createThoughtSignatureCache();
+  const extractor = createStreamSignatureExtractor((id, signature) => {
+    streamCache.remember(id, signature);
+  });
+  extractor.push(
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"search_files","arguments":"{}"}}]}}]}\n',
+  );
+  extractor.push(
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"extra_content":{"google":{"thought_signature":"STREAM-SIG"}}}]}}]}\n\n',
+  );
+  extractor.flush();
+  assert.equal(streamCache.lookup('call_1'), 'STREAM-SIG');
+}
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -496,6 +600,118 @@ const extraMock = http.createServer(async (req, res) => {
   res.writeHead(404).end();
 });
 
+let geminiRequests = 0;
+let lastGeminiBody = null;
+const geminiMock = http.createServer(async (req, res) => {
+  if (req.method === 'POST' && req.url === '/v1beta/openai/chat/completions') {
+    geminiRequests += 1;
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    lastGeminiBody = body;
+    const forceMissing = body.messages?.some(
+      (message) => message.content === 'force-thought-signature-400',
+    );
+    const missingSignature = (body.messages || []).some(
+      (message) =>
+        Array.isArray(message.tool_calls) &&
+        message.tool_calls.some((call) => !readThoughtSignature(call)),
+    );
+    if (forceMissing || missingSignature) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify([
+          {
+            error: {
+              code: 400,
+              message:
+                'Function call is missing a thought_signature in functionCall parts. https://ai.google.dev/gemini-api/docs/thought-signatures',
+            },
+          },
+        ]),
+      );
+      return;
+    }
+    if (body.stream && body.messages?.some((message) => message.content === 'need-tools-stream')) {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(
+        `data: ${JSON.stringify({
+          model: body.model,
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: 'call_stream',
+                    type: 'function',
+                    function: { name: 'search_files', arguments: '{}' },
+                  },
+                ],
+              },
+            },
+          ],
+        })}\n\n`,
+      );
+      res.write(
+        `data: ${JSON.stringify({
+          model: body.model,
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    extra_content: { google: { thought_signature: 'STREAM-SIG' } },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+        })}\n\n`,
+      );
+      res.end('data: [DONE]\n\n');
+      return;
+    }
+    if (body.messages?.some((message) => message.content === 'need-tools-json')) {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(
+        JSON.stringify({
+          model: body.model,
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'call_json',
+                    type: 'function',
+                    function: { name: 'search_files', arguments: '{}' },
+                    extra_content: { google: { thought_signature: 'JSON-SIG' } },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+        }),
+      );
+      return;
+    }
+    res.setHeader('Content-Type', 'application/json');
+    res.end(
+      JSON.stringify({
+        model: body.model,
+        choices: [{ message: { role: 'assistant', content: 'gemini-ok' }, finish_reason: 'stop' }],
+      }),
+    );
+    return;
+  }
+  res.writeHead(404).end();
+});
+
 // Mimics Gemini's quota rejection so the two meanings of 429 can be told apart
 // end to end: no free allowance at all, versus today's allowance spent.
 function quotaRejection(limit) {
@@ -551,6 +767,8 @@ await listen(baiMock);
 const baiPort = baiMock.address().port;
 await listen(extraMock);
 const extraPort = extraMock.address().port;
+await listen(geminiMock);
+const geminiPort = geminiMock.address().port;
 
 const portProbe = http.createServer();
 await listen(portProbe);
@@ -594,6 +812,11 @@ fs.writeFileSync(
         keyEnv: 'EXTRA_API_KEY',
         freeModels: ['extra-1'],
       },
+      gemini: {
+        baseUrl: `http://127.0.0.1:${geminiPort}/v1beta/openai`,
+        keyEnv: 'GEMINI_API_KEY',
+        freeModels: ['gemini-3.8-flash', 'gemini-3.7-flash'],
+      },
       // No dailyLimits entry anywhere in this config: the limit for
       // daily-exhausted has to be learned from the provider's own 429.
       quotamock: {
@@ -636,6 +859,10 @@ fs.writeFileSync(
         { provider: 'quotamock', model: 'no-free-tier' },
         { provider: 'quotamock', model: 'daily-exhausted' },
       ],
+      'tool-fallback': [
+        { provider: 'gemini', model: 'gemini-3.8-flash' },
+        { provider: 'gemini', model: 'gemini-3.7-flash' },
+      ],
     },
   }),
 );
@@ -651,6 +878,8 @@ const child = spawn(process.execPath, [path.join(HERE, 'server.mjs')], {
     BAI_BASE_URL: `http://127.0.0.1:${baiPort}/v1`,
     EXTRA_API_KEY: 'extra-test-key',
     EXTRA_BASE_URL: `http://127.0.0.1:${extraPort}/v1`,
+    GEMINI_API_KEY: 'gemini-test-key',
+    GEMINI_BASE_URL: `http://127.0.0.1:${geminiPort}/v1beta/openai`,
     QUOTAMOCK_API_KEY: 'quota-test-key',
     QUOTAMOCK_BASE_URL: `http://127.0.0.1:${quotaPort}/v1`,
     FREE_ROUTER_CONFIG: testConfig,
@@ -788,9 +1017,12 @@ try {
     models.data.map((model) => model.id),
     [
       'test-route',
+      'tool-fallback',
       'z-ai/glm-5.3-free',
       'glm-5.3-flash',
       'extra-1',
+      'gemini-3.8-flash',
+      'gemini-3.7-flash',
       'no-free-tier',
       'daily-exhausted',
       'acme/extra-1:free',
@@ -917,6 +1149,129 @@ try {
     'router-ok',
   );
 
+  const geminiSkipResponse = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'gemini:gemini-3.8-flash',
+      messages: [
+        { role: 'user', content: 'search' },
+        {
+          role: 'assistant',
+          tool_calls: [
+            {
+              id: 'call_unseen',
+              type: 'function',
+              function: { name: 'search_files', arguments: '{}' },
+            },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'call_unseen', content: 'found' },
+      ],
+    }),
+  });
+  assert.equal(geminiSkipResponse.status, 200);
+  assert.equal(readThoughtSignature(lastGeminiBody.messages[1].tool_calls[0]), SKIP_THOUGHT_SIGNATURE);
+
+  const geminiToolResponse = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'gemini:gemini-3.8-flash',
+      messages: [{ role: 'user', content: 'need-tools-json' }],
+    }),
+  });
+  assert.equal(geminiToolResponse.status, 200);
+  const geminiTools = await geminiToolResponse.json();
+  const jsonToolCall = geminiTools.choices[0].message.tool_calls[0];
+  assert.equal(readThoughtSignature(jsonToolCall), 'JSON-SIG');
+  const geminiReplay = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'gemini:gemini-3.8-flash',
+      messages: [
+        { role: 'user', content: 'need-tools-json' },
+        {
+          role: 'assistant',
+          tool_calls: [
+            {
+              id: jsonToolCall.id,
+              type: 'function',
+              function: jsonToolCall.function,
+            },
+          ],
+        },
+        { role: 'tool', tool_call_id: jsonToolCall.id, content: 'found' },
+      ],
+    }),
+  });
+  assert.equal(geminiReplay.status, 200);
+  assert.equal(readThoughtSignature(lastGeminiBody.messages[1].tool_calls[0]), 'JSON-SIG');
+
+  const geminiStream = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'gemini:gemini-3.8-flash',
+      stream: true,
+      messages: [{ role: 'user', content: 'need-tools-stream' }],
+    }),
+  });
+  assert.equal(geminiStream.status, 200);
+  assert.match(await geminiStream.text(), /call_stream/);
+  const geminiStreamReplay = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'gemini:gemini-3.8-flash',
+      messages: [
+        { role: 'user', content: 'need-tools-stream' },
+        {
+          role: 'assistant',
+          tool_calls: [
+            {
+              id: 'call_stream',
+              type: 'function',
+              function: { name: 'search_files', arguments: '{}' },
+            },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'call_stream', content: 'found' },
+      ],
+    }),
+  });
+  assert.equal(geminiStreamReplay.status, 200);
+  assert.equal(readThoughtSignature(lastGeminiBody.messages[1].tool_calls[0]), 'STREAM-SIG');
+
+  const geminiBeforeSkip = geminiRequests;
+  const geminiSkipProvider = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'tool-fallback',
+      messages: [
+        { role: 'user', content: 'force-thought-signature-400' },
+        {
+          role: 'assistant',
+          tool_calls: [
+            {
+              id: 'call_force',
+              type: 'function',
+              function: { name: 'search_files', arguments: '{}' },
+            },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'call_force', content: 'found' },
+      ],
+    }),
+  });
+  assert.equal(geminiSkipProvider.status, 502);
+  const geminiSkipBody = await geminiSkipProvider.json();
+  assert.equal(geminiSkipBody.error.failures.length, 1);
+  assert.match(geminiSkipBody.error.failures[0].reason, /thought_signature/);
+  assert.equal(geminiRequests, geminiBeforeSkip + 1);
+
   // Both quota models are in the route and both answer 429, but the reasons
   // differ and so must the consequences.
   for (const model of ['no-free-tier', 'daily-exhausted']) {
@@ -1007,6 +1362,7 @@ try {
       'bai:models/glm-5.3-paid',
       'bai:models/glm-5.3-pro',
       'extra:extra-1',
+      'gemini:gemini-3.8-flash',
       'openrouter:acme/extra-1:free',
       'openrouter:mock-new',
       'quotamock:daily-exhausted',
@@ -1021,12 +1377,17 @@ try {
   assert.equal(usageByKey.get('tokenrouter:z-ai/glm-5.3-free').ok, 1);
   assert.equal(usageByKey.get('tokenrouter:z-ai/glm-5.3-free').counts.rateLimit, 2);
   assert.equal(usageByKey.get('extra:extra-1').counts.rateLimit, 1);
-  // Eight from routing, plus the successful probe of bai's glm-5.3-pro.
-  assert.equal(usage.days[0].ok, 9);
-  // Three routing failures, the two deliberate quota rejections, and the probe
-  // that found glm-5.3-paid has no free allowance.
-  assert.equal(usage.days[0].fail, 6);
-  assert.equal(usage.days[0].topModel.key, 'bai:glm-5.3-flash');
+  assert.equal(usageByKey.get('gemini:gemini-3.8-flash').ok, 5);
+  assert.equal(usageByKey.get('gemini:gemini-3.8-flash').fail, 1);
+  assert.equal(usageByKey.has('gemini:gemini-3.7-flash'), false);
+  // Eight from routing, plus the successful probe of bai's glm-5.3-pro, plus
+  // five Gemini tool-call round trips.
+  assert.equal(usage.days[0].ok, 14);
+  // Three routing failures, the two deliberate quota rejections, the probe
+  // that found glm-5.3-paid has no free allowance, and one forced Gemini
+  // thought-signature 400.
+  assert.equal(usage.days[0].fail, 7);
+  assert.equal(usage.days[0].topModel.key, 'gemini:gemini-3.8-flash');
 
   // A daily limit only counts attempts the provider actually served, so the
   // two tokenrouter 429s stay out of the consumed total.
@@ -1237,5 +1598,6 @@ try {
   await close(baiMock);
   await close(extraMock);
   await close(quotaMock);
+  await close(geminiMock);
   fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 3 });
 }

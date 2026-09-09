@@ -15,6 +15,14 @@ import {
 import { installUpstreamProxy } from './proxy.mjs';
 import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
 import { createSecretRedactor } from './redact.mjs';
+import {
+  createStreamSignatureExtractor,
+  createThoughtSignatureCache,
+  injectThoughtSignatures,
+  isMissingThoughtSignatureError,
+  providerNeedsThoughtSignatures,
+  rememberSignaturesFromPayload,
+} from './thought-signature.mjs';
 import { displayPath, maskSecret, renderPage, updateEnvFile, validateSecret } from './ui.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -139,6 +147,7 @@ function refreshSecretRedactor() {
 }
 
 const cooldowns = new Map();
+const thoughtSignatures = createThoughtSignatureCache();
 let discoveredModelIds = [];
 let discoverySeenIds = [];
 let discoveryRemovedIds = [];
@@ -1174,19 +1183,34 @@ function filterCandidates(configured, body, requestedModel) {
   return active;
 }
 
-function sanitizeUpstreamBody(body, modelId) {
+function sanitizeUpstreamBody(body, candidate) {
   const upstream = JSON.parse(
     JSON.stringify({
       ...body,
-      model: modelId,
+      model: candidate.model,
     }),
   );
   delete upstream.models;
   delete upstream.route;
+  if (providerNeedsThoughtSignatures(PROVIDERS.get(candidate.provider))) {
+    injectThoughtSignatures(upstream, thoughtSignatures);
+  }
   if (!secretRedactor) return upstream;
   const { value, count } = secretRedactor.redact(upstream);
   if (count) log(`redacted ${count} secret occurrence(s) before upstream`);
   return value;
+}
+
+function rememberGeminiSignatures(candidate, payload) {
+  if (!providerNeedsThoughtSignatures(PROVIDERS.get(candidate.provider))) return;
+  rememberSignaturesFromPayload(payload, thoughtSignatures);
+}
+
+function geminiStreamExtractor(candidate) {
+  if (!providerNeedsThoughtSignatures(PROVIDERS.get(candidate.provider))) return null;
+  return createStreamSignatureExtractor((id, signature) => {
+    thoughtSignatures.remember(id, signature);
+  });
 }
 
 function usefulMessage(payload) {
@@ -1262,7 +1286,7 @@ async function fetchModel(candidate, body, clientSignal) {
     const response = await fetch(registry.chatUrl(candidate.provider), {
       method: 'POST',
       headers: registry.headers(candidate.provider),
-      body: JSON.stringify(sanitizeUpstreamBody(body, candidate.model)),
+      body: JSON.stringify(sanitizeUpstreamBody(body, candidate)),
       signal: controller.signal,
     });
     return { response, cleanup };
@@ -1332,6 +1356,7 @@ async function attemptJson(candidate, body, clientSignal) {
       kind: 'empty',
     };
   }
+  rememberGeminiSignatures(candidate, payload);
   return {
     ok: true,
     payload,
@@ -1382,6 +1407,7 @@ async function attemptStream(candidate, body, res, clientSignal) {
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
+  const extractor = geminiStreamExtractor(candidate);
   const bufferedChunks = [];
   let parserBuffer = '';
   let committed = false;
@@ -1392,6 +1418,7 @@ async function attemptStream(candidate, body, res, clientSignal) {
     try {
       read = await reader.read();
     } catch (error) {
+      extractor?.flush();
       cleanup();
       if (committed) {
         res.end();
@@ -1401,13 +1428,15 @@ async function attemptStream(candidate, body, res, clientSignal) {
     }
     if (read.done) break;
     const bytes = Buffer.from(read.value);
+    const text = decoder.decode(read.value, { stream: true });
+    extractor?.push(text);
     if (committed) {
       res.write(bytes);
       continue;
     }
 
     bufferedChunks.push(bytes);
-    parserBuffer += decoder.decode(read.value, { stream: true });
+    parserBuffer += text;
     const lines = parserBuffer.split('\n');
     parserBuffer = lines.pop() || '';
     for (const line of lines) {
@@ -1439,6 +1468,7 @@ async function attemptStream(candidate, body, res, clientSignal) {
     }
   }
 
+  extractor?.flush();
   if (committed) {
     cleanup();
     res.end();
@@ -1586,6 +1616,12 @@ async function handleChat(req, res) {
     if (result.kind) setCooldown(candidate, result.kind, result.reason, providerWaitMs);
     log(`failed ${candidateKey(candidate)}: ${result.status} ${result.reason}`);
     if (result.fatal) failedProviders.add(candidate.provider);
+    // The same history will 400 on every Gemini thinking model. Stop here so
+    // 3.8-flash, 3.7-flash, and Flash-Lite are not each billed for a refusal.
+    if (isMissingThoughtSignatureError(result.status, result.reason)) {
+      log(`skipping remaining ${candidate.provider} candidates: missing thought_signature`);
+      failedProviders.add(candidate.provider);
+    }
   }
 
   if (!res.headersSent) {
