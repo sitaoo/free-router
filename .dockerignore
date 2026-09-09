@@ -1,0 +1,8 @@
+.git
+.env
+.env.local
+node_modules
+discovered-free-models.json
+router.log
+router.pid
+docs
