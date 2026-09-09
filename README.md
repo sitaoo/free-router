@@ -555,9 +555,14 @@ tries every provider that currently offers that same model. Use
 
 ## Share
 
-Paste `https://www222fff.github.io/free-router/` into an X draft. The page
-ships `twitter:card` / Open Graph tags and `og.png` (1200×630) so the link
-renders as a large card that opens this site, with a GitHub CTA.
+X does not turn the words `Free Router` into a link by themselves. Put the
+page URL in the post:
+
+`https://www222fff.github.io/free-router/`
+
+The tweet can still read **Free Router**; X attaches the URL as a large card
+(`twitter:card` / Open Graph + `og.png`) and usually hides the raw URL under
+that card. The landing page **Share on X** button fills this in.
 
 ## Star History
 
