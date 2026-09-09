@@ -10,6 +10,10 @@ provider for that model is tried, then the next model in the ranking.
 Point any OpenAI-compatible client at `http://127.0.0.1:8787/v1` and use the
 `free-best` model.
 
+The public page is [www222fff.github.io/free-router](https://www222fff.github.io/free-router/).
+Paste that URL in an X post so the project card unfurls. GitHub Pages serves
+`docs/` from `main`.
+
 ## Requirements
 
 - Node.js 20+
@@ -548,6 +552,12 @@ journalctl --user -u free-router -f
 When a concrete model ID is requested instead of a route alias, the gateway
 tries every provider that currently offers that same model. Use
 `provider:model` to force a single provider.
+
+## Share
+
+Paste `https://www222fff.github.io/free-router/` into an X draft. The page
+ships `twitter:card` / Open Graph tags and `og.png` (1200×630) so the link
+renders as a large card that opens this site, with a GitHub CTA.
 
 ## Star History
 

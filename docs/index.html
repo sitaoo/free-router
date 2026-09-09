@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Free Router — local OpenAI-compatible gateway</title>
+  <meta name="description" content="Point any OpenAI-compatible client at localhost:8787/v1 and use free-best. Ranks currently free models across Gemini, OpenRouter, TokenRouter, and B.AI.">
+  <link rel="canonical" href="https://www222fff.github.io/free-router/">
+
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://www222fff.github.io/free-router/">
+  <meta property="og:site_name" content="Free Router">
+  <meta property="og:title" content="Free Router">
+  <meta property="og:description" content="Local OpenAI-compatible gateway. Point a client at http://127.0.0.1:8787/v1 and use free-best.">
+  <meta property="og:image" content="https://www222fff.github.io/free-router/og.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Free Router: local OpenAI-compatible gateway ranking Gemini, OpenRouter, TokenRouter, and B.AI into free-best">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Free Router">
+  <meta name="twitter:description" content="Local OpenAI-compatible gateway. Point a client at http://127.0.0.1:8787/v1 and use free-best.">
+  <meta name="twitter:image" content="https://www222fff.github.io/free-router/og.png">
+  <meta name="twitter:image:alt" content="Free Router: local OpenAI-compatible gateway ranking Gemini, OpenRouter, TokenRouter, and B.AI into free-best">
+
+  <meta name="theme-color" content="#0b62d6">
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fa;
+      --card: #ffffff;
+      --line: #e2e5ea;
+      --text: #1c1f24;
+      --muted: #5f6773;
+      --accent: #0b62d6;
+      --accent-soft: #eaf1fd;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 48px 24px 72px; }
+    h1 { font-size: 32px; letter-spacing: -.4px; margin: 0 0 8px; }
+    .lead { color: var(--muted); margin: 0 0 24px; font-size: 18px; }
+    .hero {
+      width: 100%;
+      height: auto;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      display: block;
+      margin-bottom: 28px;
+      background: #1c1f24;
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 32px; }
+    a.btn {
+      display: inline-block;
+      padding: 10px 16px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 15px;
+    }
+    a.primary { background: var(--accent); color: #fff; }
+    a.ghost { background: var(--card); color: var(--text); border: 1px solid var(--line); }
+    ul { margin: 0 0 28px; padding-left: 1.2em; color: var(--text); }
+    li { margin: 8px 0; }
+    pre {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 16px 18px;
+      overflow-x: auto;
+      font: 13px/1.5 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    }
+    footer { margin-top: 36px; color: var(--muted); font-size: 14px; }
+    footer a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Free Router</h1>
+    <p class="lead">Local OpenAI-compatible gateway. Rank currently free models, fail over on rate limits, and keep provider keys on your machine.</p>
+    <img class="hero" src="og.png" width="1200" height="630" alt="Free Router routes Gemini, OpenRouter, TokenRouter, and B.AI into free-best">
+    <div class="actions">
+      <a class="btn primary" href="https://github.com/www222fff/free-router">View on GitHub</a>
+      <a class="btn ghost" href="https://twitter.com/intent/tweet?text=Free%20Router%20%E2%80%94%20local%20OpenAI%20gateway%20that%20ranks%20free%20models&amp;url=https%3A%2F%2Fwww222fff.github.io%2Ffree-router%2F">Share on X</a>
+    </div>
+    <ul>
+      <li>Point any OpenAI-compatible client at <code>http://127.0.0.1:8787/v1</code> and use <code>free-best</code>.</li>
+      <li>Ranks models across Gemini, OpenRouter, TokenRouter, and B.AI. A missing key just drops that provider.</li>
+      <li>Retries the next free candidate when a provider is rate-limited, down, or returns empty content.</li>
+    </ul>
+    <pre>git clone https://github.com/www222fff/free-router.git
+cd free-router
+cp .env.example .env
+./start.sh</pre>
+    <footer>
+      Source and docs: <a href="https://github.com/www222fff/free-router">github.com/www222fff/free-router</a>
+    </footer>
+  </main>
+</body>
+</html>
