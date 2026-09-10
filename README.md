@@ -1,6 +1,8 @@
 # Free Router
 
-[![Architecture](docs/architecture.svg)](https://www222fff.github.io/free-router/)
+<p align="center">
+  <img src="docs/og.png" alt="Free Router architecture: any OpenAI client to a local gateway to pluggable providers" width="100%">
+</p>
 
 Local OpenAI-compatible gateway. Point any client at
 `http://127.0.0.1:8787/v1` and use `free-best`. It ranks currently free
