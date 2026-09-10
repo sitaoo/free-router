@@ -902,13 +902,16 @@ function groupRank(group, configuredSet, configuredIndex) {
 }
 
 function orderByModelThenProvider(candidates, configuredSet, configuredIndex) {
+  // Rank each route entry on its own: group by `provider:model` so an
+  // unpinned variant of a model does not inherit the pinned status or score
+  // of a differently-cased or differently-provider variant.
   const groups = new Map();
   candidates.forEach((candidate, originalIndex) => {
-    const slug = normalizeModelSlug(candidate.model) || candidateKey(candidate);
-    let group = groups.get(slug);
+    const key = candidateKey(candidate);
+    let group = groups.get(key);
     if (!group) {
-      group = { slug, members: [], firstIndex: originalIndex };
-      groups.set(slug, group);
+      group = { slug: normalizeModelSlug(candidate.model) || key, members: [], firstIndex: originalIndex };
+      groups.set(key, group);
     }
     group.members.push({ candidate, originalIndex });
   });
@@ -921,6 +924,10 @@ function orderByModelThenProvider(candidates, configuredSet, configuredIndex) {
   });
   const expanded = [];
   const present = new Set();
+  const expandedSlugs = new Set();
+  // Variants that are already candidates rank on their own group, so the
+  // expansion only adds genuinely new same-model offerings.
+  const candidateKeys = new Set(candidates.map(candidateKey));
   const emit = (candidate) => {
     const key = candidateKey(candidate);
     if (present.has(key)) return;
@@ -931,7 +938,14 @@ function orderByModelThenProvider(candidates, configuredSet, configuredIndex) {
     for (const { candidate } of group.members.sort((a, b) => a.originalIndex - b.originalIndex)) {
       emit(candidate);
     }
-    for (const offering of registry.offeringsForSlug(group.slug)) emit(offering);
+    // Same-model offerings from other providers are offered once per model
+    // slug, at the position of the highest-ranked variant of that model.
+    if (expandedSlugs.has(group.slug)) continue;
+    expandedSlugs.add(group.slug);
+    for (const offering of registry.offeringsForSlug(group.slug)) {
+      if (candidateKeys.has(candidateKey(offering))) continue;
+      emit(offering);
+    }
   }
   return expanded;
 }
