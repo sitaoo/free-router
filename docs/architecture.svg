@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Free Router architecture</title>
+  <desc id="desc">Any OpenAI-compatible client talks to Free Router on localhost. The gateway ranks free models and fails over across pluggable providers.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#16181d"/>
+      <stop offset="100%" stop-color="#1c1f24"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8a929e"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="630" rx="24" fill="url(#bg)"/>
+  <text x="56" y="52" fill="#8a929e" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="15" letter-spacing="1.4">ARCHITECTURE</text>
+  <text x="56" y="92" fill="#ffffff" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="34" font-weight="700">Free Router</text>
+  <text x="56" y="124" fill="#8a929e" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="18">Local OpenAI-compatible gateway · pluggable providers</text>
+
+  <!-- client -->
+  <rect x="300" y="160" width="600" height="72" rx="14" fill="#2a2e36" stroke="#3d4350"/>
+  <text x="600" y="190" text-anchor="middle" fill="#ffffff" font-family="ui-sans-serif, system-ui, sans-serif" font-size="20" font-weight="650">Any OpenAI-compatible client</text>
+  <text x="600" y="216" text-anchor="middle" fill="#8a929e" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14">Hermes · Cursor · curl · SDKs · your app</text>
+
+  <line x1="600" y1="232" x2="600" y2="278" stroke="#8a929e" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="616" y="262" fill="#5f6773" font-family="ui-monospace, SF Mono, Menlo, Consolas, monospace" font-size="13">/v1  model: free-best</text>
+
+  <!-- gateway -->
+  <rect x="250" y="282" width="700" height="96" rx="16" fill="#0b62d6"/>
+  <text x="600" y="324" text-anchor="middle" fill="#ffffff" font-family="ui-sans-serif, system-ui, sans-serif" font-size="24" font-weight="700">Free Router</text>
+  <text x="600" y="354" text-anchor="middle" fill="#d6e4fb" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">rank currently free models · failover · quota · keys stay on the machine</text>
+
+  <line x1="600" y1="378" x2="600" y2="424" stroke="#8a929e" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- providers -->
+  <g font-family="ui-sans-serif, system-ui, sans-serif">
+    <rect x="40" y="430" width="152" height="56" rx="12" fill="#2a2e36" stroke="#3d4350"/>
+    <text x="116" y="464" text-anchor="middle" fill="#ffffff" font-size="16">Gemini</text>
+
+    <rect x="204" y="430" width="152" height="56" rx="12" fill="#2a2e36" stroke="#3d4350"/>
+    <text x="280" y="464" text-anchor="middle" fill="#ffffff" font-size="16">OpenRouter</text>
+
+    <rect x="368" y="430" width="152" height="56" rx="12" fill="#2a2e36" stroke="#3d4350"/>
+    <text x="444" y="464" text-anchor="middle" fill="#ffffff" font-size="16">TokenRouter</text>
+
+    <rect x="532" y="430" width="120" height="56" rx="12" fill="#2a2e36" stroke="#3d4350"/>
+    <text x="592" y="464" text-anchor="middle" fill="#ffffff" font-size="16">B.AI</text>
+
+    <rect x="664" y="430" width="120" height="56" rx="12" fill="#2a2e36" stroke="#3d4350"/>
+    <text x="724" y="464" text-anchor="middle" fill="#ffffff" font-size="16">Groq</text>
+
+    <rect x="796" y="430" width="140" height="56" rx="12" fill="#2a2e36" stroke="#3d4350"/>
+    <text x="866" y="464" text-anchor="middle" fill="#ffffff" font-size="16">NVIDIA</text>
+
+    <rect x="948" y="430" width="212" height="56" rx="12" fill="#0b62d6"/>
+    <text x="1054" y="464" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="650">+ any /v1 API</text>
+  </g>
+
+  <text x="600" y="538" text-anchor="middle" fill="#8a929e" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Named boxes are examples. Add any OpenAI-compatible provider in config  a missing key is skipped.</text>
+  <text x="600" y="572" text-anchor="middle" fill="#5f6773" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14">http://127.0.0.1:8787/v1</text>
+</svg>
