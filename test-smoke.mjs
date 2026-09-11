@@ -1607,6 +1607,96 @@ try {
     false,
   );
 
+  // Editable-config endpoints: routes, limits, discovery, settings, providers.
+  assert.ok(afterClear.editable);
+  assert.ok(afterClear.allRoutes['test-route']);
+  const saveRoute = await fetch(`${base}/api/routes`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ action: 'save', route: 'smoke-tmp', models: ['mock-a', 'tokenrouter:z-ai/glm-5.3-free'] }),
+  });
+  assert.equal(saveRoute.status, 200);
+  const withRoute = await fetch(`${base}/api/state`, { headers: { Cookie: sessionCookie } }).then((res) => res.json());
+  assert.deepEqual(withRoute.editable.routes['smoke-tmp'], ['mock-a', 'tokenrouter:z-ai/glm-5.3-free']);
+  const badRoute = await fetch(`${base}/api/routes`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ action: 'save', route: 'smoke-tmp', models: ['tokenrouter:'] }),
+  });
+  assert.equal(badRoute.status, 400);
+  const delRoute = await fetch(`${base}/api/routes`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ action: 'delete', route: 'smoke-tmp' }),
+  });
+  assert.equal(delRoute.status, 200);
+
+  const setLimit = await fetch(`${base}/api/limits`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ action: 'set', key: 'smoke:model', limit: 7 }),
+  });
+  assert.equal(setLimit.status, 200);
+  const withLimit = await fetch(`${base}/api/state`, { headers: { Cookie: sessionCookie } }).then((res) => res.json());
+  assert.equal(withLimit.editable.limits.find((entry) => entry.key === 'smoke:model')?.limit, 7);
+  const delLimit = await fetch(`${base}/api/limits`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ action: 'delete', key: 'smoke:model' }),
+  });
+  assert.equal(delLimit.status, 200);
+
+  const discOff = await fetch(`${base}/api/discovery`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ enabled: false, evaluationEnabled: false, pin: 'smoke:pinned' }),
+  });
+  assert.equal(discOff.status, 200);
+  const discState = await fetch(`${base}/api/state`, { headers: { Cookie: sessionCookie } }).then((res) => res.json());
+  assert.equal(discState.editable.discovery.enabled, false);
+  assert.equal(discState.editable.discovery.evaluationEnabled, false);
+  assert.ok(discState.editable.discovery.pinnedModels.includes('smoke:pinned'));
+  const discOn = await fetch(`${base}/api/discovery`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ enabled: true, evaluationEnabled: true, unpin: 'smoke:pinned' }),
+  });
+  assert.equal(discOn.status, 200);
+
+  const settings = await fetch(`${base}/api/settings`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ attemptTimeoutMs: 6000, redactSecrets: true }),
+  });
+  assert.equal(settings.status, 200);
+  const settingsState = await fetch(`${base}/api/state`, { headers: { Cookie: sessionCookie } }).then((res) => res.json());
+  assert.equal(settingsState.editable.general.attemptTimeoutMs, 6000);
+
+  const addProv = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ action: 'create', name: 'smokeprov', baseUrl: 'http://127.0.0.1:1/v1', freeModels: ['smoke-1'] }),
+  });
+  assert.equal(addProv.status, 200);
+  const dupProv = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ action: 'create', name: 'smokeprov', baseUrl: 'http://127.0.0.1:1/v1' }),
+  });
+  assert.equal(dupProv.status, 400);
+  const delProv = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ action: 'delete', name: 'smokeprov' }),
+  });
+  assert.equal(delProv.status, 200);
+  const noDefDel = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ action: 'delete', name: 'openrouter' }),
+  });
+  assert.equal(noDefDel.status, 400);
+
   console.log(
     'smoke test passed: pluggable providers, ranking, fallback, discovery, usage counters, and tracking work',
   );

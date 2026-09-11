@@ -334,6 +334,144 @@ export function loadConfigFile(configPath) {
   return { config: JSON.parse(raw), format: 'json' };
 }
 
+// Minimal boot config: shipped so a fresh checkout starts with zero manual
+// edits (no keys -> providers are skipped until keys are added in the UI).
+export function defaultConfigObject() {
+  return {
+    host: '127.0.0.1',
+    port: 8787,
+    attemptTimeoutMs: 180000,
+    catalogRefreshMs: 900000,
+    redactSecrets: true,
+    socksFirstHosts: ['generativelanguage.googleapis.com'],
+    defaultProvider: 'openrouter',
+    providers: {
+      gemini: {
+        catalog: true,
+        pricing: false,
+        probeFreeTier: true,
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        modelsUrl: 'https://generativelanguage.googleapis.com/v1beta/models',
+        modelsKeyHeader: 'x-goog-api-key',
+        keyEnv: 'GEMINI_API_KEY',
+        freeModels: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'],
+        keys: [],
+      },
+      openrouter: {
+        catalog: true,
+        pricing: true,
+        baseUrl: 'https://openrouter.ai/api/v1',
+        keyEnv: 'OPENROUTER_API_KEY',
+        headers: {
+          'HTTP-Referer': { env: 'OPENROUTER_HTTP_REFERER', default: '${origin}' },
+          'X-Title': { env: 'OPENROUTER_APP_NAME', default: 'Free Router' },
+        },
+        keys: [],
+      },
+      tokenrouter: {
+        catalog: true,
+        pricing: false,
+        baseUrl: 'https://api.tokenrouter.com/v1',
+        keyEnv: 'TOKENROUTER_API_KEY',
+        freeModels: ['z-ai/glm-5.3-free'],
+        keys: [],
+      },
+      bai: {
+        baseUrl: 'https://api.b.ai/v1',
+        keyEnv: 'BAI_API_KEY',
+        freeModels: ['glm-5.3-flash', 'deepseek-v4-flash', 'qwen3.8-flash', 'hy3', 'mimo-v2.5'],
+        keys: [],
+      },
+    },
+    discovery: {
+      enabled: true,
+      provider: 'openrouter',
+      intervalMs: 172800000,
+      route: 'free-best',
+      stateFile: 'discovered-free-models.json',
+      exclude: {
+        modelPatterns: [
+          '[-_]tts(?:$|[-_])',
+          '[-_]image(?:$|[-_])',
+          '(?:^|[:/])nano-banana',
+          '(?:^|[:/])lyria',
+          '[-_]transcribe(?:$|[-_])',
+          'robotics',
+          'computer-use',
+          'deep-research',
+          '(?:^|[:/])antigravity',
+          '[-_]latest$',
+        ],
+        textPatterns: [
+          "\\b(finance|financial|investment|medicine|medical|healthcare|health|clinical|biomedical|pharmaceutical|legal|accounting|tax)[\\s-]*(focused|specific|specialized|specialised|domain)\\b",
+          '\\bdomain-(specific|specialized|specialised)\\b',
+        ],
+      },
+      evaluation: {
+        enabled: true,
+        maxTokens: 4000,
+        maxPerRun: 8,
+        usageWeight: 12,
+        usageMinRequests: 20,
+        pinnedModels: [
+          'gemini:gemini-3.8-flash',
+          'gemini:gemini-3.7-flash',
+          'tokenrouter:z-ai/glm-5.3-free',
+          'bai:glm-5.3-flash',
+        ],
+      },
+    },
+    usage: {
+      retentionDays: 7,
+      timezone: 'America/Los_Angeles',
+      dailyLimits: {
+        'gemini:gemini-3.8-flash': 20,
+        'gemini:gemini-3.7-flash': 20,
+        'gemini:gemini-3.5-flash-lite': 200,
+        'gemini:gemini-3.1-flash-lite': 200,
+      },
+    },
+    cooldownMs: {
+      rateLimit: 600000,
+      timeout: 300000,
+      serverError: 120000,
+      empty: 300000,
+      notFound: 3600000,
+      forbidden: 3600000,
+    },
+    routes: {
+      'free-best': [
+        { provider: 'gemini', model: 'gemini-3.8-flash' },
+        { provider: 'gemini', model: 'gemini-3.7-flash' },
+        { provider: 'tokenrouter', model: 'z-ai/glm-5.3-free' },
+        { provider: 'bai', model: 'glm-5.3-flash' },
+        { provider: 'gemini', model: 'gemini-3.5-flash-lite' },
+        { provider: 'gemini', model: 'gemini-3.1-flash-lite' },
+        { provider: 'bai', model: 'deepseek-v4-flash' },
+        'stealth/ox-alpha',
+        'z-ai/glm-5.2:free',
+        { provider: 'bai', model: 'qwen3.8-flash' },
+        { provider: 'bai', model: 'hy3' },
+        { provider: 'bai', model: 'mimo-v2.5' },
+      ],
+    },
+    webui: { enabled: true, envFile: '.env', password: 'admin' },
+    gateway: { requireAuth: false, keys: [] },
+  };
+}
+
+// If no config file exists yet, write the defaults so the server boots with
+// zero manual edits; everything else is then configured in the web UI.
+export function ensureConfigFile(configPath) {
+  try {
+    if (fs.existsSync(configPath)) return false;
+  } catch {
+    return false;
+  }
+  saveConfigFile(configPath, defaultConfigObject());
+  return true;
+}
+
 export function saveConfigFile(configPath, config) {
   const body = configPath.endsWith('.toml') ? stringifyToml(config) : `${JSON.stringify(config, null, 2)}\n`;
   const temporaryPath = `${configPath}.${process.pid}.tmp`;

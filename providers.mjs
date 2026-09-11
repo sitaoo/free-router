@@ -110,11 +110,9 @@ function joinUrl(baseUrl, path) {
 }
 
 export function createProviderRegistry(config, { host, port }) {
-  const entries = Object.entries(config.providers || {});
-  if (!entries.length) throw new Error('config.providers is empty');
-
   const providers = new Map();
-  for (const [name, raw] of entries) {
+
+  function makeProviderEntry(name, raw) {
     if (!PROVIDER_ID.test(name)) {
       throw new Error(`invalid provider id "${name}"; use lowercase letters, digits, _ or -`);
     }
@@ -133,7 +131,7 @@ export function createProviderRegistry(config, { host, port }) {
     // with `{name, key}`) plus env fallback (`<KEYENV>`, `<KEYENV>S`,
     // `<KEYENV>_KEYS`). `apiKey` stays as the first key for compatibility.
     const resolved = providerKeysFromConfig(name, { ...cfg, keyEnv });
-    providers.set(name, {
+    return {
       name,
       keyEnv,
       baseUrlEnv,
@@ -165,14 +163,21 @@ export function createProviderRegistry(config, { host, port }) {
       catalogFetchedAt: 0,
       catalogAttemptedAt: 0,
       catalogError: '',
-    });
+    };
+  }
+
+  const entries = Object.entries(config.providers || {});
+  if (!entries.length) throw new Error('config.providers is empty');
+
+  for (const [name, raw] of entries) {
+    providers.set(name, makeProviderEntry(name, raw));
   }
 
   const configuredDefault = config.defaultProvider;
   if (configuredDefault && !providers.has(configuredDefault)) {
     throw new Error(`defaultProvider "${configuredDefault}" is not in providers`);
   }
-  const defaultProvider =
+  let defaultProvider =
     configuredDefault ||
     [...providers.values()].find((provider) => provider.catalogHasPricing)?.name ||
     [...providers.keys()][0];
@@ -181,13 +186,40 @@ export function createProviderRegistry(config, { host, port }) {
   if (configuredDiscovery && !providers.has(configuredDiscovery)) {
     throw new Error(`discovery.provider "${configuredDiscovery}" is not in providers`);
   }
-  const discoveryProvider =
+  let discoveryProvider =
     configuredDiscovery ||
     [...providers.values()].find((provider) => provider.discover)?.name ||
     defaultProvider;
 
   function get(name) {
     return providers.get(name);
+  }
+
+  // Runtime provider management for the web UI. Config persistence is the
+  // caller's job; the registry only mirrors it into live state.
+  function addProvider(name, rawCfg) {
+    if (providers.has(name)) throw new Error(`provider already exists: ${name}`);
+    const entry = makeProviderEntry(name, rawCfg);
+    providers.set(name, entry);
+    return entry;
+  }
+
+  function removeProvider(name) {
+    if (!providers.has(name)) return false;
+    if (name === defaultProvider) throw new Error(`cannot remove the default provider: ${name}`);
+    if (name === discoveryProvider) throw new Error(`cannot remove the discovery provider: ${name}`);
+    providers.delete(name);
+    return true;
+  }
+
+  function setDefaultProvider(name) {
+    if (!providers.has(name)) throw new Error(`unknown provider: ${name}`);
+    defaultProvider = name;
+  }
+
+  function setDiscoveryProvider(name) {
+    if (!providers.has(name)) throw new Error(`unknown provider: ${name}`);
+    discoveryProvider = name;
   }
 
   function headers(name, keyOverride) {
@@ -592,8 +624,12 @@ export function createProviderRegistry(config, { host, port }) {
 
   return {
     providers,
-    defaultProvider,
-    discoveryProvider,
+    get defaultProvider() {
+      return defaultProvider;
+    },
+    get discoveryProvider() {
+      return discoveryProvider;
+    },
     get,
     headers,
     metadata,
@@ -611,6 +647,10 @@ export function createProviderRegistry(config, { host, port }) {
     providerKind,
     setApiKey,
     setProviderKeys,
+    addProvider,
+    removeProvider,
+    setDefaultProvider,
+    setDiscoveryProvider,
     keySlots,
     rotateKeyCursor,
     markKeyInvalid,

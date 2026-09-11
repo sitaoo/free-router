@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   defaultConfigPath,
+  ensureConfigFile,
   loadConfigFile,
   saveConfigFile,
 } from './config.mjs';
@@ -60,6 +61,9 @@ for (const file of envCandidates) {
 }
 
 const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || defaultConfigPath(HERE);
+if (ensureConfigFile(CONFIG_PATH)) {
+  console.log(`[${new Date().toISOString()}] wrote default config to ${CONFIG_PATH}; set keys in the web UI`);
+}
 const { config, format: CONFIG_FORMAT } = loadConfigFile(CONFIG_PATH);
 config.webui ||= {};
 config.gateway ||= {};
@@ -76,14 +80,14 @@ installUpstreamProxy(
 );
 const HOST = process.env.FREE_ROUTER_HOST || config.host || '127.0.0.1';
 const PORT = Number(process.env.FREE_ROUTER_PORT || config.port || 8787);
-const ATTEMPT_TIMEOUT_MS = Number(
+let attemptTimeoutMs = Number(
   process.env.FREE_ROUTER_ATTEMPT_TIMEOUT_MS || config.attemptTimeoutMs || 180000,
 );
-const CATALOG_REFRESH_MS = Number(config.catalogRefreshMs || 900000);
+let catalogRefreshMs = Number(config.catalogRefreshMs || 900000);
 const registry = createProviderRegistry(config, { host: HOST, port: PORT });
 const PROVIDERS = registry.providers;
 const discoveryConfig = config.discovery || {};
-const DISCOVERY_ENABLED = discoveryConfig.enabled !== false;
+let discoveryEnabled = discoveryConfig.enabled !== false;
 const DISCOVERY_INTERVAL_MS = Number(discoveryConfig.intervalMs || 7 * 24 * 60 * 60 * 1000);
 const DISCOVERY_ROUTE = String(discoveryConfig.route || 'free-best');
 // How long a "not free" verdict stands before the model is worth asking again.
@@ -108,7 +112,7 @@ const excludeConfig = discoveryConfig.exclude || {};
 const EXCLUDE_MODEL_PATTERNS = compilePatterns(excludeConfig.modelPatterns, 'exclude.modelPatterns');
 const EXCLUDE_TEXT_PATTERNS = compilePatterns(excludeConfig.textPatterns, 'exclude.textPatterns');
 const evaluationConfig = discoveryConfig.evaluation || {};
-const EVALUATION_ENABLED = evaluationConfig.enabled !== false;
+let evaluationEnabled = evaluationConfig.enabled !== false;
 const EVALUATION_MAX_TOKENS = Number(evaluationConfig.maxTokens || 4000);
 // Bumped whenever the benchmark or its weights change, so stored scores from an
 // older scale get recomputed instead of being compared against new ones.
@@ -424,11 +428,13 @@ function dailyLimitFor(key) {
   // value is only a stand-in until the provider tells us the real one.
   const learned = learnedDailyLimit(key);
   if (learned) return learned;
+  // Read live from config (not a startup snapshot) so UI edits apply at once.
+  const limits = config.usage?.dailyLimits || {};
   const separator = String(key).indexOf(':');
   const provider = separator >= 0 ? key.slice(0, separator) : '';
   const model = separator >= 0 ? key.slice(separator + 1) : key;
   for (const lookup of [key, model, `${provider}:*`]) {
-    const value = Number(USAGE_DAILY_LIMITS[lookup]);
+    const value = Number(limits[lookup]);
     if (Number.isFinite(value) && value > 0) return value;
   }
   return null;
@@ -526,7 +532,7 @@ function loadDiscoveryState() {
     const state = JSON.parse(fs.readFileSync(DISCOVERY_STATE_PATH, 'utf8'));
     usageByDay = sanitizeUsage(state.usage);
     pruneUsage();
-    if (!DISCOVERY_ENABLED) return;
+    if (!discoveryEnabled) return;
     discoveredModelIds = Array.isArray(state.addedModels)
       ? state.addedModels.filter((id) => typeof id === 'string')
       : [];
@@ -750,7 +756,7 @@ function routeCandidates(routeName) {
   const configuredKeys = normalizedConfigured.map(candidateKey);
   const configuredSet = new Set(configuredKeys);
   const configuredIndex = new Map(configuredKeys.map((key, index) => [key, index]));
-  if (!DISCOVERY_ENABLED || routeName !== DISCOVERY_ROUTE) {
+  if (!discoveryEnabled || routeName !== DISCOVERY_ROUTE) {
     return orderByModelThenProvider(activeConfigured, configuredSet, configuredIndex);
   }
 
@@ -789,7 +795,7 @@ function syncModelAvailability() {
 }
 
 async function refreshCatalog(force = false) {
-  await registry.refreshCatalogs(force, CATALOG_REFRESH_MS, log);
+  await registry.refreshCatalogs(force, catalogRefreshMs, log);
   syncModelAvailability();
 }
 
@@ -970,7 +976,7 @@ async function probeFreeTierCandidates() {
 }
 
 async function performFreeModelDiscovery(forceCatalogRefresh = false) {
-  if (!DISCOVERY_ENABLED) return;
+  if (!discoveryEnabled) return;
   if (
     discoveryLastCheckedAt &&
     Date.now() - discoveryLastCheckedAt < DISCOVERY_INTERVAL_MS
@@ -1066,7 +1072,7 @@ async function performFreeModelDiscovery(forceCatalogRefresh = false) {
       return evaluation?.status !== 'scored' || evaluation.version !== EVALUATION_VERSION;
     });
     const toEvaluate = [...additions, ...stale].slice(0, EVALUATION_MAX_PER_RUN);
-    if (EVALUATION_ENABLED && toEvaluate.length) {
+    if (evaluationEnabled && toEvaluate.length) {
       if (stale.length) {
         log(`re-evaluating ${stale.length} model(s) with missing or outdated scores`, stale);
       }
@@ -1093,7 +1099,7 @@ async function performFreeModelDiscovery(forceCatalogRefresh = false) {
 
   // Runs regardless of the priced catalog's outcome, since it depends on a
   // different provider and a failure there says nothing about this.
-  if (EVALUATION_ENABLED) {
+  if (evaluationEnabled) {
     try {
       await probeFreeTierCandidates();
     } catch (error) {
@@ -1116,7 +1122,7 @@ function discoverFreeModels(forceCatalogRefresh = false) {
 }
 
 function scheduleNextDiscovery() {
-  if (!DISCOVERY_ENABLED) return;
+  if (!discoveryEnabled) return;
   const elapsed = discoveryLastCheckedAt ? Date.now() - discoveryLastCheckedAt : 0;
   const delay = discoveryLastCheckedAt
     ? Math.max(1000, DISCOVERY_INTERVAL_MS - elapsed)
@@ -1362,7 +1368,7 @@ function errorSummary(status, raw) {
 
 async function fetchModel(candidate, body, clientSignal, slot) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error('attempt timeout')), ATTEMPT_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(new Error('attempt timeout')), attemptTimeoutMs);
   const abortFromClient = () => controller.abort(new Error('client disconnected'));
   clientSignal?.addEventListener('abort', abortFromClient, { once: true });
   const cleanup = () => {
@@ -2118,6 +2124,457 @@ async function handleServerConfig(req, res) {
   return sendJson(res, 200, { ok: true, host: config.host, port: config.port, notes });
 }
 
+// ---- Editable configuration (web UI settings tabs) ----
+
+function routeEntryString(entry) {
+  if (typeof entry === 'string') return entry;
+  if (entry && typeof entry === 'object') {
+    const provider = String(entry.provider || '');
+    const model = String(entry.model || entry.id || '');
+    if (provider && model) return `${provider}:${model}`;
+    return model;
+  }
+  return '';
+}
+
+// "provider:model" -> {provider, model} when the prefix names a provider,
+// otherwise kept as a plain string (e.g. "z-ai/glm-5.2:free").
+function parseRouteEntryString(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const separator = text.indexOf(':');
+  if (separator > 0 && PROVIDERS.has(text.slice(0, separator))) {
+    const model = text.slice(separator + 1).trim();
+    if (!model) return null;
+    return { provider: text.slice(0, separator), model };
+  }
+  return text;
+}
+
+function editableConfigState() {
+  const routes = {};
+  for (const [name, entries] of Object.entries(config.routes || {})) {
+    routes[name] = (Array.isArray(entries) ? entries : []).map(routeEntryString).filter(Boolean);
+  }
+  const limits = Object.entries(config.usage?.dailyLimits || {}).map(([key, limit]) => ({
+    key,
+    limit: Number(limit),
+    source: dailyLimitSource(key),
+  }));
+  limits.sort((a, b) => a.key.localeCompare(b.key));
+  return {
+    providers: [...PROVIDERS.values()].map((provider) => ({
+      name: provider.name,
+      keyEnv: provider.keyEnv,
+      baseUrl: provider.baseUrl,
+      catalog: provider.usesCatalog,
+      pricing: provider.catalogHasPricing,
+      probeFreeTier: provider.probeFreeTier,
+      freeModels: [...provider.freeModels],
+      keyCount: provider.apiKeys?.length || 0,
+    })),
+    routes,
+    discovery: {
+      enabled: discoveryEnabled,
+      provider: registry.discoveryProvider,
+      intervalHours: Math.round(DISCOVERY_INTERVAL_MS / 3600000),
+      route: DISCOVERY_ROUTE,
+      evaluationEnabled,
+      pinnedModels: [...PINNED_MODELS],
+    },
+    limits,
+    general: {
+      attemptTimeoutMs,
+      catalogRefreshMs,
+      redactSecrets: config.redactSecrets !== false,
+      socksFirstHosts: config.socksFirstHosts || [],
+      defaultProvider: registry.defaultProvider,
+      retentionDays: USAGE_RETENTION_DAYS,
+      timezone: USAGE_TIMEZONE || '',
+    },
+  };
+}
+
+function persistOrFail(res) {
+  try {
+    persistConfig();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    sendJson(res, 500, {
+      error: { message: `could not write config file: ${reason}`, type: 'config_write_failed' },
+    });
+    return false;
+  }
+  return true;
+}
+
+function validProviderId(name) {
+  return /^[a-z][a-z0-9_-]*$/.test(String(name || ''));
+}
+
+function validHttpUrl(raw) {
+  try {
+    const url = new URL(String(raw || ''));
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+// Providers: create a new upstream, edit baseUrl/freeModels/flags, or delete.
+// Deleting also purges the provider's entries from all routes.
+async function handleProviders(req, res) {
+  let body;
+  try {
+    body = await readJson(req, 128 * 1024);
+  } catch (error) {
+    return sendJson(res, 400, { error: { message: String(error), type: 'invalid_request_error' } });
+  }
+  const action = String(body.action || '');
+  const name = String(body.name || '').trim();
+
+  if (action === 'create') {
+    if (!validProviderId(name)) {
+      return sendJson(res, 400, { error: { message: 'name must match [a-z][a-z0-9_-]*', type: 'invalid_request_error' } });
+    }
+    if (PROVIDERS.has(name)) {
+      return sendJson(res, 400, { error: { message: `provider already exists: ${name}`, type: 'invalid_request_error' } });
+    }
+    const baseUrl = String(body.baseUrl || '').trim().replace(/\/+$/, '');
+    if (!validHttpUrl(baseUrl)) {
+      return sendJson(res, 400, { error: { message: 'baseUrl must be an http(s) URL', type: 'invalid_request_error' } });
+    }
+    const freeModels = Array.isArray(body.freeModels)
+      ? [...new Set(body.freeModels.map((m) => String(m || '').trim()).filter(Boolean))]
+      : [];
+    const cfg = {
+      baseUrl,
+      keyEnv: String(body.keyEnv || `${name.replace(/-/g, '_').toUpperCase()}_API_KEY`),
+      catalog: body.catalog === true,
+      pricing: body.pricing !== false,
+      probeFreeTier: body.probeFreeTier === true,
+      freeModels,
+      keys: [],
+    };
+    config.providers ||= {};
+    config.providers[name] = cfg;
+    try {
+      registry.addProvider(name, cfg);
+    } catch (error) {
+      delete config.providers[name];
+      return sendJson(res, 400, { error: { message: String(error.message || error), type: 'invalid_request_error' } });
+    }
+    if (!persistOrFail(res)) return undefined;
+    refreshSecretRedactor();
+    if (cfg.catalog) {
+      try {
+        await refreshCatalog(true);
+      } catch (error) {
+        log(`catalog refresh after provider add failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    log(`added provider ${name} via web interface`);
+    return sendJson(res, 200, { ok: true, name });
+  }
+
+  const provider = PROVIDERS.get(name);
+  if (!provider) {
+    return sendJson(res, 404, { error: { message: `unknown provider: ${name || '(missing)'}`, type: 'not_found' } });
+  }
+
+  if (action === 'delete') {
+    try {
+      registry.removeProvider(name);
+    } catch (error) {
+      return sendJson(res, 400, { error: { message: String(error.message || error), type: 'invalid_request_error' } });
+    }
+    delete config.providers[name];
+    let purged = 0;
+    for (const [routeName, entries] of Object.entries(config.routes || {})) {
+      if (!Array.isArray(entries)) continue;
+      const kept = entries.filter((entry) => normalizeCandidate(entry).provider !== name);
+      purged += entries.length - kept.length;
+      config.routes[routeName] = kept;
+    }
+    if (!persistOrFail(res)) return undefined;
+    refreshSecretRedactor();
+    log(`deleted provider ${name} via web interface (purged ${purged} route entr${purged === 1 ? 'y' : 'ies'})`);
+    return sendJson(res, 200, { ok: true, purged });
+  }
+
+  if (action === 'update') {
+    const notes = [];
+    const cfg = config.providers[name] && typeof config.providers[name] === 'object' ? config.providers[name] : {};
+    if (body.baseUrl !== undefined) {
+      const baseUrl = String(body.baseUrl || '').trim().replace(/\/+$/, '');
+      if (!validHttpUrl(baseUrl)) {
+        return sendJson(res, 400, { error: { message: 'baseUrl must be an http(s) URL', type: 'invalid_request_error' } });
+      }
+      cfg.baseUrl = baseUrl;
+      provider.baseUrl = baseUrl;
+      provider.configRef.baseUrl = baseUrl;
+      notes.push('baseUrl updated');
+    }
+    if (body.freeModels !== undefined) {
+      if (!Array.isArray(body.freeModels)) {
+        return sendJson(res, 400, { error: { message: 'freeModels must be an array', type: 'invalid_request_error' } });
+      }
+      const list = [...new Set(body.freeModels.map((m) => String(m || '').trim()).filter(Boolean))];
+      cfg.freeModels = list;
+      provider.freeModels = new Set(list);
+      provider.configRef.freeModels = list;
+      notes.push('freeModels updated');
+    }
+    if (body.catalog !== undefined) {
+      cfg.catalog = body.catalog === true;
+      notes.push('catalog flag saved; restart to take effect');
+    }
+    if (body.pricing !== undefined) {
+      cfg.pricing = body.pricing !== false;
+      notes.push('pricing flag saved; restart to take effect');
+    }
+    if (body.probeFreeTier !== undefined) {
+      cfg.probeFreeTier = body.probeFreeTier === true;
+      notes.push('probeFreeTier saved; restart to take effect');
+    }
+    config.providers[name] = cfg;
+    if (!persistOrFail(res)) return undefined;
+    if (body.baseUrl !== undefined && provider.usesCatalog) {
+      try {
+        await refreshCatalog(true);
+      } catch (error) {
+        log(`catalog refresh after provider update failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return sendJson(res, 200, { ok: true, name, notes });
+  }
+
+  return sendJson(res, 400, { error: { message: `unknown action: ${action}`, type: 'invalid_request_error' } });
+}
+
+// Routes: replace a whole route membership list, create a new route, or delete
+// one. Models for price-free providers are auto-added to their freeModels
+// allowlist so the new entry is actually routable.
+async function handleRoutes(req, res) {
+  let body;
+  try {
+    body = await readJson(req, 128 * 1024);
+  } catch (error) {
+    return sendJson(res, 400, { error: { message: String(error), type: 'invalid_request_error' } });
+  }
+  const action = String(body.action || 'save');
+  const route = String(body.route || '').trim();
+  if (!/^[A-Za-z0-9_-]+$/.test(route)) {
+    return sendJson(res, 400, { error: { message: 'route must match [A-Za-z0-9_-]+', type: 'invalid_request_error' } });
+  }
+
+  if (action === 'delete') {
+    if (route === DISCOVERY_ROUTE) {
+      return sendJson(res, 400, { error: { message: `cannot delete the discovery route: ${route}`, type: 'invalid_request_error' } });
+    }
+    if (!config.routes?.[route]) {
+      return sendJson(res, 404, { error: { message: `unknown route: ${route}`, type: 'not_found' } });
+    }
+    delete config.routes[route];
+    if (!persistOrFail(res)) return undefined;
+    log(`deleted route ${route} via web interface`);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  if (action !== 'save') {
+    return sendJson(res, 400, { error: { message: `unknown action: ${action}`, type: 'invalid_request_error' } });
+  }
+  if (!Array.isArray(body.models)) {
+    return sendJson(res, 400, { error: { message: 'models must be an array of "provider:model" or model strings', type: 'invalid_request_error' } });
+  }
+  const parsed = [];
+  const seen = new Set();
+  const notes = [];
+  for (const raw of body.models) {
+    const entry = parseRouteEntryString(raw);
+    if (!entry) {
+      return sendJson(res, 400, { error: { message: `empty model entry`, type: 'invalid_request_error' } });
+    }
+    const key = typeof entry === 'string' ? `:${entry}` : `${entry.provider}:${entry.model}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    parsed.push(entry);
+    if (typeof entry !== 'string') {
+      const provider = PROVIDERS.get(entry.provider);
+      if (!provider) {
+        return sendJson(res, 400, { error: { message: `unknown provider in entry: ${routeEntryString(entry)}`, type: 'invalid_request_error' } });
+      }
+      if (!provider.catalogHasPricing && !provider.freeModels.has(entry.model)) {
+        provider.freeModels.add(entry.model);
+        const cfg = config.providers[entry.provider];
+        if (cfg && typeof cfg === 'object') {
+          cfg.freeModels = [...provider.freeModels];
+        }
+        notes.push(`added ${entry.model} to ${entry.provider} freeModels`);
+      }
+    }
+  }
+  config.routes ||= {};
+  config.routes[route] = parsed;
+  if (!persistOrFail(res)) return undefined;
+  log(`saved route ${route} via web interface (${parsed.length} entries)`);
+  return sendJson(res, 200, { ok: true, route, count: parsed.length, notes });
+}
+
+// Daily quota limits: config values (provider-reported ones stay authoritative).
+async function handleLimits(req, res) {
+  let body;
+  try {
+    body = await readJson(req, 64 * 1024);
+  } catch (error) {
+    return sendJson(res, 400, { error: { message: String(error), type: 'invalid_request_error' } });
+  }
+  const action = String(body.action || 'set');
+  const key = String(body.key || '').trim();
+  if (!key) {
+    return sendJson(res, 400, { error: { message: 'key is required, e.g. "gemini:gemini-3.8-flash"', type: 'invalid_request_error' } });
+  }
+  config.usage ||= {};
+  config.usage.dailyLimits ||= {};
+  if (action === 'delete') {
+    delete config.usage.dailyLimits[key];
+    if (!persistOrFail(res)) return undefined;
+    return sendJson(res, 200, { ok: true });
+  }
+  if (action !== 'set') {
+    return sendJson(res, 400, { error: { message: `unknown action: ${action}`, type: 'invalid_request_error' } });
+  }
+  const limit = Number(body.limit);
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return sendJson(res, 400, { error: { message: 'limit must be a positive number', type: 'invalid_request_error' } });
+  }
+  config.usage.dailyLimits[key] = limit;
+  if (!persistOrFail(res)) return undefined;
+  return sendJson(res, 200, { ok: true, key, limit });
+}
+
+// Discovery + evaluation toggles apply immediately; provider switch applies
+// immediately too; the interval needs a restart (it arms the next timer).
+async function handleDiscovery(req, res) {
+  let body;
+  try {
+    body = await readJson(req, 64 * 1024);
+  } catch (error) {
+    return sendJson(res, 400, { error: { message: String(error), type: 'invalid_request_error' } });
+  }
+  const notes = [];
+  config.discovery ||= {};
+  if (body.enabled !== undefined) {
+    discoveryEnabled = body.enabled !== false;
+    config.discovery.enabled = discoveryEnabled;
+  }
+  if (body.evaluationEnabled !== undefined) {
+    evaluationEnabled = body.evaluationEnabled !== false;
+    config.discovery.evaluation ||= {};
+    config.discovery.evaluation.enabled = evaluationEnabled;
+  }
+  if (body.provider !== undefined) {
+    const name = String(body.provider || '');
+    try {
+      registry.setDiscoveryProvider(name);
+    } catch (error) {
+      return sendJson(res, 400, { error: { message: String(error.message || error), type: 'invalid_request_error' } });
+    }
+    config.discovery.provider = name;
+  }
+  if (body.intervalHours !== undefined) {
+    const hours = Number(body.intervalHours);
+    if (!Number.isFinite(hours) || hours < 1 || hours > 720) {
+      return sendJson(res, 400, { error: { message: 'intervalHours must be 1-720', type: 'invalid_request_error' } });
+    }
+    config.discovery.intervalMs = Math.round(hours * 3600000);
+    notes.push('interval saved; restart to take effect');
+  }
+  if (body.pin !== undefined || body.unpin !== undefined) {
+    config.discovery.evaluation ||= {};
+    const pinned = new Set(config.discovery.evaluation.pinnedModels || [...PINNED_MODELS]);
+    if (body.pin) {
+      const model = String(body.pin).trim();
+      if (!model) {
+        return sendJson(res, 400, { error: { message: 'pin must be a non-empty model id', type: 'invalid_request_error' } });
+      }
+      pinned.add(model);
+      PINNED_MODELS.add(model);
+    }
+    if (body.unpin) {
+      pinned.delete(String(body.unpin));
+      PINNED_MODELS.delete(String(body.unpin));
+    }
+    config.discovery.evaluation.pinnedModels = [...pinned];
+  }
+  if (!persistOrFail(res)) return undefined;
+  return sendJson(res, 200, { ok: true, notes });
+}
+
+// General tuning knobs. Most apply immediately; host-like values and the
+// usage timezone need a restart and are reported back as notes.
+async function handleSettings(req, res) {
+  let body;
+  try {
+    body = await readJson(req, 64 * 1024);
+  } catch (error) {
+    return sendJson(res, 400, { error: { message: String(error), type: 'invalid_request_error' } });
+  }
+  const notes = [];
+  if (body.attemptTimeoutMs !== undefined) {
+    const value = Number(body.attemptTimeoutMs);
+    if (!Number.isFinite(value) || value < 5000 || value > 900000) {
+      return sendJson(res, 400, { error: { message: 'attemptTimeoutMs must be 5000-900000', type: 'invalid_request_error' } });
+    }
+    attemptTimeoutMs = value;
+    config.attemptTimeoutMs = value;
+  }
+  if (body.catalogRefreshMs !== undefined) {
+    const value = Number(body.catalogRefreshMs);
+    if (!Number.isFinite(value) || value < 60000 || value > 86400000) {
+      return sendJson(res, 400, { error: { message: 'catalogRefreshMs must be 60000-86400000', type: 'invalid_request_error' } });
+    }
+    catalogRefreshMs = value;
+    config.catalogRefreshMs = value;
+  }
+  if (body.redactSecrets !== undefined) {
+    config.redactSecrets = body.redactSecrets !== false;
+    refreshSecretRedactor();
+  }
+  if (body.socksFirstHosts !== undefined) {
+    if (!Array.isArray(body.socksFirstHosts)) {
+      return sendJson(res, 400, { error: { message: 'socksFirstHosts must be an array', type: 'invalid_request_error' } });
+    }
+    config.socksFirstHosts = body.socksFirstHosts.map((h) => String(h || '').trim()).filter(Boolean);
+    notes.push('socksFirstHosts saved; restart to take effect');
+  }
+  if (body.defaultProvider !== undefined) {
+    const name = String(body.defaultProvider || '');
+    try {
+      registry.setDefaultProvider(name);
+    } catch (error) {
+      return sendJson(res, 400, { error: { message: String(error.message || error), type: 'invalid_request_error' } });
+    }
+    config.defaultProvider = name;
+  }
+  if (body.retentionDays !== undefined) {
+    const value = Number(body.retentionDays);
+    if (!Number.isInteger(value) || value < 1 || value > 90) {
+      return sendJson(res, 400, { error: { message: 'retentionDays must be 1-90', type: 'invalid_request_error' } });
+    }
+    config.usage ||= {};
+    config.usage.retentionDays = value;
+    notes.push('retentionDays saved; restart to take effect');
+  }
+  if (body.timezone !== undefined) {
+    config.usage ||= {};
+    config.usage.timezone = String(body.timezone || '');
+    notes.push('timezone saved; restart to take effect');
+  }
+  if (!persistOrFail(res)) return undefined;
+  return sendJson(res, 200, { ok: true, notes });
+}
+
 async function handleLogin(req, res) {
   let body;
   try {
@@ -2212,6 +2669,8 @@ async function handler(req, res) {
         providers: uiProviderState(),
         usage: usageSummary(),
         routes: uiRouteState(),
+        editable: editableConfigState(),
+        allRoutes: routeStatus(),
         unavailableModels: discoveryUnavailableIds,
         excludedByProvider: rejectedConfiguredModels(),
         lastSelection,
@@ -2231,6 +2690,21 @@ async function handler(req, res) {
   if (req.method === 'POST' && url.pathname === '/api/server') {
     return handleServerConfig(req, res);
   }
+  if (req.method === 'POST' && url.pathname === '/api/providers') {
+    return handleProviders(req, res);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/routes') {
+    return handleRoutes(req, res);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/limits') {
+    return handleLimits(req, res);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/discovery') {
+    return handleDiscovery(req, res);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/settings') {
+    return handleSettings(req, res);
+  }
   if (req.method === 'GET' && (url.pathname === '/health' || url.pathname === '/v1/health')) {
     return sendJson(res, 200, {
       ok: true,
@@ -2244,7 +2718,7 @@ async function handler(req, res) {
       catalogError: registry.discoveryCatalog()?.catalogError || null,
       providers: registry.health(),
       discovery: {
-        enabled: DISCOVERY_ENABLED,
+        enabled: discoveryEnabled,
         provider: registry.discoveryProvider,
         route: DISCOVERY_ROUTE,
         intervalMs: DISCOVERY_INTERVAL_MS,
