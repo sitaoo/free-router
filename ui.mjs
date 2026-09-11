@@ -712,6 +712,9 @@ function renderRoutes() {
   }
 }
 
+// Bind buttons before the first load: an unauthenticated visit fails
+// /api/state and returns early, which must not leave the login button dead.
+bindOnce();
 load().catch((error) => toast(String(error.message || error), 'err'));
 </script>
 </body>
