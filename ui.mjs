@@ -290,12 +290,12 @@ select {
 </header>
 <main id="app" style="display:none">
   <nav id="tabs">
-    <button data-tab="status" class="active">状态 Status</button>
-    <button data-tab="access">访问 Access</button>
-    <button data-tab="providers">上游 Providers</button>
-    <button data-tab="routes">路由 Routes</button>
-    <button data-tab="quota">配额 Quota</button>
-    <button data-tab="settings">设置 Settings</button>
+    <button data-tab="status" class="active">Status</button>
+    <button data-tab="access">Access</button>
+    <button data-tab="providers">Providers</button>
+    <button data-tab="routes">Routes</button>
+    <button data-tab="quota">Quota</button>
+    <button data-tab="settings">Settings</button>
   </nav>
 
   <div data-pane="status">
@@ -325,7 +325,7 @@ select {
       <div class="sec-body">
         <div id="gateway"></div>
         <div class="row">
-          <input id="gw-name" placeholder="备注名称，如 客厅笔记本" style="max-width:260px">
+          <input id="gw-name" placeholder="Label, e.g. living-room laptop" style="max-width:260px">
           <button class="primary" id="gw-create">Create API key</button>
           <label class="check"><input type="checkbox" id="gw-require"> require auth</label>
         </div>
@@ -372,7 +372,7 @@ select {
         </div>
         <div id="route-entries"></div>
         <div class="row">
-          <input id="route-add" class="mono" placeholder="provider:model 或 model id" style="flex:1;min-width:200px">
+          <input id="route-add" class="mono" placeholder="provider:model or model id" style="flex:1;min-width:200px">
           <button id="route-add-btn">Add</button>
           <button class="primary" id="route-save">Save route</button>
         </div>
@@ -598,7 +598,7 @@ function renderProviders() {
     const addRow = document.createElement('div');
     addRow.className = 'row';
     const nameField = document.createElement('input');
-    nameField.placeholder = '备注名称，如 账号2';
+    nameField.placeholder = 'Label, e.g. account-2';
     nameField.style.maxWidth = '150px';
     const keyField = document.createElement('input');
     keyField.type = 'password';
@@ -1115,7 +1115,7 @@ function bindOnce() {
   }
   el('gw-create').onclick = async () => {
     const label = el('gw-name').value.trim();
-    if (!label) { toast('Give the key a name first (备注名称).', 'err'); return; }
+    if (!label) { toast('Give the key a name first.', 'err'); return; }
     try {
       const result = await api('api/gateway-keys', {
         method: 'POST',
