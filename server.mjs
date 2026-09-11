@@ -1,10 +1,16 @@
 #!/usr/bin/env node
 
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  defaultConfigPath,
+  loadConfigFile,
+  saveConfigFile,
+} from './config.mjs';
 import {
   createProviderRegistry,
   isChatModel,
@@ -53,8 +59,15 @@ for (const file of envCandidates) {
   if (file) loadEnvFile(file);
 }
 
-const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || path.join(HERE, 'config.json');
-const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || defaultConfigPath(HERE);
+const { config, format: CONFIG_FORMAT } = loadConfigFile(CONFIG_PATH);
+config.webui ||= {};
+config.gateway ||= {};
+if (!Array.isArray(config.gateway.keys)) config.gateway.keys = [];
+// Persist runtime mutations back in the format we loaded (TOML preferred).
+function persistConfig() {
+  saveConfigFile(CONFIG_PATH, config);
+}
 installUpstreamProxy(
   (message) => {
     console.log(`[${new Date().toISOString()}]`, message);
@@ -135,16 +148,77 @@ const USAGE_DAY_FORMATTER = (() => {
     return null;
   }
 })();
-const uiConfig = config.ui || {};
+const uiConfig = config.webui || config.ui || {};
 const UI_ENABLED = uiConfig.enabled !== false;
 const UI_ENV_PATH = path.resolve(path.dirname(CONFIG_PATH), uiConfig.envFile || '.env');
-let secretRedactor = config.redactSecrets === false ? null : createSecretRedactor();
+// Web UI single admin password (default "admin"). Env override wins so a
+// locked-out operator can recover without editing the config file.
+const webuiPassword = () =>
+  String(process.env.FREE_ROUTER_WEBUI_PASSWORD || uiConfig.password || config.ui?.password || 'admin');
+const webuiSessions = new Set();
+function webuiSessionToken(req) {
+  const cookie = String(req.headers.cookie || '');
+  const match = cookie.match(/(?:^|;\s*)fr_session=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : '';
+}
+let secretRedactor = config.redactSecrets === false ? null : createSecretRedactor(redactorEnv());
 
-// The redactor snapshots process.env at build time, so a key added through the
-// UI would otherwise never be stripped from upstream payloads.
+// The redactor snapshots secrets at build time, so keys added through the
+// UI would otherwise never be stripped from upstream payloads. TOML-stored
+// provider keys and gateway keys are not in process.env, so they are merged
+// in under synthetic names the redactor recognises as secrets.
+function redactorEnv() {
+  const merged = { ...process.env };
+  let index = 0;
+  for (const provider of PROVIDERS.values()) {
+    for (const entry of provider.apiKeys || []) {
+      if (entry.key) merged[`FREE_ROUTER_TOML_${index}_API_KEY`] = entry.key;
+      index += 1;
+    }
+  }
+  for (const entry of gatewayKeys()) {
+    if (entry.key) merged[`FREE_ROUTER_GATEWAY_${index}_TOKEN`] = entry.key;
+    index += 1;
+  }
+  const admin = webuiPassword();
+  if (admin) merged.FREE_ROUTER_WEBUI_PASSWORD = admin;
+  return merged;
+}
+
 function refreshSecretRedactor() {
   if (config.redactSecrets === false) return;
-  secretRedactor = createSecretRedactor();
+  secretRedactor = createSecretRedactor(redactorEnv());
+}
+
+// Gateway (downstream) API keys: named client credentials for LAN access.
+// Auth is required once at least one key exists (unless explicitly disabled).
+function gatewayKeys() {
+  const keys = config.gateway?.keys;
+  return Array.isArray(keys) ? keys.filter((entry) => entry && entry.key) : [];
+}
+
+function gatewayAuthRequired() {
+  if (config.gateway?.requireAuth === false && !gatewayKeys().length) return false;
+  if (config.gateway?.requireAuth === true) return true;
+  return gatewayKeys().length > 0;
+}
+
+function bearerKey(req) {
+  const header = String(req.headers.authorization || '');
+  const match = header.match(/^\s*Bearer\s+(.+?)\s*$/i);
+  return match ? match[1] : '';
+}
+
+function gatewayClientName(req) {
+  const key = bearerKey(req);
+  if (!key) return '';
+  return gatewayKeys().find((entry) => entry.key === key)?.name || '';
+}
+
+function gatewayGuardFailure(req) {
+  if (!gatewayAuthRequired()) return '';
+  if (gatewayClientName(req)) return '';
+  return bearerKey(req) ? 'invalid API key' : 'missing API key (Authorization: Bearer <key>)';
 }
 
 const cooldowns = new Map();
@@ -1076,23 +1150,36 @@ function requestNeeds(body) {
   };
 }
 
-function cooldownRemaining(candidate) {
-  const key = candidateKey(candidate);
-  const entry = cooldowns.get(key);
-  if (!entry) return 0;
+function cooldownKey(candidate, slot) {
+  const base = candidateKey(candidate);
+  if (slot === undefined || slot === null) return base;
+  const suffix = typeof slot === 'object' ? (slot.index ?? slot.name ?? '') : slot;
+  return `${base}#${suffix}`;
+}
+
+function cooldownRemaining(candidate, slot) {
+  const entry = cooldowns.get(cooldownKey(candidate, slot));
+  if (!entry) {
+    // Legacy entries predate per-key cooldowns; still honour them.
+    if (slot !== undefined && slot !== null) {
+      const legacy = cooldowns.get(candidateKey(candidate));
+      if (legacy && legacy.until > Date.now()) return legacy.until - Date.now();
+    }
+    return 0;
+  }
   const remaining = entry.until - Date.now();
   if (remaining <= 0) {
-    cooldowns.delete(key);
+    cooldowns.delete(cooldownKey(candidate, slot));
     return 0;
   }
   return remaining;
 }
 
-function setCooldown(candidate, kind, reason, overrideMs = 0) {
+function setCooldown(candidate, kind, reason, overrideMs = 0, slot = null) {
   const durations = config.cooldownMs || {};
   const duration = overrideMs || Number(durations[kind] || 0);
   if (!duration) return;
-  cooldowns.set(candidateKey(candidate), {
+  cooldowns.set(cooldownKey(candidate, slot), {
     until: Date.now() + duration,
     kind,
     reason: String(reason || '').slice(0, 300),
@@ -1156,7 +1243,10 @@ function filterCandidates(configured, body, requestedModel) {
       skipped.push({ model: candidateKey(candidate), reason: 'missing requested capability' });
       continue;
     }
-    const remaining = cooldownRemaining(candidate);
+    const slots = registry.keySlots(candidate.provider);
+    const remaining = slots.length
+      ? Math.min(...slots.map((slot) => cooldownRemaining(candidate, slot)))
+      : cooldownRemaining(candidate);
     if (remaining > 0) {
       skipped.push({
         model: candidateKey(candidate),
@@ -1270,7 +1360,7 @@ function errorSummary(status, raw) {
   );
 }
 
-async function fetchModel(candidate, body, clientSignal) {
+async function fetchModel(candidate, body, clientSignal, slot) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('attempt timeout')), ATTEMPT_TIMEOUT_MS);
   const abortFromClient = () => controller.abort(new Error('client disconnected'));
@@ -1281,12 +1371,13 @@ async function fetchModel(candidate, body, clientSignal) {
   };
   try {
     const provider = PROVIDERS.get(candidate.provider);
-    if (!provider?.baseUrl || !provider.apiKey) {
+    const key = slot?.key ?? provider?.apiKey;
+    if (!provider?.baseUrl || !key) {
       throw new Error(`provider ${candidate.provider} is not configured`);
     }
     const response = await fetch(registry.chatUrl(candidate.provider), {
       method: 'POST',
-      headers: registry.headers(candidate.provider),
+      headers: registry.headers(candidate.provider, key),
       body: JSON.stringify(sanitizeUpstreamBody(body, candidate)),
       signal: controller.signal,
     });
@@ -1297,7 +1388,7 @@ async function fetchModel(candidate, body, clientSignal) {
   }
 }
 
-async function attemptJson(candidate, body, clientSignal) {
+async function attemptJson(candidate, body, clientSignal, slot) {
   let response;
   let cleanup = () => {};
   try {
@@ -1305,6 +1396,7 @@ async function attemptJson(candidate, body, clientSignal) {
       candidate,
       { ...body, stream: false },
       clientSignal,
+      slot,
     ));
   } catch (error) {
     const timedOut = error?.name === 'AbortError' || /timeout/i.test(String(error));
@@ -1365,7 +1457,7 @@ async function attemptJson(candidate, body, clientSignal) {
   };
 }
 
-async function attemptStream(candidate, body, res, clientSignal) {
+async function attemptStream(candidate, body, res, clientSignal, slot) {
   let response;
   let cleanup = () => {};
   try {
@@ -1373,6 +1465,7 @@ async function attemptStream(candidate, body, res, clientSignal) {
       candidate,
       { ...body, stream: true },
       clientSignal,
+      slot,
     ));
   } catch (error) {
     const timedOut = error?.name === 'AbortError' || /timeout/i.test(String(error));
@@ -1517,7 +1610,15 @@ function routeStatus() {
     routes[name] = candidates.map((candidate, priority) => {
       const key = candidateKey(candidate);
       const model = candidateMetadata(candidate);
-      const cooldown = cooldowns.get(key);
+      // Per-key cooldowns share a `provider:model#slot` prefix; the status
+      // shows the worst one so the UI reflects a spent quota even when only
+      // one of several keys is cooling down.
+      let cooldown = cooldowns.get(key);
+      for (const [storedKey, entry] of cooldowns) {
+        if (storedKey !== key && !storedKey.startsWith(`${key}#`)) continue;
+        if (entry.until <= now) continue;
+        if (!cooldown || entry.until > cooldown.until) cooldown = entry;
+      }
       const pinned = PINNED_MODELS.has(key) || PINNED_MODELS.has(candidate.model);
       return {
         priority: priority + 1,
@@ -1580,48 +1681,80 @@ async function handleChat(req, res) {
   for (const candidate of candidates) {
     if (clientController.signal.aborted) return;
     if (failedProviders.has(candidate.provider)) continue;
-    log(`trying ${candidateKey(candidate)} for ${requestedModel}`);
-    const result = body.stream
-      ? await attemptStream(candidate, body, res, clientController.signal)
-      : await attemptJson(candidate, body, clientController.signal);
+    // Multi-account: each candidate is tried with every usable key in
+    // round-robin order. A 401 retires just that key; rate limits cool down
+    // just that key.
+    const slots = registry.keySlots(candidate.provider);
+    registry.rotateKeyCursor(candidate.provider);
+    const attempts = slots.length ? slots : [null];
+    let candidateOk = false;
+    for (const slot of attempts) {
+      if (clientController.signal.aborted) return;
+      if (slot && cooldownRemaining(candidate, slot) > 0) continue;
+      const slotLabel = slot ? ` [${slot.name}]` : '';
+      log(`trying ${candidateKey(candidate)}${slotLabel} for ${requestedModel}`);
+      const result = body.stream
+        ? await attemptStream(candidate, body, res, clientController.signal, slot)
+        : await attemptJson(candidate, body, clientController.signal, slot);
 
-    if (result.ok) {
-      recordUsage(candidate, 'ok');
-      rememberSelection({
-        route: requestedModel,
+      if (result.ok) {
+        recordUsage(candidate, 'ok');
+        rememberSelection({
+          route: requestedModel,
+          provider: candidate.provider,
+          model: candidate.model,
+          selectedAt: new Date().toISOString(),
+        });
+        if (!body.stream) {
+          log(`selected ${candidateKey(candidate)}${slotLabel}`);
+          return sendJson(res, 200, result.payload, {
+            'X-Free-Router-Model': candidate.model,
+            'X-Free-Router-Provider': candidate.provider,
+          });
+        }
+        return;
+      }
+
+      recordUsage(
+        candidate,
+        clientController.signal.aborted ? 'aborted' : result.kind || 'other',
+      );
+      failures.push({
         provider: candidate.provider,
         model: candidate.model,
-        selectedAt: new Date().toISOString(),
+        key: slot?.name || undefined,
+        status: result.status,
+        reason: result.reason,
       });
-      if (!body.stream) {
-        log(`selected ${candidateKey(candidate)}`);
-        return sendJson(res, 200, result.payload, {
-          'X-Free-Router-Model': candidate.model,
-          'X-Free-Router-Provider': candidate.provider,
-        });
+      const providerWaitMs = applyProviderVerdict(candidate, result);
+      if (result.kind) setCooldown(candidate, result.kind, result.reason, providerWaitMs, slot);
+      log(`failed ${candidateKey(candidate)}${slotLabel}: ${result.status} ${result.reason}`);
+      if (result.fatal) {
+        // Wrong key: retire it and try the next key on the same candidate.
+        if (slot?.key && result.status === 401) {
+          registry.markKeyInvalid(candidate.provider, slot.key);
+          log(`retired key [${slot.name}] for ${candidate.provider}: 401`);
+          continue;
+        }
+        break;
       }
-      return;
+      // The same history will 400 on every Gemini thinking model. Stop here so
+      // 3.8-flash, 3.7-flash, and Flash-Lite are not each billed for a refusal.
+      if (isMissingThoughtSignatureError(result.status, result.reason)) {
+        log(`skipping remaining ${candidate.provider} candidates: missing thought_signature`);
+        failedProviders.add(candidate.provider);
+        break;
+      }
+      // Rate limit / timeout on this key: try the next key before moving on.
+      if (attempts.length > 1 && (result.status === 429 || result.status === 504 || result.kind === 'timeout')) {
+        continue;
+      }
+      break;
     }
-
-    recordUsage(
-      candidate,
-      clientController.signal.aborted ? 'aborted' : result.kind || 'other',
-    );
-    failures.push({
-      provider: candidate.provider,
-      model: candidate.model,
-      status: result.status,
-      reason: result.reason,
-    });
-    const providerWaitMs = applyProviderVerdict(candidate, result);
-    if (result.kind) setCooldown(candidate, result.kind, result.reason, providerWaitMs);
-    log(`failed ${candidateKey(candidate)}: ${result.status} ${result.reason}`);
-    if (result.fatal) failedProviders.add(candidate.provider);
-    // The same history will 400 on every Gemini thinking model. Stop here so
-    // 3.8-flash, 3.7-flash, and Flash-Lite are not each billed for a refusal.
-    if (isMissingThoughtSignatureError(result.status, result.reason)) {
-      log(`skipping remaining ${candidate.provider} candidates: missing thought_signature`);
-      failedProviders.add(candidate.provider);
+    // All keys for this provider failed fatally: skip the rest of its models.
+    if (failures.length && failures[failures.length - 1]?.status === 401) {
+      const remainingSlots = registry.keySlots(candidate.provider);
+      if (!remainingSlots.length) failedProviders.add(candidate.provider);
     }
   }
 
@@ -1641,18 +1774,33 @@ function isLoopbackAddress(address) {
   return plain === '::1' || plain === '127.0.0.1' || plain.startsWith('127.');
 }
 
-// The router has no caller authentication, so any page the user visits could
-// otherwise drive these endpoints. Three independent checks:
-//   - the peer must be on loopback, even if the listener was bound wider;
-//   - the Host header must be a loopback name, which blocks DNS rebinding;
-//   - the request must not be cross-site, which blocks browser-driven CSRF.
+// LAN-ready guard: the loopback-only restriction is gone. Protection now
+// comes from authentication instead of the network:
+//   - web UI + management APIs require the admin session (password login);
+//   - /v1/* requires a gateway API key once one is configured.
+// What remains here is CSRF/rebinding hygiene, now LAN-aware:
+//   - cross-site browser requests are blocked (Sec-Fetch-Site);
+//   - the Host header must be loopback, a private LAN IP, or a local
+//     hostname (.local / single-label); a public domain (DNS rebinding)
+//     is rejected;
+//   - a forged Origin that does not match the request host is rejected,
+//     while same-host LAN origins are allowed.
 // A plain curl call sends neither Origin nor Sec-Fetch-Site and is allowed.
-function uiGuardFailure(req) {
-  if (!isLoopbackAddress(req.socket?.remoteAddress)) return 'requests must come from loopback';
+function isLocalHost(hostname) {
+  const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (!host) return true;
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+  if (host === '::1' || host === '127.0.0.1' || host.startsWith('127.') || host === '[::1]') return true;
+  if (/^(10|172\.(1[6-9]|2\d|3[01])|192\.168)\./.test(host)) return true;
+  if (/^(fc[0-9a-f]{2}|fd[0-9a-f]{2}|fe80):/i.test(host)) return true;
+  if (!host.includes('.') && /^[a-z0-9-]+$/i.test(host)) return true;
+  return false;
+}
 
+function uiGuardFailure(req) {
   const host = String(req.headers.host || '');
   const hostname = host.replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
-  if (hostname && hostname !== 'localhost' && !isLoopbackAddress(hostname)) {
+  if (hostname && !isLocalHost(hostname)) {
     return `unexpected Host header: ${host}`;
   }
 
@@ -1669,11 +1817,17 @@ function uiGuardFailure(req) {
     } catch {
       return `invalid Origin header: ${origin}`;
     }
-    if (originHost !== 'localhost' && !isLoopbackAddress(originHost)) {
+    const sameHost = originHost.toLowerCase() === hostname.toLowerCase();
+    if (!sameHost && !isLocalHost(originHost)) {
       return `unexpected Origin header: ${origin}`;
     }
   }
   return '';
+}
+
+function webuiAuthFailure(req) {
+  if (webuiSessions.has(webuiSessionToken(req))) return '';
+  return 'web UI login required';
 }
 
 function uiProviderState() {
@@ -1685,7 +1839,14 @@ function uiProviderState() {
     keyEnv: provider.keyEnv,
     baseUrl: provider.baseUrl,
     kind: registry.providerKind(provider),
-    configured: Boolean(provider.apiKey),
+    configured: registry.hasUsableKey(provider),
+    keyCount: provider.apiKeys?.length || 0,
+    keys: (provider.apiKeys || []).map((entry) => ({
+      name: entry.name,
+      source: entry.source,
+      maskedKey: maskSecret(entry.key),
+      invalid: provider.invalidKeys.has(entry.key),
+    })),
     maskedKey: maskSecret(provider.apiKey),
     catalogModels: provider.usesCatalog ? provider.catalog.size : null,
     catalogError: catalogHealth[provider.name]?.catalogError || null,
@@ -1704,11 +1865,23 @@ function uiRouteState() {
     zeroCost: entry.zeroCost,
     cooldownSeconds: entry.cooldownSeconds,
     scoreAdjustment: entry.scoreAdjustment,
-    providerConfigured: Boolean(PROVIDERS.get(entry.provider)?.apiKey),
+    providerConfigured: registry.hasUsableKey(PROVIDERS.get(entry.provider)),
     usage: entry.usage,
   }));
 }
 
+function providerFileKeys(name) {
+  const raw = config.providers?.[name];
+  if (!raw || typeof raw !== 'object') return [];
+  return Array.isArray(raw.keys) ? raw.keys : [];
+}
+
+// Named multi-key write path. Body variants:
+//   {provider, key}                 legacy: replace the env-backed key
+//   {provider, name, key}           add or replace the named file key
+//   {provider, name, key: ''}       delete the named file key
+// File keys persist to the TOML/JSON config; the legacy env path still
+// updates the .env file so `start.sh` keeps working.
 async function handleKeyUpdate(req, res) {
   let body;
   try {
@@ -1733,10 +1906,39 @@ async function handleKeyUpdate(req, res) {
     });
   }
 
+  const keyName = String(body.name || '').trim().slice(0, 64);
   const key = typeof body.key === 'string' ? body.key.trim() : '';
   const problem = validateSecret(key);
   if (problem) {
     return sendJson(res, 400, { error: { message: problem, type: 'invalid_request_error' } });
+  }
+
+  // Named path: file-backed multi-account keys -> config file.
+  if (keyName) {
+    const next = providerFileKeys(name)
+      .filter((entry) => String(entry?.name || '') !== keyName)
+      .map((entry) => ({ name: String(entry.name), key: String(entry.key || '') }));
+    if (key) next.push({ name: keyName, key });
+    config.providers[name].keys = next;
+    registry.setProviderKeys(name, next);
+    try {
+      persistConfig();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return sendJson(res, 500, {
+        error: { message: `could not write config file: ${reason}`, type: 'config_write_failed' },
+      });
+    }
+    refreshSecretRedactor();
+    log(`${key ? 'set' : 'cleared'} provider key [${keyName}] for ${name} via web interface`);
+    if (key && provider.usesCatalog) {
+      try {
+        await refreshCatalog(true);
+      } catch (error) {
+        log(`catalog refresh after key change failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return sendJson(res, 200, { ok: true, provider: name, name: keyName, configured: Boolean(key) });
   }
 
   try {
@@ -1760,6 +1962,181 @@ async function handleKeyUpdate(req, res) {
     }
   }
   return sendJson(res, 200, { ok: true, provider: name, configured: Boolean(key) });
+}
+
+function randomGatewayKey() {
+  return `fr-${crypto.randomBytes(24).toString('base64url')}`;
+}
+
+// Gateway client keys (downstream). Creating the first key enables auth;
+// the full key value is returned only once at creation.
+async function handleGatewayKeys(req, res) {
+  let body;
+  try {
+    body = await readJson(req, 64 * 1024);
+  } catch (error) {
+    return sendJson(res, 400, { error: { message: String(error), type: 'invalid_request_error' } });
+  }
+  const action = String(body.action || 'create');
+  config.gateway ||= {};
+  if (!Array.isArray(config.gateway.keys)) config.gateway.keys = [];
+
+  if (action === 'setRequireAuth') {
+    config.gateway.requireAuth = Boolean(body.requireAuth);
+    if (config.gateway.requireAuth && !gatewayKeys().length) {
+      return sendJson(res, 400, {
+        error: { message: 'create at least one API key before enabling auth', type: 'invalid_request_error' },
+      });
+    }
+    try {
+      persistConfig();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return sendJson(res, 500, {
+        error: { message: `could not write config file: ${reason}`, type: 'config_write_failed' },
+      });
+    }
+    refreshSecretRedactor();
+    return sendJson(res, 200, { ok: true, requireAuth: gatewayAuthRequired() });
+  }
+
+  if (action === 'delete') {
+    const keyName = String(body.name || '');
+    const before = config.gateway.keys.length;
+    config.gateway.keys = config.gateway.keys.filter((entry) => entry?.name !== keyName);
+    if (config.gateway.keys.length === before) {
+      return sendJson(res, 404, { error: { message: `unknown key: ${keyName}`, type: 'not_found' } });
+    }
+    if (!config.gateway.keys.length) config.gateway.requireAuth = false;
+    try {
+      persistConfig();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return sendJson(res, 500, {
+        error: { message: `could not write config file: ${reason}`, type: 'config_write_failed' },
+      });
+    }
+    refreshSecretRedactor();
+    log(`deleted gateway API key [${keyName}] via web interface`);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  if (action === 'create') {
+    const keyName = String(body.name || '').trim().slice(0, 64);
+    if (!keyName) {
+      return sendJson(res, 400, { error: { message: 'name is required', type: 'invalid_request_error' } });
+    }
+    if (config.gateway.keys.some((entry) => entry?.name === keyName)) {
+      return sendJson(res, 400, { error: { message: `key already exists: ${keyName}`, type: 'invalid_request_error' } });
+    }
+    const value = typeof body.key === 'string' && body.key.trim() ? body.key.trim() : randomGatewayKey();
+    const problem = validateSecret(value);
+    if (problem) {
+      return sendJson(res, 400, { error: { message: problem, type: 'invalid_request_error' } });
+    }
+    config.gateway.keys.push({ name: keyName, key: value, createdAt: new Date().toISOString() });
+    config.gateway.requireAuth = true;
+    try {
+      persistConfig();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return sendJson(res, 500, {
+        error: { message: `could not write config file: ${reason}`, type: 'config_write_failed' },
+      });
+    }
+    refreshSecretRedactor();
+    log(`created gateway API key [${keyName}] via web interface`);
+    return sendJson(res, 200, { ok: true, name: keyName, key: value, requireAuth: true });
+  }
+
+  return sendJson(res, 400, { error: { message: `unknown action: ${action}`, type: 'invalid_request_error' } });
+}
+
+async function handleWebuiPassword(req, res) {
+  let body;
+  try {
+    body = await readJson(req, 64 * 1024);
+  } catch (error) {
+    return sendJson(res, 400, { error: { message: String(error), type: 'invalid_request_error' } });
+  }
+  const password = typeof body.password === 'string' ? body.password : '';
+  const problem = validateSecret(password);
+  if (problem || !password) {
+    return sendJson(res, 400, {
+      error: { message: problem || 'password is required', type: 'invalid_request_error' },
+    });
+  }
+  config.webui ||= {};
+  config.webui.password = password;
+  if (config.ui && typeof config.ui === 'object') config.ui.password = password;
+  try {
+    persistConfig();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return sendJson(res, 500, {
+      error: { message: `could not write config file: ${reason}`, type: 'config_write_failed' },
+    });
+  }
+  webuiSessions.clear();
+  refreshSecretRedactor();
+  log('web UI password changed via web interface; all sessions revoked');
+  return sendJson(res, 200, { ok: true });
+}
+
+async function handleServerConfig(req, res) {
+  let body;
+  try {
+    body = await readJson(req, 64 * 1024);
+  } catch (error) {
+    return sendJson(res, 400, { error: { message: String(error), type: 'invalid_request_error' } });
+  }
+  const notes = [];
+  if (body.host !== undefined) {
+    const host = String(body.host || '').trim();
+    if (!host) {
+      return sendJson(res, 400, { error: { message: 'host is required', type: 'invalid_request_error' } });
+    }
+    config.host = host;
+    notes.push('host saved; restart to take effect');
+  }
+  if (body.port !== undefined) {
+    const port = Number(body.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      return sendJson(res, 400, { error: { message: 'port must be 1-65535', type: 'invalid_request_error' } });
+    }
+    config.port = port;
+    notes.push('port saved; restart to take effect');
+  }
+  try {
+    persistConfig();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return sendJson(res, 500, {
+      error: { message: `could not write config file: ${reason}`, type: 'config_write_failed' },
+    });
+  }
+  return sendJson(res, 200, { ok: true, host: config.host, port: config.port, notes });
+}
+
+async function handleLogin(req, res) {
+  let body;
+  try {
+    body = await readJson(req, 64 * 1024);
+  } catch (error) {
+    return sendJson(res, 400, { error: { message: String(error), type: 'invalid_request_error' } });
+  }
+  const password = typeof body.password === 'string' ? body.password : '';
+  if (!password || password !== webuiPassword()) {
+    return sendJson(res, 401, { error: { message: 'invalid password', type: 'unauthorized' } });
+  }
+  const token = crypto.randomBytes(32).toString('hex');
+  webuiSessions.add(token);
+  res.writeHead(200, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Set-Cookie': `fr_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`,
+    'Cache-Control': 'no-store',
+  });
+  return res.end(JSON.stringify({ ok: true }));
 }
 
 async function handler(req, res) {
@@ -1792,6 +2169,25 @@ async function handler(req, res) {
     });
     return res.end(page);
   }
+  // Login is public (it is the gate itself); logout needs no session either.
+  if (req.method === 'POST' && url.pathname === '/api/login') {
+    return handleLogin(req, res);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/logout') {
+    webuiSessions.delete(webuiSessionToken(req));
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Set-Cookie': 'fr_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0',
+      'Cache-Control': 'no-store',
+    });
+    return res.end(JSON.stringify({ ok: true }));
+  }
+  if (isUiPath && url.pathname.startsWith('/api/')) {
+    const authFailure = webuiAuthFailure(req);
+    if (authFailure) {
+      return sendJson(res, 401, { error: { message: authFailure, type: 'unauthorized' } });
+    }
+  }
   if (req.method === 'GET' && url.pathname === '/api/state') {
     await refreshCatalog();
     return sendJson(
@@ -1800,7 +2196,19 @@ async function handler(req, res) {
       {
         endpoint: `http://${HOST}:${PORT}/v1`,
         envFile: displayPath(UI_ENV_PATH),
+        configFile: displayPath(CONFIG_PATH),
+        configFormat: CONFIG_FORMAT,
         route: DISCOVERY_ROUTE,
+        server: { host: config.host, port: config.port, runningHost: HOST, runningPort: PORT },
+        gateway: {
+          requireAuth: gatewayAuthRequired(),
+          keys: gatewayKeys().map((entry) => ({
+            name: entry.name,
+            masked: maskSecret(entry.key),
+            createdAt: entry.createdAt || null,
+          })),
+        },
+        webui: { defaultPassword: webuiPassword() === 'admin' },
         providers: uiProviderState(),
         usage: usageSummary(),
         routes: uiRouteState(),
@@ -1814,13 +2222,22 @@ async function handler(req, res) {
   if (req.method === 'POST' && url.pathname === '/api/keys') {
     return handleKeyUpdate(req, res);
   }
+  if (req.method === 'POST' && url.pathname === '/api/gateway-keys') {
+    return handleGatewayKeys(req, res);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/webui-password') {
+    return handleWebuiPassword(req, res);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/server') {
+    return handleServerConfig(req, res);
+  }
   if (req.method === 'GET' && (url.pathname === '/health' || url.pathname === '/v1/health')) {
     return sendJson(res, 200, {
       ok: true,
       service: 'free-router',
       version: VERSION,
       defaultProvider: registry.defaultProvider,
-      catalogModels: registry.discoveryCatalog()?.catalog.size || 0,
+      catalogModels: registry.discoveryCatalog()?.catalog?.size || 0,
       catalogFetchedAt: registry.discoveryCatalog()?.catalogFetchedAt
         ? new Date(registry.discoveryCatalog().catalogFetchedAt).toISOString()
         : null,
@@ -1855,6 +2272,10 @@ async function handler(req, res) {
     });
   }
   if (req.method === 'GET' && url.pathname === '/v1/models') {
+    const gatewayFailure = gatewayGuardFailure(req);
+    if (gatewayFailure) {
+      return sendJson(res, 401, { error: { message: gatewayFailure, type: 'unauthorized' } });
+    }
     await refreshCatalog();
     const routeModels = Object.keys(config.routes || {}).map((id) => ({
       id,
@@ -1876,6 +2297,10 @@ async function handler(req, res) {
     });
   }
   if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
+    const gatewayFailure = gatewayGuardFailure(req);
+    if (gatewayFailure) {
+      return sendJson(res, 401, { error: { message: gatewayFailure, type: 'unauthorized' } });
+    }
     return handleChat(req, res);
   }
   return sendJson(res, 404, {
@@ -1901,10 +2326,17 @@ server.headersTimeout = 65000;
 server.keepAliveTimeout = 5000;
 
 server.listen(PORT, HOST, async () => {
-  log(`Free Router ${VERSION} listening on http://${HOST}:${PORT}/v1`);
+  log(`Free Router ${VERSION} listening on http://${HOST}:${PORT}/v1 (config: ${displayPath(CONFIG_PATH)}, ${CONFIG_FORMAT})`);
   if (UI_ENABLED) log(`web interface on http://${HOST}:${PORT}/`);
+  if (gatewayAuthRequired()) {
+    log(`gateway auth enabled (${gatewayKeys().length} API key(s))`);
+  } else {
+    log('warning: gateway auth is disabled; anyone on the network can call /v1');
+  }
+  if (webuiPassword() === 'admin') log('warning: web UI still uses the default password "admin"');
   for (const provider of PROVIDERS.values()) {
-    if (!provider.apiKey) log(`warning: ${provider.keyEnv} is missing`);
+    if (!registry.hasUsableKey(provider)) log(`warning: ${provider.keyEnv} is missing`);
+    else if (provider.apiKeys.length > 1) log(`${provider.name}: ${provider.apiKeys.length} keys configured`);
   }
   await refreshCatalog(true);
   await discoverFreeModels();

@@ -1,3 +1,5 @@
+import { providerKeysFromConfig } from './config.mjs';
+
 const PROVIDER_ID = /^[a-z][a-z0-9_-]*$/;
 
 export function isZeroCost(model) {
@@ -127,6 +129,10 @@ export function createProviderRegistry(config, { host, port }) {
     const catalogHasPricing = usesCatalog && cfg.pricing !== false;
     const baseUrl = String(process.env[baseUrlEnv] || cfg.baseUrl || '').replace(/\/+$/, '');
     if (!baseUrl) throw new Error(`provider ${name} is missing baseUrl`);
+    // Multi-account: keys live in config file (`[[providers.<name>.keys]]`
+    // with `{name, key}`) plus env fallback (`<KEYENV>`, `<KEYENV>S`,
+    // `<KEYENV>_KEYS`). `apiKey` stays as the first key for compatibility.
+    const resolved = providerKeysFromConfig(name, { ...cfg, keyEnv });
     providers.set(name, {
       name,
       keyEnv,
@@ -148,7 +154,11 @@ export function createProviderRegistry(config, { host, port }) {
       modelsKeyHeader: String(cfg.modelsKeyHeader || ''),
       extraHeaders: cfg.headers && typeof cfg.headers === 'object' ? cfg.headers : {},
       baseUrl,
-      apiKey: process.env[keyEnv] || '',
+      configRef: cfg,
+      apiKeys: resolved.keys,
+      apiKey: resolved.keys[0]?.key || '',
+      keyCursor: 0,
+      invalidKeys: new Set(),
       freeModels: new Set(cfg.freeModels || []),
       catalog: usesCatalog ? new Map() : null,
       catalogSlugs: usesCatalog ? new Map() : null,
@@ -180,10 +190,10 @@ export function createProviderRegistry(config, { host, port }) {
     return providers.get(name);
   }
 
-  function headers(name) {
+  function headers(name, keyOverride) {
     const provider = get(name);
     const resolved = {
-      Authorization: `Bearer ${provider?.apiKey || ''}`,
+      Authorization: `Bearer ${keyOverride ?? provider?.apiKey ?? ''}`,
       'Content-Type': 'application/json',
     };
     for (const [header, spec] of Object.entries(provider?.extraHeaders || {})) {
@@ -210,9 +220,13 @@ export function createProviderRegistry(config, { host, port }) {
     return provider?.usesCatalog ? catalogEntry(provider, candidate.model) : null;
   }
 
+  function hasUsableKey(provider) {
+    return Boolean(provider && provider.apiKeys && provider.apiKeys.length);
+  }
+
   function isFree(candidate) {
     const provider = get(candidate.provider);
-    if (!provider || !provider.apiKey) return false;
+    if (!provider || !hasUsableKey(provider)) return false;
     if (provider.catalogHasPricing) {
       const model = provider.catalog.get(candidate.model);
       return !provider.catalog.size || Boolean(model && isZeroCost(model) && isChatModel(model));
@@ -230,12 +244,49 @@ export function createProviderRegistry(config, { host, port }) {
     const missing = [];
     for (const provider of providers.values()) {
       if (!provider.usesCatalog || provider.catalogHasPricing) continue;
-      if (!provider.apiKey || !provider.catalog.size) continue;
+      if (!hasUsableKey(provider) || !provider.catalog.size) continue;
       for (const id of provider.freeModels) {
         if (!catalogEntry(provider, id)) missing.push(`${provider.name}:${id}`);
       }
     }
     return missing.sort();
+  }
+
+  // Round-robin over usable keys. Invalid (401) keys are skipped until the
+  // provider is reconfigured. Returns [{index, name, key}] in try-order.
+  // Pure read: rotation advances only via rotateKeyCursor (called when a
+  // request actually goes out), so status pages and filters never skew it.
+  function keySlots(providerName) {
+    const provider = get(providerName);
+    if (!provider || !provider.apiKeys?.length) return [];
+    const usable = provider.apiKeys
+      .map((entry, index) => ({ ...entry, index }))
+      .filter((entry) => entry.key && !provider.invalidKeys.has(entry.key));
+    if (!usable.length) {
+      return provider.apiKeys.map((entry, index) => ({ ...entry, index }));
+    }
+    const start = provider.keyCursor % usable.length;
+    return [...usable.slice(start), ...usable.slice(0, start)];
+  }
+
+  function rotateKeyCursor(providerName) {
+    const provider = get(providerName);
+    if (provider) provider.keyCursor += 1;
+  }
+
+  function markKeyInvalid(providerName, key) {
+    get(providerName)?.invalidKeys.add(key);
+  }
+
+  function refreshKeysFromEnv(providerName) {
+    const provider = get(providerName);
+    if (!provider) return false;
+    const raw = provider.configRef && typeof provider.configRef === 'object' ? provider.configRef : {};
+    const resolved = providerKeysFromConfig(providerName, { ...raw, keyEnv: provider.keyEnv });
+    provider.apiKeys = resolved.keys;
+    provider.apiKey = resolved.keys[0]?.key || '';
+    provider.invalidKeys.clear();
+    return true;
   }
 
   function parsePrefixed(requestedModel) {
@@ -253,7 +304,7 @@ export function createProviderRegistry(config, { host, port }) {
     const offerings = [];
     const seen = new Set();
     for (const provider of providers.values()) {
-      if (!provider.apiKey) continue;
+      if (!hasUsableKey(provider)) continue;
       if (provider.catalogHasPricing) {
         if (!provider.catalog) continue;
         for (const model of provider.catalog.values()) {
@@ -299,23 +350,32 @@ export function createProviderRegistry(config, { host, port }) {
     return provider.modelsUrl || joinUrl(provider.baseUrl, provider.modelsPath);
   }
 
-  function catalogHeaders(provider) {
-    if (!provider.apiKey) return undefined;
-    // Google's native endpoint rejects a Bearer token with 401 and wants its
-    // own header. Keeping the key out of the query string keeps it out of logs.
-    if (provider.modelsKeyHeader) return { [provider.modelsKeyHeader]: provider.apiKey };
-    return { Authorization: `Bearer ${provider.apiKey}` };
+  function firstKey(provider) {
+    return provider?.apiKeys?.[0]?.key || '';
   }
 
-  async function fetchCatalogPage(provider, pageToken) {
+  function catalogHeaders(provider, keyOverride) {
+    const key = keyOverride ?? firstKey(provider);
+    if (!key) return undefined;
+    // Google's native endpoint rejects a Bearer token with 401 and wants its
+    // own header. Keeping the key out of the query string keeps it out of logs.
+    if (provider.modelsKeyHeader) return { [provider.modelsKeyHeader]: key };
+    return { Authorization: `Bearer ${key}` };
+  }
+
+  async function fetchCatalogPage(provider, pageToken, keyOverride) {
     const url = new URL(catalogUrl(provider));
     if (provider.modelsUrl) url.searchParams.set('pageSize', '1000');
     if (pageToken) url.searchParams.set('pageToken', pageToken);
     const response = await fetch(url, {
-      headers: catalogHeaders(provider),
+      headers: catalogHeaders(provider, keyOverride),
       signal: AbortSignal.timeout(30000),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
     return normalizeCatalogPayload(await response.json());
   }
 
@@ -329,36 +389,45 @@ export function createProviderRegistry(config, { host, port }) {
       return;
     }
     provider.catalogAttemptedAt = Date.now();
-    try {
-      const listed = [];
-      let pageToken = '';
-      // A truncated listing is indistinguishable from models withdrawn
-      // upstream, so follow pagination rather than trusting the first page.
-      for (let page = 0; page < 10; page += 1) {
-        const result = await fetchCatalogPage(provider, pageToken);
-        if (result.shape === 'unknown') throw new Error('unrecognised catalog response shape');
-        listed.push(...result.models);
-        pageToken = result.nextPageToken;
-        if (!pageToken) break;
+    const keyCandidates = provider.apiKeys?.map((entry) => entry.key).filter(Boolean) || [];
+    if (!keyCandidates.length) keyCandidates.push('');
+    let lastError = null;
+    for (const keyCandidate of keyCandidates) {
+      try {
+        const listed = [];
+        let pageToken = '';
+        // A truncated listing is indistinguishable from models withdrawn
+        // upstream, so follow pagination rather than trusting the first page.
+        for (let page = 0; page < 10; page += 1) {
+          const result = await fetchCatalogPage(provider, pageToken, keyCandidate);
+          if (result.shape === 'unknown') throw new Error('unrecognised catalog response shape');
+          listed.push(...result.models);
+          pageToken = result.nextPageToken;
+          if (!pageToken) break;
+        }
+        if (!listed.length) throw new Error('catalog response listed no models');
+        provider.catalog = new Map(listed.map((model) => [model.id, model]));
+        provider.catalogSlugs = new Map();
+        for (const model of listed) {
+          const slug = normalizeModelSlug(model.id);
+          if (slug && !provider.catalogSlugs.has(slug)) provider.catalogSlugs.set(slug, model);
+        }
+        provider.catalogFetchedAt = Date.now();
+        provider.catalogError = '';
+        const freeCount = provider.catalogHasPricing
+          ? [...provider.catalog.values()].filter(isZeroCost).length
+          : null;
+        const chatCount = [...provider.catalog.values()].filter(isChatModel).length;
+        return { name: provider.name, size: provider.catalog.size, freeCount, chatCount };
+      } catch (error) {
+        lastError = error;
+        // A wrong key must not poison other keys: try the next one.
+        if (error?.status === 401 && keyCandidate !== keyCandidates[keyCandidates.length - 1]) continue;
+        break;
       }
-      if (!listed.length) throw new Error('catalog response listed no models');
-      provider.catalog = new Map(listed.map((model) => [model.id, model]));
-      provider.catalogSlugs = new Map();
-      for (const model of listed) {
-        const slug = normalizeModelSlug(model.id);
-        if (slug && !provider.catalogSlugs.has(slug)) provider.catalogSlugs.set(slug, model);
-      }
-      provider.catalogFetchedAt = Date.now();
-      provider.catalogError = '';
-      const freeCount = provider.catalogHasPricing
-        ? [...provider.catalog.values()].filter(isZeroCost).length
-        : null;
-      const chatCount = [...provider.catalog.values()].filter(isChatModel).length;
-      return { name: provider.name, size: provider.catalog.size, freeCount, chatCount };
-    } catch (error) {
-      provider.catalogError = error instanceof Error ? error.message : String(error);
-      throw new Error(`${provider.name}: ${provider.catalogError}`);
     }
+    provider.catalogError = lastError instanceof Error ? lastError.message : String(lastError);
+    throw new Error(`${provider.name}: ${provider.catalogError}`);
   }
 
   async function refreshCatalogs(force, catalogRefreshMs, log) {
@@ -387,7 +456,7 @@ export function createProviderRegistry(config, { host, port }) {
     const models = [];
     const ids = new Set();
     for (const provider of providers.values()) {
-      if (!provider.apiKey || provider.catalogHasPricing) continue;
+      if (!hasUsableKey(provider) || provider.catalogHasPricing) continue;
       for (const id of provider.freeModels) {
         if (ids.has(id)) continue;
         if (provider.usesCatalog && provider.catalog.size && !catalogEntry(provider, id)) continue;
@@ -440,7 +509,14 @@ export function createProviderRegistry(config, { host, port }) {
       [...providers.entries()].map(([name, provider]) => [
         name,
         {
-          configured: Boolean(provider.apiKey),
+          configured: hasUsableKey(provider),
+          keyCount: provider.apiKeys?.length || 0,
+          keys: (provider.apiKeys || []).map((entry) => ({
+            name: entry.name,
+            source: entry.source,
+            masked: entry.key ? `${entry.key.slice(0, 5)}${'*'.repeat(8)}${entry.key.slice(-4)} (${entry.key.length})` : '',
+            invalid: provider.invalidKeys.has(entry.key),
+          })),
           kind: providerKind(provider),
           baseUrl: provider.baseUrl,
           freeModels: provider.catalogHasPricing ? undefined : [...provider.freeModels],
@@ -463,21 +539,54 @@ export function createProviderRegistry(config, { host, port }) {
   }
 
   // Applied to the live provider and to process.env, so a key set at runtime
-  // works on the next request without a restart.
+  // works on the next request without a restart. Legacy single-key path:
+  // replaces the `env` entry, keeps file keys intact.
   function setApiKey(name, key) {
     const provider = get(name);
     if (!provider) return false;
     const value = String(key || '');
-    provider.apiKey = value;
-    if (value) process.env[provider.keyEnv] = value;
-    else delete process.env[provider.keyEnv];
-    if (provider.usesCatalog && !value) {
+    const fileKeys = (provider.apiKeys || []).filter((entry) => entry.source === 'file');
+    const next = [...fileKeys];
+    if (value) {
+      process.env[provider.keyEnv] = value;
+      next.push({ name: 'env', key: value, source: 'env', keyEnv: provider.keyEnv });
+    } else {
+      delete process.env[provider.keyEnv];
+    }
+    provider.apiKeys = next;
+    provider.apiKey = next[0]?.key || '';
+    provider.invalidKeys.clear();
+    if (provider.usesCatalog && !next.length) {
       provider.catalog = new Map();
       provider.catalogSlugs = new Map();
       provider.catalogFetchedAt = 0;
       provider.catalogAttemptedAt = 0;
       provider.catalogError = '';
     }
+    return true;
+  }
+
+  // Named multi-key write path used by the web UI (persisted to TOML by the
+  // caller via configRef). Entries: [{name, key}].
+  function setProviderKeys(name, entries) {
+    const provider = get(name);
+    if (!provider) return false;
+    const cleaned = (entries || [])
+      .map((entry, index) => ({
+        name: String(entry?.name || `key-${index + 1}`),
+        key: String(entry?.key || ''),
+        source: 'file',
+      }))
+      .filter((entry) => entry.key);
+    const seen = new Set();
+    const deduped = [];
+    for (const entry of cleaned) {
+      if (seen.has(entry.key)) continue;
+      seen.add(entry.key);
+      deduped.push(entry);
+    }
+    provider.configRef.keys = deduped.map(({ name: keyName, key }) => ({ name: keyName, key }));
+    refreshKeysFromEnv(name);
     return true;
   }
 
@@ -501,6 +610,12 @@ export function createProviderRegistry(config, { host, port }) {
     unavailableFreeModels,
     providerKind,
     setApiKey,
+    setProviderKeys,
+    keySlots,
+    rotateKeyCursor,
+    markKeyInvalid,
+    refreshKeysFromEnv,
+    hasUsableKey,
     chatUrl(name) {
       const provider = get(name);
       return provider ? joinUrl(provider.baseUrl, provider.chatPath) : '';

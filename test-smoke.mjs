@@ -1469,27 +1469,53 @@ try {
   new Function(pageScript);
 
   const uiState = await fetch(`${base}/api/state`).then((res) => res.json());
-  const uiProviders = new Map(uiState.providers.map((entry) => [entry.name, entry]));
+  assert.equal(uiState.error?.type, 'unauthorized');
+  // Web UI management APIs require the admin session (default password).
+  const loginResponse = await fetch(`${base}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: 'admin' }),
+  });
+  assert.equal(loginResponse.status, 200);
+  const sessionCookie = String(loginResponse.headers.get('set-cookie') || '').split(';')[0];
+  assert.match(sessionCookie, /fr_session=/);
+  const badLogin = await fetch(`${base}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: 'wrong' }),
+  });
+  assert.equal(badLogin.status, 401);
+  const uiHeaders = {
+    'Content-Type': 'application/json',
+    Cookie: sessionCookie,
+    'Sec-Fetch-Site': 'same-origin',
+  };
+  const authedState = await fetch(`${base}/api/state`, { headers: { Cookie: sessionCookie } }).then((res) =>
+    res.json(),
+  );
+  assert.equal(authedState.gateway.requireAuth, false);
+  assert.deepEqual(authedState.gateway.keys, []);
+  const uiProviders = new Map(authedState.providers.map((entry) => [entry.name, entry]));
   assert.equal(uiProviders.get('bai').configured, true);
   // Gemini is listed first when present; this test config has no gemini, so the
   // first row stays whoever was declared first.
-  if (uiProviders.has('gemini')) assert.equal(uiState.providers[0].name, 'gemini');
+  if (uiProviders.has('gemini')) assert.equal(authedState.providers[0].name, 'gemini');
   assert.equal(uiProviders.get('bai').keyEnv, 'BAI_API_KEY');
   // The real key must never leave the process, only a recognisable stub.
   assert.equal(uiProviders.get('bai').maskedKey.includes('bai-test-key'), false);
-  assert.equal(JSON.stringify(uiState).includes('bai-test-key'), false);
-  assert.ok(uiState.usage.models.length > 0);
-  assert.ok(uiState.routes.length > 0);
+  assert.equal(JSON.stringify(authedState).includes('bai-test-key'), false);
+  assert.ok(authedState.usage.models.length > 0);
+  assert.ok(authedState.routes.length > 0);
 
   // The interface warns about a rejection only when it contradicts config.json.
   // quotamock:no-free-tier was written into the route by hand, so its refusal is
   // worth surfacing; bai's glm-5.3-paid was merely a probe candidate, and
   // listing every one of those would bury the case that needs attention.
   assert.deepEqual(
-    uiState.excludedByProvider.map((entry) => entry.key),
+    authedState.excludedByProvider.map((entry) => entry.key),
     ['quotamock:no-free-tier'],
   );
-  assert.match(uiState.excludedByProvider[0].reason, /no free-tier allowance/);
+  assert.match(authedState.excludedByProvider[0].reason, /no free-tier allowance/);
   // Still recorded in full for diagnosis, just not shown as a warning.
   const fullVerdicts = await (await fetch(`${base}/health`)).json();
   assert.equal(fullVerdicts.discovery.modelVerdicts['bai:models/glm-5.3-paid'].free, false);
@@ -1530,13 +1556,13 @@ try {
   // Only known providers, so the env file cannot gain arbitrary variables.
   const unknownProvider = await fetch(`${base}/api/keys`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: uiHeaders,
     body: JSON.stringify({ provider: 'NODE_OPTIONS', key: '--require /tmp/evil.js' }),
   });
   assert.equal(unknownProvider.status, 400);
   const newlineInjection = await fetch(`${base}/api/keys`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: uiHeaders,
     body: JSON.stringify({ provider: 'bai', key: 'ok\nNODE_OPTIONS=--require /tmp/evil.js' }),
   });
   assert.equal(newlineInjection.status, 400);
@@ -1546,7 +1572,7 @@ try {
 
   const saved = await fetch(`${base}/api/keys`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
+    headers: uiHeaders,
     body: JSON.stringify({ provider: 'bai', key: 'bai-rotated-key' }),
   });
   assert.equal(saved.status, 200);
@@ -1570,12 +1596,12 @@ try {
 
   const cleared = await fetch(`${base}/api/keys`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: uiHeaders,
     body: JSON.stringify({ provider: 'bai', key: '' }),
   });
   assert.equal(cleared.status, 200);
   assert.equal(fs.readFileSync(envPath, 'utf8'), '');
-  const afterClear = await fetch(`${base}/api/state`).then((res) => res.json());
+  const afterClear = await fetch(`${base}/api/state`, { headers: { Cookie: sessionCookie } }).then((res) => res.json());
   assert.equal(
     afterClear.providers.find((entry) => entry.name === 'bai').configured,
     false,

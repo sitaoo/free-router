@@ -28,10 +28,37 @@ for (const file of [path.join(HERE, '.env'), path.join(os.homedir(), '.hermes', 
   loadEnvFile(file);
 }
 
-const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || path.join(HERE, 'config.json');
-const config = fs.existsSync(CONFIG_PATH)
-  ? JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
-  : {};
+const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG
+  || (fs.existsSync(path.join(HERE, 'config.toml')) ? path.join(HERE, 'config.toml') : path.join(HERE, 'config.json'));
+function loadConfigLite(configPath) {
+  if (!fs.existsSync(configPath)) return {};
+  const raw = fs.readFileSync(configPath, 'utf8');
+  if (configPath.endsWith('.toml')) {
+    const get = (section, key) => {
+      const sectionMatch = raw.match(new RegExp(`\\[${section}\\][^\\[]*?^${key}\\s*=\\s*(.+)$`, 'm'));
+      return sectionMatch ? sectionMatch[1].trim().replace(/^"|"$/g, '') : '';
+    };
+    const top = (key, fallback = '') => {
+      const match = raw.match(new RegExp(`^${key}\\s*=\\s*(.+)$`, 'm'));
+      if (!match) return fallback;
+      const value = match[1].trim();
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        return value.slice(1, -1);
+      }
+      const num = Number(value);
+      return Number.isFinite(num) && value !== '' ? num : value;
+    };
+    return {
+      host: top('host', '127.0.0.1'),
+      port: top('port', 8787),
+      discovery: { route: get('discovery', 'route') || 'free-best' },
+    };
+  }
+  return JSON.parse(raw);
+}
+const config = loadConfigLite(CONFIG_PATH);
+const GATEWAY_KEY = process.env.FREE_ROUTER_API_KEY || '';
+const authHeaders = GATEWAY_KEY ? { Authorization: `Bearer ${GATEWAY_KEY}` } : {};
 const HOST = process.env.FREE_ROUTER_HOST || config.host || '127.0.0.1';
 const PORT = Number(process.env.FREE_ROUTER_PORT || config.port || 8787);
 const DEFAULT_ROUTE = config.discovery?.route || 'free-best';
@@ -238,7 +265,7 @@ async function main() {
   const url = `http://${HOST}:${PORT}/health`;
   let health;
   try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    const response = await fetch(url, { signal: AbortSignal.timeout(5000), headers: authHeaders });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     health = await response.json();
   } catch (error) {
