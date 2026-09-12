@@ -7,23 +7,35 @@ Technical reference. The short overview lives in the [README](../README.md).
 ## Requirements
 
 - Node.js 20+
-- An API key for at least one provider — in `.env`, or pasted in the web UI
-  (Providers tab), which stores it in the gitignored `config.local.json`
 
-A missing key just drops that provider from ranking.
+No keys are needed up front — start the server first, then add keys in the
+web UI (Providers tab). A missing key just drops that provider from ranking.
 
 ## Configure API keys
 
-Provider keys live in `config.local.json` (gitignored, never committed) or in the
-environment. On first boot, keys found in `.env` are imported into
-`config.local.json` automatically. `config.json` holds defaults only and stays
-merge-clean; the server deep-merges both at startup (objects recurse, arrays
-and scalars come from the overlay when present). Copy the example file,
-uncomment the keys you have, and fill them in:
+The recommended flow is UI-first: boot with zero configuration, open the web
+UI, log in, and paste keys under Providers. Named keys are stored in the
+gitignored `config.local.json` and take effect immediately; `config.json`
+holds defaults only and stays merge-clean (the server deep-merges both at
+startup: objects recurse, arrays and scalars come from the overlay when
+present).
 
-```bash
-cp .env.example .env
-```
+The `.env` file exists for compatibility and migration only:
+
+- On first boot, keys found in `.env` are imported into `config.local.json`
+  once (named `migrated-N`) and removed from `.env`.
+- Afterwards, provider keys may still live in the environment instead of the
+  UI — useful for headless or container setups. Multi-key variables
+  (`<KEYENV>S`, `<KEYENV>_KEYS`, comma-separated) are supported.
+
+Lookup order, first non-empty value wins:
+
+1. Named keys in `config.local.json` (highest precedence)
+2. Process environment (`export OPENROUTER_API_KEY=...`)
+3. `.env` in the project directory
+4. `~/.hermes/.env`, if you already keep keys there
+
+Key sources and where to get them:
 
 | Variable | Required | Where to get it |
 | --- | --- | --- |
@@ -35,28 +47,28 @@ cp .env.example .env
 Any later provider named `foo` reads `FOO_API_KEY` and `FOO_BASE_URL` unless
 you override `keyEnv` / `baseUrlEnv` in config.
 
-Lookup order, first non-empty value wins:
-
-1. Process environment (`export OPENROUTER_API_KEY=...`)
-2. `.env` in the project directory
-3. `~/.hermes/.env`, if you already keep keys there
-
 `.env` is gitignored. Do not put keys in the systemd unit, README, or config.
 
 Optional settings are listed in `.env.example`: listen address, upstream base
-URLs, and the OpenRouter app title/referer.
+URLs, and the OpenRouter app title/referer. A starter `.env` is optional —
+copy it only if you prefer file-based keys:
+
+```bash
+cp .env.example .env
+```
 
 ## Run
 
 ```bash
 git clone https://github.com/www222fff/free-router.git
 cd free-router
-cp .env.example .env
-# edit .env and set the keys you have
 ./start.sh
+# open http://127.0.0.1:8787/, log in, add keys under Providers
 ```
 
-The gateway listens on `127.0.0.1:8787` by default. Stop it with `./stop.sh`.
+No configuration step is needed: with no config present the server creates
+one from built-in defaults on first boot. The gateway listens on
+`127.0.0.1:8787` by default. Stop it with `./stop.sh`.
 Run these scripts as a normal user. If started as root, they re-exec as the
 directory owner and refuse to stay root.
 
@@ -65,9 +77,8 @@ directory owner and refuse to stay root.
 ```bash
 git clone https://github.com/www222fff/free-router.git
 cd free-router
-cp .env.example .env
-# edit .env and set the keys you have
 docker compose up -d
+# open http://127.0.0.1:8787/, log in, add keys under Providers
 ```
 
 The gateway is reachable at `http://127.0.0.1:8787/v1` by default; set
@@ -330,8 +341,9 @@ base URL); to do it by hand:
 2. Insert `{ "provider": "<name>", "model": "<id>" }` into `routes.free-best`
    where you want it ranked. Bare strings belong to `defaultProvider`.
 3. Optionally pin `name:model` in `discovery.evaluation.pinnedModels`.
-4. Set `<NAME>_API_KEY` in `.env` or `~/.hermes/.env`, or paste the key in the
-   web UI. Override the URL with `<NAME>_BASE_URL` if needed.
+4. Paste `<NAME>_API_KEY` in the web UI (Providers tab), or set it in `.env`
+   or `~/.hermes/.env` for file-based setups. Override the URL with
+   `<NAME>_BASE_URL` if needed.
 5. Restart only if you changed flags that require it (`catalog`, `pricing`);
    keys, URLs, and allowlists apply immediately.
 
