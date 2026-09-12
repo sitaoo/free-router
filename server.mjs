@@ -159,11 +159,22 @@ const UI_ENV_PATH = path.resolve(path.dirname(CONFIG_PATH), uiConfig.envFile || 
 // locked-out operator can recover without editing the config file.
 const webuiPassword = () =>
   String(process.env.FREE_ROUTER_WEBUI_PASSWORD || uiConfig.password || config.ui?.password || 'admin');
-const webuiSessions = new Set();
+// Login session TTL in hours (default 24, 0 = never expires).
+const sessionTtlHours = () => {
+  const raw = Number(config.webui?.sessionTtlHours ?? 24);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 24;
+};
+const webuiSessions = new Map();
 function webuiSessionToken(req) {
   const cookie = String(req.headers.cookie || '');
   const match = cookie.match(/(?:^|;\s*)fr_session=([^;]+)/);
   return match ? decodeURIComponent(match[1]) : '';
+}
+function pruneWebuiSessions() {
+  const now = Date.now();
+  for (const [token, expiresAt] of webuiSessions) {
+    if (expiresAt <= now) webuiSessions.delete(token);
+  }
 }
 let secretRedactor = config.redactSecrets === false ? null : createSecretRedactor(redactorEnv());
 
@@ -193,6 +204,110 @@ function refreshSecretRedactor() {
   if (config.redactSecrets === false) return;
   secretRedactor = createSecretRedactor(redactorEnv());
 }
+
+// One-time legacy migration: on the first boot with no migration record,
+// import provider keys found in the .env file into the TOML/JSON config so
+// the file becomes the single source of truth afterwards. Imported vars are
+// removed from .env (their values already live in the config); the web UI
+// shows a notice with what was moved.
+function parseEnvAssignments(text) {
+  const vars = new Map();
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (!match) continue;
+    let value = match[2];
+    if (value.length > 1 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+      value = value.slice(1, -1);
+    }
+    if (value) vars.set(match[1], value);
+  }
+  return vars;
+}
+
+function migrateEnvFileOnce() {
+  if (config.migratedFromEnv) return;
+  let fileVars = new Map();
+  try {
+    if (fs.existsSync(UI_ENV_PATH)) fileVars = parseEnvAssignments(fs.readFileSync(UI_ENV_PATH, 'utf8'));
+  } catch {
+    fileVars = new Map();
+  }
+  const summary = { at: new Date().toISOString(), providers: {}, gateway: 0 };
+  if (fileVars.size) {
+    const clearVars = {};
+    for (const provider of PROVIDERS.values()) {
+      const fileKeys = (provider.apiKeys || []).filter((e) => e.source === 'file').map((e) => ({ name: e.name, key: e.key }));
+      const have = new Set(fileKeys.map((e) => e.key));
+      const fresh = [];
+      const candidates = [
+        { varName: provider.keyEnv, plural: false },
+        { varName: `${provider.keyEnv}S`, plural: true },
+        { varName: `${provider.keyEnv}_KEYS`, plural: true },
+      ];
+      for (const { varName, plural } of candidates) {
+        const fileValue = fileVars.get(varName);
+        if (!fileValue) continue;
+        // The file wins when nothing else provides the var; otherwise only
+        // migrate values the file actually contributed (a real environment
+        // variable wins over the file and stays untouched).
+        const effective = String(process.env[varName] || '');
+        const fileValues = plural
+          ? fileValue.split(',').map((s) => s.trim()).filter(Boolean)
+          : [fileValue.trim()];
+        const effectiveValues = plural
+          ? effective.split(',').map((s) => s.trim()).filter(Boolean)
+          : [effective.trim()].filter(Boolean);
+        const values = effectiveValues.length
+          ? effectiveValues.filter((v) => fileValues.includes(v))
+          : [...fileValues];
+        const usable = values.filter((v) => !have.has(v));
+        for (const v of usable) {
+          have.add(v);
+          fresh.push(v);
+        }
+        if (usable.length) clearVars[varName] = '';
+      }
+      if (fresh.length) {
+        const named = fresh.map((key, i) => ({ name: `migrated-${i + 1}`, key }));
+        registry.setProviderKeys(provider.name, [...fileKeys, ...named]);
+        summary.providers[provider.name] = fresh.length;
+      }
+    }
+    // A personal gateway client key kept in .env becomes a named gateway key
+    // (it stays in .env too, since local scripts like models.sh need it).
+    const clientFileKey = fileVars.get('FREE_ROUTER_API_KEY') || '';
+    const clientEffective = String(process.env.FREE_ROUTER_API_KEY || '');
+    const clientKey = clientEffective || clientFileKey;
+    if (clientKey && !gatewayKeys().length) {
+      config.gateway ||= {};
+      config.gateway.keys = [{ name: 'migrated', key: clientKey, createdAt: new Date().toISOString() }];
+      config.gateway.requireAuth = true;
+      summary.gateway = 1;
+    }
+    if (Object.keys(clearVars).length) {
+      try {
+        updateEnvFile(UI_ENV_PATH, clearVars);
+        for (const name of Object.keys(clearVars)) delete process.env[name];
+        for (const provider of PROVIDERS.values()) registry.refreshKeysFromEnv(provider.name);
+      } catch (error) {
+        log(`env migration: could not clean ${displayPath(UI_ENV_PATH)}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+  config.migratedFromEnv = summary;
+  try {
+    persistConfig();
+  } catch (error) {
+    log(`env migration: could not persist config: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  refreshSecretRedactor();
+  const imported = Object.values(summary.providers).reduce((a, b) => a + b, 0);
+  if (imported || summary.gateway) {
+    log(`migrated ${imported} provider key(s) and ${summary.gateway} gateway key(s) from ${displayPath(UI_ENV_PATH)} into config; the config file is now the source of truth`);
+  }
+}
+
+migrateEnvFileOnce();
 
 // Gateway (downstream) API keys: named client credentials for LAN access.
 // Auth is required once at least one key exists (unless explicitly disabled).
@@ -1832,32 +1947,56 @@ function uiGuardFailure(req) {
 }
 
 function webuiAuthFailure(req) {
-  if (webuiSessions.has(webuiSessionToken(req))) return '';
-  return 'web UI login required';
+  const token = webuiSessionToken(req);
+  if (!token || !webuiSessions.has(token)) return 'web UI login required';
+  const expiresAt = webuiSessions.get(token);
+  if (expiresAt <= Date.now()) {
+    webuiSessions.delete(token);
+    return 'session expired, please log in again';
+  }
+  return '';
 }
 
 function uiProviderState() {
   const catalogHealth = registry.health();
   const providers = [...PROVIDERS.values()];
   providers.sort((left, right) => Number(right.name === 'gemini') - Number(left.name === 'gemini'));
-  return providers.map((provider) => ({
-    name: provider.name,
-    keyEnv: provider.keyEnv,
-    baseUrl: provider.baseUrl,
-    kind: registry.providerKind(provider),
-    configured: registry.hasUsableKey(provider),
-    keyCount: provider.apiKeys?.length || 0,
-    keys: (provider.apiKeys || []).map((entry) => ({
-      name: entry.name,
-      source: entry.source,
-      maskedKey: maskSecret(entry.key),
-      invalid: provider.invalidKeys.has(entry.key),
-    })),
-    maskedKey: maskSecret(provider.apiKey),
-    catalogModels: provider.usesCatalog ? provider.catalog.size : null,
-    catalogError: catalogHealth[provider.name]?.catalogError || null,
-    unavailableModels: catalogHealth[provider.name]?.unavailableModels || [],
-  }));
+  return providers.map((provider) => {
+    const unavailable = catalogHealth[provider.name]?.unavailableModels || [];
+    // Model totals next to the free-model availability: priced catalogs count
+    // zero-cost chat models, allowlists count entries still offered upstream.
+    let modelCount = null;
+    let freeCount = null;
+    if (provider.catalogHasPricing) {
+      if (provider.catalog?.size) {
+        modelCount = provider.catalog.size;
+        freeCount = [...provider.catalog.values()].filter((m) => isZeroCost(m) && isChatModel(m)).length;
+      }
+    } else {
+      modelCount = provider.freeModels.size;
+      freeCount = [...provider.freeModels].filter((id) => !unavailable.includes(id)).length;
+    }
+    return {
+      name: provider.name,
+      keyEnv: provider.keyEnv,
+      baseUrl: provider.baseUrl,
+      kind: registry.providerKind(provider),
+      configured: registry.hasUsableKey(provider),
+      keyCount: provider.apiKeys?.length || 0,
+      keys: (provider.apiKeys || []).map((entry) => ({
+        name: entry.name,
+        source: entry.source,
+        maskedKey: maskSecret(entry.key),
+        invalid: provider.invalidKeys.has(entry.key),
+      })),
+      maskedKey: maskSecret(provider.apiKey),
+      catalogModels: provider.usesCatalog ? provider.catalog.size : null,
+      modelCount,
+      freeCount,
+      catalogError: catalogHealth[provider.name]?.catalogError || null,
+      unavailableModels: unavailable,
+    };
+  });
 }
 
 function uiRouteState() {
@@ -2571,6 +2710,18 @@ async function handleSettings(req, res) {
     config.usage.timezone = String(body.timezone || '');
     notes.push('timezone saved; restart to take effect');
   }
+  if (body.sessionTtlHours !== undefined) {
+    const value = Number(body.sessionTtlHours);
+    if (!Number.isFinite(value) || value < 0 || value > 8760) {
+      return sendJson(res, 400, { error: { message: 'sessionTtlHours must be 0-8760 (0 = never expires)', type: 'invalid_request_error' } });
+    }
+    config.webui ||= {};
+    config.webui.sessionTtlHours = value;
+    notes.push(value === 0 ? 'sessions never expire' : `sessions expire after ${value} hour(s); existing sessions keep their old expiry`);
+  }
+  if (body.dismissMigrationNotice === true) {
+    delete config.migratedFromEnv;
+  }
   if (!persistOrFail(res)) return undefined;
   return sendJson(res, 200, { ok: true, notes });
 }
@@ -2587,13 +2738,22 @@ async function handleLogin(req, res) {
     return sendJson(res, 401, { error: { message: 'invalid password', type: 'unauthorized' } });
   }
   const token = crypto.randomBytes(32).toString('hex');
-  webuiSessions.add(token);
+  pruneWebuiSessions();
+  const ttlHours = sessionTtlHours();
+  const expiresAt = ttlHours > 0 ? Date.now() + Math.round(ttlHours * 3600000) : Number.POSITIVE_INFINITY;
+  webuiSessions.set(token, expiresAt);
+  // Cookie lifetime mirrors the server-side TTL; "never" becomes a browser
+  // session cookie so it still dies with the browser.
+  const maxAge = ttlHours > 0 ? `; Max-Age=${Math.round(ttlHours * 3600)}` : '';
   res.writeHead(200, {
     'Content-Type': 'application/json; charset=utf-8',
-    'Set-Cookie': `fr_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`,
+    'Set-Cookie': `fr_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${maxAge}`,
     'Cache-Control': 'no-store',
   });
-  return res.end(JSON.stringify({ ok: true }));
+  return res.end(JSON.stringify({
+    ok: true,
+    expiresAt: Number.isFinite(expiresAt) ? new Date(expiresAt).toISOString() : null,
+  }));
 }
 
 async function handler(req, res) {
@@ -2665,10 +2825,20 @@ async function handler(req, res) {
             createdAt: entry.createdAt || null,
           })),
         },
-        webui: { defaultPassword: webuiPassword() === 'admin' },
+        webui: {
+          defaultPassword: webuiPassword() === 'admin',
+          sessionTtlHours: sessionTtlHours(),
+          sessionExpiresAt: (() => {
+            const expiresAt = webuiSessions.get(webuiSessionToken(req));
+            return expiresAt === undefined
+              ? null
+              : Number.isFinite(expiresAt) ? new Date(expiresAt).toISOString() : null;
+          })(),
+        },
         providers: uiProviderState(),
         usage: usageSummary(),
         routes: uiRouteState(),
+        migration: config.migratedFromEnv || null,
         editable: editableConfigState(),
         allRoutes: routeStatus(),
         unavailableModels: discoveryUnavailableIds,

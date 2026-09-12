@@ -1697,6 +1697,46 @@ try {
   });
   assert.equal(noDefDel.status, 400);
 
+  // Session TTL, free-model counts, env migration record, logout.
+  const ttlBad = await fetch(`${base}/api/settings`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ sessionTtlHours: -1 }),
+  });
+  assert.equal(ttlBad.status, 400);
+  const ttlSet = await fetch(`${base}/api/settings`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ sessionTtlHours: 48 }),
+  });
+  assert.equal(ttlSet.status, 200);
+  const ttlState = await fetch(`${base}/api/state`, { headers: { Cookie: sessionCookie } }).then((res) => res.json());
+  assert.equal(ttlState.webui.sessionTtlHours, 48);
+  assert.ok(ttlState.webui.sessionExpiresAt);
+  const ttlNever = await fetch(`${base}/api/settings`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ sessionTtlHours: 0 }),
+  });
+  assert.equal(ttlNever.status, 200);
+
+  const counts = new Map(ttlState.providers.map((entry) => [entry.name, entry]));
+  assert.equal(counts.get('extra').modelCount, 1);
+  assert.equal(counts.get('extra').freeCount, 1);
+  assert.equal(counts.get('bai').modelCount, 2);
+  // bai's key was cleared above, so withdrawals cannot be checked and every
+  // allowlisted model counts as available.
+  assert.equal(counts.get('bai').freeCount, 2);
+  assert.deepEqual(ttlState.migration.providers, {});
+
+  const logout = await fetch(`${base}/api/logout`, {
+    method: 'POST',
+    headers: { Cookie: sessionCookie },
+  });
+  assert.equal(logout.status, 200);
+  const afterLogout = await fetch(`${base}/api/state`, { headers: { Cookie: sessionCookie } });
+  assert.equal(afterLogout.status, 401);
+
   console.log(
     'smoke test passed: pluggable providers, ranking, fallback, discovery, usage counters, and tracking work',
   );

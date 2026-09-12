@@ -1,7 +1,13 @@
 import fs from 'node:fs';
 import os from 'node:os';
+import { LANGS, STRINGS } from './i18n.mjs';
 
 const MAX_SECRET_LENGTH = 500;
+
+// Language content lives in i18n.mjs; the page gets a frozen copy so the
+// browser needs no module loader. `</script>` can never appear in it: values
+// only use <span> markup (verified in tests via renderPage snapshot).
+const I18N_PAYLOAD = JSON.stringify({ langs: LANGS, strings: STRINGS });
 
 // Keeps the operator's username out of the interface and the log file, which
 // both get shared or screenshotted more often than they get read locally.
@@ -115,8 +121,11 @@ header {
 }
 .head-inner {
   max-width: 1040px; margin: 0 auto;
-  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
 }
+.head-spacer { flex: 1; }
+#lang { max-width: 150px; }
+#logout-top { padding: 6px 12px; font-size: 12.5px; }
 h1 { font-size: 19px; font-weight: 650; margin: 0; letter-spacing: -.2px; }
 .head-inner .sep { color: var(--line); }
 .head-inner .mono { font-size: 13px; color: var(--muted); }
@@ -210,7 +219,7 @@ tbody tr:hover { background: #fafbfc; }
 }
 #tabs button.active:hover { background: #0954b5; }
 
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
 .card {
   border: 1px solid var(--line-soft); border-radius: 10px; padding: 12px 14px;
   background: #fafbfc;
@@ -243,6 +252,31 @@ select {
 .warn { color: var(--warn); font-weight: 600; }
 .bad-text { color: var(--bad); font-weight: 600; }
 .ok-text { color: var(--ok); font-weight: 600; }
+
+/* Title row with a trailing switch (Access pane). */
+.head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.head-row > div { flex: 1; min-width: 0; }
+.switch { position: relative; display: inline-block; width: 44px; height: 24px; flex: none; margin-top: 2px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch .slider {
+  position: absolute; inset: 0; cursor: pointer;
+  background: #ccd2db; border-radius: 999px; transition: .18s;
+}
+.switch .slider:before {
+  content: ""; position: absolute; height: 18px; width: 18px;
+  left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .18s;
+  box-shadow: 0 1px 3px rgba(0,0,0,.25);
+}
+.switch input:checked + .slider { background: var(--accent); }
+.switch input:checked + .slider:before { transform: translateX(20px); }
+
+/* One-time migration notice. */
+.banner {
+  border: 1px solid var(--warn); background: var(--warn-soft); color: var(--text);
+  border-radius: 10px; padding: 12px 14px; font-size: 13px; margin-bottom: 14px;
+  display: flex; gap: 12px; align-items: center; justify-content: space-between;
+}
+.banner button { flex: none; }
 
 @media (prefers-color-scheme: dark) {
   :root {
@@ -286,48 +320,53 @@ select {
     <h1>Free Router</h1>
     <span class="sep">/</span>
     <span class="mono" id="endpoint"></span>
+    <span class="head-spacer"></span>
+    <select id="lang" title="Language"></select>
+    <button id="logout-top" class="quiet" style="display:none" data-i18n="logout">Log out</button>
   </div>
 </header>
 <main id="app" style="display:none">
   <nav id="tabs">
-    <button data-tab="status" class="active">Status</button>
-    <button data-tab="access">Access</button>
-    <button data-tab="providers">Providers</button>
-    <button data-tab="routes">Routes</button>
-    <button data-tab="quota">Quota</button>
-    <button data-tab="settings">Settings</button>
+    <button data-tab="status" class="active" data-i18n="tab_status">Status</button>
+    <button data-tab="access" data-i18n="tab_access">Access</button>
+    <button data-tab="providers" data-i18n="tab_providers">Providers</button>
+    <button data-tab="routes" data-i18n="tab_routes">Routes</button>
+    <button data-tab="quota" data-i18n="tab_quota">Quota</button>
+    <button data-tab="settings" data-i18n="tab_settings">Settings</button>
   </nav>
 
   <div data-pane="status">
     <section>
-      <div class="sec-head"><h2>Overview</h2><p id="status-blurb"></p></div>
+      <div class="sec-head"><h2 data-i18n="overview">Overview</h2><p id="status-blurb"></p></div>
       <div class="sec-body"><div id="status-cards" class="cards"></div></div>
     </section>
     <section>
       <div class="sec-head">
-        <h2>Route priority</h2>
+        <h2 data-i18n="route_priority">Route priority</h2>
         <p id="routes-blurb"></p>
       </div>
       <div class="sec-body"><div id="routes"></div></div>
     </section>
     <section>
-      <div class="sec-head"><h2>Usage today</h2><p id="usage-blurb"></p></div>
+      <div class="sec-head"><h2 data-i18n="usage_today">Usage today</h2><p id="usage-blurb"></p></div>
       <div class="sec-body"><div id="usage"></div></div>
     </section>
   </div>
 
   <div data-pane="access" hidden>
     <section>
-      <div class="sec-head">
-        <h2>Access</h2>
-        <p>Gateway API keys for LAN clients (send as <span class="mono">Authorization: Bearer &lt;key&gt;</span> on <span class="mono">/v1/*</span>). Creating the first key enables auth; deleting the last one disables it.</p>
+      <div class="sec-head head-row">
+        <div>
+          <h2 data-i18n="access_title">Access</h2>
+          <p data-i18n="access_blurb">Gateway API keys for LAN clients (send as <span class="mono">Authorization: Bearer &lt;key&gt;</span> on <span class="mono">/v1/*</span>). Creating the first key enables auth; deleting the last one disables it.</p>
+        </div>
+        <label class="switch" data-i18n-title="require_auth"><input type="checkbox" id="gw-require"><span class="slider"></span></label>
       </div>
       <div class="sec-body">
         <div id="gateway"></div>
         <div class="row">
-          <input id="gw-name" placeholder="Label, e.g. living-room laptop" style="max-width:260px">
-          <button class="primary" id="gw-create">Create API key</button>
-          <label class="check"><input type="checkbox" id="gw-require"> require auth</label>
+          <input id="gw-name" data-i18n-ph="gw_name_ph" placeholder="Label, e.g. living-room laptop" style="max-width:260px">
+          <button class="primary" id="gw-create" data-i18n="gw_create">Create API key</button>
         </div>
         <p class="note" id="gw-note"></p>
       </div>
@@ -337,25 +376,28 @@ select {
   <div data-pane="providers" hidden>
     <section>
       <div class="sec-head">
-        <h2>Provider keys</h2>
+        <h2 data-i18n="providers_title">Provider keys</h2>
         <p id="keys-blurb"></p>
       </div>
-      <div class="sec-body"><div id="providers"></div></div>
+      <div class="sec-body">
+        <div id="migrate-banner" class="banner" hidden></div>
+        <div id="providers"></div>
+      </div>
     </section>
     <section>
-      <div class="sec-head"><h2>Add provider</h2><p>Any OpenAI-compatible endpoint. After adding, paste its key above.</p></div>
+      <div class="sec-head"><h2 data-i18n="add_provider">Add provider</h2><p data-i18n="add_provider_blurb">Any OpenAI-compatible endpoint. After adding, paste its key above.</p></div>
       <div class="sec-body">
         <div class="row">
-          <input id="np-name" placeholder="name: groq" style="max-width:150px">
-          <input id="np-baseurl" class="mono" placeholder="https://api.groq.com/openai/v1" style="flex:1;min-width:220px">
+          <input id="np-name" data-i18n-ph="np_name_ph" placeholder="name: groq" style="max-width:150px">
+          <input id="np-baseurl" class="mono" data-i18n-ph="np_url_ph" placeholder="https://api.groq.com/openai/v1" style="flex:1;min-width:220px">
         </div>
         <div class="row">
-          <input id="np-freemodels" class="mono" placeholder="free models, comma separated (for APIs without prices)" style="flex:1;min-width:220px">
+          <input id="np-freemodels" class="mono" data-i18n-ph="np_fm_ph" placeholder="free models, comma separated (for APIs without prices)" style="flex:1;min-width:220px">
         </div>
         <div class="row">
-          <label class="check"><input type="checkbox" id="np-catalog" checked> catalog (/models)</label>
-          <label class="check"><input type="checkbox" id="np-pricing" checked> publishes prices</label>
-          <button class="primary" id="np-create">Add provider</button>
+          <label class="check"><input type="checkbox" id="np-catalog" checked> <span data-i18n="np_catalog">catalog (/models)</span></label>
+          <label class="check"><input type="checkbox" id="np-pricing" checked> <span data-i18n="np_pricing">publishes prices</span></label>
+          <button class="primary" id="np-create" data-i18n="np_create">Add provider</button>
         </div>
       </div>
     </section>
@@ -363,18 +405,18 @@ select {
 
   <div data-pane="routes" hidden>
     <section>
-      <div class="sec-head"><h2>Routes</h2><p>Order the gateway tries models in. Entries are <span class="mono">provider:model</span> or plain model ids. Adding a model auto-allows it for price-free providers.</p></div>
+      <div class="sec-head"><h2 data-i18n="routes_title">Routes</h2><p data-i18n="routes_blurb">Order the gateway tries models in. Entries are <span class="mono">provider:model</span> or plain model ids. Adding a model auto-allows it for price-free providers.</p></div>
       <div class="sec-body">
         <div class="row">
-          <label>Route <select id="route-select"></select></label>
-          <button id="route-new">New route</button>
-          <button class="quiet" id="route-del">Delete route</button>
+          <label><span data-i18n="route_label">Route</span> <select id="route-select"></select></label>
+          <button id="route-new" data-i18n="route_new">New route</button>
+          <button class="quiet" id="route-del" data-i18n="route_del">Delete route</button>
         </div>
         <div id="route-entries"></div>
         <div class="row">
-          <input id="route-add" class="mono" placeholder="provider:model or model id" style="flex:1;min-width:200px">
-          <button id="route-add-btn">Add</button>
-          <button class="primary" id="route-save">Save route</button>
+          <input id="route-add" class="mono" data-i18n-ph="route_add_ph" placeholder="provider:model or model id" style="flex:1;min-width:200px">
+          <button id="route-add-btn" data-i18n="route_add">Add</button>
+          <button class="primary" id="route-save" data-i18n="route_save">Save route</button>
         </div>
         <p class="note" id="route-note"></p>
       </div>
@@ -383,33 +425,33 @@ select {
 
   <div data-pane="quota" hidden>
     <section>
-      <div class="sec-head"><h2>Daily limits</h2><p>Config quota per model. Limits reported by the provider itself stay authoritative.</p></div>
+      <div class="sec-head"><h2 data-i18n="limits_title">Daily limits</h2><p data-i18n="limits_blurb">Config quota per model. Limits reported by the provider itself stay authoritative.</p></div>
       <div class="sec-body">
         <div id="limits-table"></div>
         <div class="row">
-          <input id="limit-key" class="mono" placeholder="provider:model" style="max-width:260px">
-          <input id="limit-val" class="mono" placeholder="requests/day" style="max-width:140px">
-          <button class="primary" id="limit-add">Set limit</button>
+          <input id="limit-key" class="mono" data-i18n-ph="limit_key_ph" placeholder="provider:model" style="max-width:260px">
+          <input id="limit-val" class="mono" data-i18n-ph="limit_val_ph" placeholder="requests/day" style="max-width:140px">
+          <button class="primary" id="limit-add" data-i18n="limit_add">Set limit</button>
         </div>
       </div>
     </section>
     <section>
-      <div class="sec-head"><h2>Discovery</h2><p>Automatic free-model discovery and ranking.</p></div>
+      <div class="sec-head"><h2 data-i18n="disc_title">Discovery</h2><p data-i18n="disc_blurb">Automatic free-model discovery and ranking.</p></div>
       <div class="sec-body">
         <div class="row">
-          <label class="check"><input type="checkbox" id="disc-enabled"> discovery enabled</label>
-          <label class="check"><input type="checkbox" id="disc-eval"> model evaluation</label>
+          <label class="check"><input type="checkbox" id="disc-enabled"> <span data-i18n="disc_enabled">discovery enabled</span></label>
+          <label class="check"><input type="checkbox" id="disc-eval"> <span data-i18n="disc_eval">model evaluation</span></label>
         </div>
         <div class="row">
-          <label>Provider <select id="disc-provider"></select></label>
-          <label>Interval (hours) <input id="disc-interval" class="mono" style="max-width:90px"></label>
-          <button id="disc-save">Save</button>
+          <label><span data-i18n="disc_provider">Provider</span> <select id="disc-provider"></select></label>
+          <label><span data-i18n="disc_interval">Interval (hours)</span> <input id="disc-interval" class="mono" style="max-width:90px"></label>
+          <button id="disc-save" data-i18n="disc_save">Save</button>
         </div>
-        <p class="note">Route: <span class="mono" id="disc-route"></span>. Interval changes need a restart.</p>
+        <p class="note" id="disc-note"></p>
         <div id="pinned-list"></div>
         <div class="row">
-          <input id="pin-input" class="mono" placeholder="pin model, e.g. gemini:gemini-3.8-flash" style="flex:1;min-width:200px">
-          <button id="pin-add">Pin</button>
+          <input id="pin-input" class="mono" data-i18n-ph="pin_ph" placeholder="pin model, e.g. gemini:gemini-3.8-flash" style="flex:1;min-width:200px">
+          <button id="pin-add" data-i18n="pin_add">Pin</button>
         </div>
       </div>
     </section>
@@ -418,51 +460,56 @@ select {
   <div data-pane="settings" hidden>
     <section>
       <div class="sec-head">
-        <h2>Server</h2>
+        <h2 data-i18n="server_title">Server</h2>
         <p id="server-blurb"></p>
       </div>
       <div class="sec-body">
         <div class="row">
-          <label>Host <input id="srv-host" class="mono" style="max-width:200px"></label>
-          <label>Port <input id="srv-port" class="mono" style="max-width:100px"></label>
-          <button id="srv-save">Save (restart needed)</button>
+          <label><span data-i18n="srv_host">Host</span> <input id="srv-host" class="mono" style="max-width:200px"></label>
+          <label><span data-i18n="srv_port">Port</span> <input id="srv-port" class="mono" style="max-width:100px"></label>
+          <button id="srv-save" data-i18n="srv_save">Save (restart needed)</button>
         </div>
-        <p class="note">Bind <span class="mono">0.0.0.0</span> to allow LAN access. Keep the admin password set.</p>
+        <p class="note" data-i18n="srv_note">Bind <span class="mono">0.0.0.0</span> to allow LAN access. Keep the admin password set.</p>
       </div>
     </section>
     <section>
-      <div class="sec-head"><h2>Tuning</h2><p>Timeouts apply immediately; proxy and retention settings need a restart.</p></div>
+      <div class="sec-head"><h2 data-i18n="tuning_title">Tuning</h2><p data-i18n="tuning_blurb">Timeouts apply immediately; proxy and retention settings need a restart.</p></div>
       <div class="sec-body">
         <div class="row">
-          <label>Attempt timeout (ms) <input id="set-timeout" class="mono" style="max-width:120px"></label>
-          <label>Catalog refresh (ms) <input id="set-refresh" class="mono" style="max-width:130px"></label>
-          <label class="check"><input type="checkbox" id="set-redact"> redact secrets</label>
+          <label><span data-i18n="tun_timeout">Attempt timeout (ms)</span> <input id="set-timeout" class="mono" style="max-width:120px"></label>
+          <label><span data-i18n="tun_refresh">Catalog refresh (ms)</span> <input id="set-refresh" class="mono" style="max-width:130px"></label>
+          <label class="check"><input type="checkbox" id="set-redact"> <span data-i18n="tun_redact">redact secrets</span></label>
         </div>
         <div class="row">
-          <label>Default provider <select id="set-default"></select></label>
+          <label><span data-i18n="tun_default">Default provider</span> <select id="set-default"></select></label>
         </div>
         <div class="row">
-          <input id="set-socks" class="mono" placeholder="socks-first hosts, comma separated" style="flex:1;min-width:200px">
+          <input id="set-socks" class="mono" data-i18n-ph="tun_socks_ph" placeholder="socks-first hosts, comma separated" style="flex:1;min-width:200px">
         </div>
         <div class="row">
-          <label>Usage retention (days) <input id="set-retention" class="mono" style="max-width:80px"></label>
-          <label>Timezone <input id="set-timezone" class="mono" placeholder="America/Los_Angeles" style="max-width:200px"></label>
-          <button class="primary" id="set-save">Save tuning</button>
+          <label><span data-i18n="tun_retention">Usage retention (days)</span> <input id="set-retention" class="mono" style="max-width:80px"></label>
+          <label><span data-i18n="tun_timezone">Timezone</span> <input id="set-timezone" class="mono" data-i18n-ph="tun_timezone_ph" placeholder="America/Los_Angeles" style="max-width:200px"></label>
+          <button class="primary" id="set-save" data-i18n="tun_save">Save tuning</button>
         </div>
         <p class="note" id="set-note"></p>
       </div>
     </section>
     <section>
       <div class="sec-head">
-        <h2>Admin</h2>
-        <p>Web UI password (default <span class="mono">admin</span>). Changing it logs out all sessions.</p>
+        <h2 data-i18n="admin_title">Admin</h2>
+        <p data-i18n="admin_blurb">Web UI password (default <span class="mono">admin</span>). Changing it logs out all sessions.</p>
       </div>
       <div class="sec-body">
         <div class="row">
-          <input id="admin-pass" type="password" placeholder="New admin password" style="max-width:260px">
-          <button class="primary" id="admin-save">Change password</button>
-          <button class="quiet" id="logout">Log out</button>
+          <input id="admin-pass" type="password" data-i18n-ph="admin_pass_ph" placeholder="New admin password" style="max-width:260px">
+          <button class="primary" id="admin-save" data-i18n="admin_save">Change password</button>
+          <button class="quiet" id="logout" data-i18n="logout">Log out</button>
         </div>
+        <div class="row">
+          <label><span data-i18n="sess_ttl">Session expires after (hours, 0 = never)</span> <input id="sess-ttl" class="mono" style="max-width:90px"></label>
+          <button id="sess-save" data-i18n="sess_save">Save session</button>
+        </div>
+        <p class="note" id="sess-note"></p>
       </div>
     </section>
   </div>
@@ -471,18 +518,108 @@ select {
   <main style="max-width:440px">
     <section><div class="sec-body" style="padding:26px">
       <h2 style="margin:0 0 4px">Free Router</h2>
-      <p class="note" style="margin:0 0 14px">Enter the admin password to continue.</p>
+      <p class="note" style="margin:0 0 14px" data-i18n="login_blurb">Enter the admin password to continue.</p>
       <div class="row">
-        <input id="login-pass" type="password" placeholder="Admin password (default admin)" style="flex:1">
-        <button class="primary" id="login-go">Log in</button>
+        <input id="login-pass" type="password" data-i18n-ph="login_pass_ph" placeholder="Admin password (default admin)" style="flex:1">
+        <button class="primary" id="login-go" data-i18n="login_go">Log in</button>
       </div>
     </div></section>
   </main>
 </div>
 <div id="toast"></div>
+<script>window.FR_I18N = ${I18N_PAYLOAD};</script>
 <script>
 const el = (id) => document.getElementById(id);
 let state = null;
+
+// Minimal i18n runtime. The dictionary comes from i18n.mjs via
+// window.FR_I18N; semantics mirror translate() there (English fallback,
+// {var} interpolation). Static markup uses data-i18n / data-i18n-ph /
+// data-i18n-title attributes; dynamic strings call t() directly.
+const FR_LANGS = (window.FR_I18N && window.FR_I18N.langs) || [['en', 'English']];
+const FR_STR = (window.FR_I18N && window.FR_I18N.strings) || { en: {} };
+let lang = 'en';
+try {
+  lang = localStorage.getItem('fr-lang') || detectLang();
+} catch (error) {
+  lang = detectLang();
+}
+if (!FR_LANGS.some(([code]) => code === lang)) lang = 'en';
+
+function detectLang() {
+  const nav = String((typeof navigator !== 'undefined' && navigator.language) || 'en').toLowerCase();
+  for (const [code] of FR_LANGS) {
+    if (code.toLowerCase() === nav) return code;
+  }
+  if (nav === 'zh-hk' || nav === 'zh-hant' || nav === 'zh-tw') return 'zh-TW';
+  if (nav.indexOf('zh') === 0) return 'zh-CN';
+  const prefix = nav.split('-')[0];
+  const hit = FR_LANGS.find(([code]) => code.toLowerCase() === prefix);
+  return hit ? hit[0] : 'en';
+}
+
+function t(key, vars) {
+  const table = FR_STR[lang] || {};
+  const value = table[key] !== undefined ? table[key] : (FR_STR.en[key] !== undefined ? FR_STR.en[key] : key);
+  if (!vars) return value;
+  return String(value).replace(/\{(\w+)\}/g, (_, name) =>
+    vars[name] === undefined || vars[name] === null ? '' : String(vars[name]),
+  );
+}
+
+function applyI18n() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll('[data-i18n]').forEach((node) => {
+    const value = t(node.dataset.i18n);
+    if (/<[a-z][^>]*>/i.test(value)) node.innerHTML = value;
+    else node.textContent = value;
+  });
+  document.querySelectorAll('[data-i18n-ph]').forEach((node) => {
+    node.setAttribute('placeholder', t(node.dataset.i18nPh));
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach((node) => {
+    node.setAttribute('title', t(node.dataset.i18nTitle));
+  });
+  const select = el('lang');
+  if (select && !select.options.length) {
+    for (const [code, label] of FR_LANGS) {
+      const option = document.createElement('option');
+      option.value = code;
+      option.textContent = label;
+      select.appendChild(option);
+    }
+  }
+  if (select) select.value = lang;
+}
+
+function setLang(code) {
+  if (!FR_LANGS.some(([entry]) => entry === code)) return;
+  lang = code;
+  try {
+    localStorage.setItem('fr-lang', lang);
+  } catch (error) {
+    // Private browsing etc: language just doesn't persist.
+  }
+  applyI18n();
+  if (state) renderAll();
+}
+
+function renderAll() {
+  switchTab(activeTab);
+  renderStatus();
+  renderGateway();
+  renderServer();
+  renderProviders();
+  renderRoutes();
+  renderUsage();
+  renderRouteEditor();
+  renderLimits();
+  renderDiscovery();
+  renderTuning();
+  renderMigration();
+  renderSession();
+}
+
 
 function toast(message, kind) {
   const node = el('toast');
@@ -555,7 +692,12 @@ function renderProviders() {
     name.textContent = provider.name;
     const env = document.createElement('span');
     env.className = 'mono';
-    env.textContent = provider.keyEnv + ' · ' + (provider.keyCount || 0) + ' key(s)';
+    env.textContent = t('prov_counts', {
+      env: provider.keyEnv,
+      k: provider.keyCount || 0,
+      m: provider.modelCount === null || provider.modelCount === undefined ? '?' : provider.modelCount,
+      f: provider.freeCount === null || provider.freeCount === undefined ? '?' : provider.freeCount,
+    });
     name.appendChild(env);
 
     const fieldCell = document.createElement('div');
@@ -567,22 +709,22 @@ function renderProviders() {
       const line = document.createElement('div');
       line.className = 'keyrow';
       const label = document.createElement('span');
-      label.textContent = entry.name + (entry.invalid ? ' (401 retired)' : '');
+      label.textContent = entry.name + (entry.invalid ? ' ' + t('retired') : '');
       const masked = document.createElement('span');
       masked.className = 'mono';
       masked.textContent = entry.maskedKey;
       const del = document.createElement('button');
       del.className = 'quiet';
-      del.textContent = 'Delete';
+      del.textContent = t('del');
       del.onclick = async () => {
-        if (!confirm('Delete provider key [' + entry.name + '] for ' + provider.name + '?')) return;
+        if (!confirm(t('confirm_del_key', { k: entry.name, p: provider.name }))) return;
         del.disabled = true;
         try {
           await api('api/keys', {
             method: 'POST',
             body: JSON.stringify({ provider: provider.name, name: entry.name, key: '' }),
           });
-          toast('Deleted [' + entry.name + '].', 'good');
+          toast(t('deleted_key', { n: entry.name }), 'good');
           await load();
         } catch (error) {
           toast(String(error.message || error), 'err');
@@ -598,28 +740,28 @@ function renderProviders() {
     const addRow = document.createElement('div');
     addRow.className = 'row';
     const nameField = document.createElement('input');
-    nameField.placeholder = 'Label, e.g. account-2';
+    nameField.placeholder = t('prov_label_ph');
     nameField.style.maxWidth = '150px';
     const keyField = document.createElement('input');
     keyField.type = 'password';
     keyField.autocomplete = 'off';
     keyField.spellcheck = false;
-    keyField.placeholder = fileKeys.length ? 'Paste another key for this provider' : 'Paste ' + provider.keyEnv;
+    keyField.placeholder = fileKeys.length ? t('prov_paste_more') : t('prov_paste_first', { env: provider.keyEnv });
     keyField.style.flex = '1';
     const add = document.createElement('button');
     add.className = 'primary';
-    add.textContent = fileKeys.length ? 'Add key' : 'Save';
+    add.textContent = fileKeys.length ? t('prov_add') : t('prov_save');
     add.onclick = async () => {
       const value = keyField.value.trim();
       const label = nameField.value.trim() || ('key-' + ((provider.keyCount || 0) + 1));
-      if (!value) { toast('Paste a key first, the field is empty.', 'err'); return; }
+      if (!value) { toast(t('prov_empty'), 'err'); return; }
       add.disabled = true;
       try {
         await api('api/keys', {
           method: 'POST',
           body: JSON.stringify({ provider: provider.name, name: label, key: value }),
         });
-        toast('Saved [' + label + '] for ' + provider.name + '. Applied immediately.', 'good');
+        toast(t('prov_saved', { n: label, p: provider.name }), 'good');
         await load();
       } catch (error) {
         toast(String(error.message || error), 'err');
@@ -635,23 +777,23 @@ function renderProviders() {
     hint.className = 'prov-hint';
     const envKeys = (provider.keys || []).filter((entry) => entry.source === 'env');
     if (!provider.configured) {
-      hint.textContent = 'Not set. This provider and its models are skipped.';
+      hint.textContent = t('prov_notset');
     } else if (envKeys.length) {
-      hint.textContent = 'Also from environment: ' + envKeys.map((entry) => entry.maskedKey).join(', ');
+      hint.textContent = t('prov_env', { m: envKeys.map((entry) => entry.maskedKey).join(', ') });
     } else {
-      hint.textContent = provider.keyCount + ' key(s) configured; requests rotate across them.';
+      hint.textContent = t('prov_rot', { n: provider.keyCount });
     }
     if (provider.catalogError && !provider.catalogModels) {
       hint.appendChild(document.createTextNode('  '));
-      hint.appendChild(pill('catalog unreachable', 'bad'));
+      hint.appendChild(pill(t('catalog_down'), 'bad'));
     }
     fieldCell.appendChild(hint);
 
     if (provider.unavailableModels && provider.unavailableModels.length) {
       const gone = document.createElement('div');
       gone.className = 'prov-hint';
-      gone.appendChild(pill('withdrawn', 'warn'));
-      gone.appendChild(document.createTextNode(' no longer offered upstream, skipped: '));
+      gone.appendChild(pill(t('withdrawn'), 'warn'));
+      gone.appendChild(document.createTextNode(' ' + t('withdrawn_models') + ' '));
       const ids = document.createElement('span');
       ids.className = 'mono';
       ids.textContent = provider.unavailableModels.join(', ');
@@ -661,7 +803,7 @@ function renderProviders() {
 
     const adv = document.createElement('details');
     const summary = document.createElement('summary');
-    summary.textContent = 'Advanced: endpoint, free models, delete';
+    summary.textContent = t('adv_title');
     summary.style.cssText = 'cursor:pointer;font-size:12.5px;color:var(--muted);margin-top:8px';
     adv.appendChild(summary);
     const detail = state.editable.providers.find((entry) => entry.name === provider.name) || {};
@@ -671,9 +813,9 @@ function renderProviders() {
     urlField.className = 'mono';
     urlField.value = detail.baseUrl || '';
     urlField.style.flex = '1';
-    urlField.placeholder = 'https://... OpenAI-compatible base URL';
+    urlField.placeholder = t('url_ph');
     const urlSave = document.createElement('button');
-    urlSave.textContent = 'Save URL';
+    urlSave.textContent = t('url_save');
     urlSave.onclick = async () => {
       urlSave.disabled = true;
       try {
@@ -681,7 +823,7 @@ function renderProviders() {
           method: 'POST',
           body: JSON.stringify({ action: 'update', name: provider.name, baseUrl: urlField.value.trim() }),
         });
-        toast('Saved.' + ((result.notes || []).length ? ' ' + result.notes.join(' ') : ''), 'good');
+        toast(t('saved') + ((result.notes || []).length ? ' ' + result.notes.join(' ') : ''), 'good');
         await load();
       } catch (error) {
         toast(String(error.message || error), 'err');
@@ -696,9 +838,7 @@ function renderProviders() {
     fmWrap.style.marginTop = '8px';
     const fmLabel = document.createElement('div');
     fmLabel.className = 'prov-hint';
-    fmLabel.textContent = detail.pricing
-      ? 'Priced catalog decides freeness; freeModels below is informational.'
-      : 'freeModels allowlist (models routable without published prices):';
+    fmLabel.textContent = detail.pricing ? t('fm_priced') : t('fm_allow');
     fmWrap.appendChild(fmLabel);
     for (const model of detail.freeModels || []) {
       const chip = document.createElement('span');
@@ -709,7 +849,7 @@ function renderProviders() {
       const rm = document.createElement('button');
       rm.className = 'quiet';
       rm.textContent = '×';
-      rm.title = 'Remove ' + model;
+      rm.title = t('rm_model_title', { m: model });
       rm.onclick = async () => {
         try {
           await api('api/providers', {
@@ -720,7 +860,7 @@ function renderProviders() {
               freeModels: (detail.freeModels || []).filter((entry) => entry !== model),
             }),
           });
-          toast('Removed ' + model + '.', 'good');
+          toast(t('removed_model', { m: model }), 'good');
           await load();
         } catch (error) {
           toast(String(error.message || error), 'err');
@@ -734,10 +874,10 @@ function renderProviders() {
     fmRow.className = 'row';
     const fmField = document.createElement('input');
     fmField.className = 'mono';
-    fmField.placeholder = 'add model id';
+    fmField.placeholder = t('fm_add_ph');
     fmField.style.maxWidth = '240px';
     const fmAdd = document.createElement('button');
-    fmAdd.textContent = 'Add model';
+    fmAdd.textContent = t('fm_add');
     fmAdd.onclick = async () => {
       const value = fmField.value.trim();
       if (!value) return;
@@ -750,7 +890,7 @@ function renderProviders() {
             freeModels: [...(detail.freeModels || []), value],
           }),
         });
-        toast('Added ' + value + '.', 'good');
+        toast(t('added_model', { m: value }), 'good');
         await load();
       } catch (error) {
         toast(String(error.message || error), 'err');
@@ -765,15 +905,15 @@ function renderProviders() {
     delRow.className = 'row';
     const delProv = document.createElement('button');
     delProv.className = 'quiet';
-    delProv.textContent = 'Delete provider';
+    delProv.textContent = t('del_provider');
     delProv.onclick = async () => {
-      if (!confirm('Delete provider ' + provider.name + '? Its route entries are purged too.')) return;
+      if (!confirm(t('confirm_del_provider', { p: provider.name }))) return;
       try {
         const result = await api('api/providers', {
           method: 'POST',
           body: JSON.stringify({ action: 'delete', name: provider.name }),
         });
-        toast('Deleted ' + provider.name + ' (purged ' + (result.purged || 0) + ' route entries).', 'good');
+        toast(t('deleted_provider', { p: provider.name, n: result.purged || 0 }), 'good');
         await load();
       } catch (error) {
         toast(String(error.message || error), 'err');
@@ -791,9 +931,7 @@ function renderProviders() {
     row.appendChild(actions);
     host.appendChild(row);
   }
-  el('keys-blurb').textContent =
-    'Named keys are stored in ' + state.configFile + ' (' + state.configFormat + ') and applied immediately. '
-    + 'Multiple keys per provider rotate automatically; a 401 retires only that key.';
+  el('keys-blurb').textContent = t('keys_blurb', { file: state.configFile, format: state.configFormat });
 }
 
 function renderGateway() {
@@ -804,7 +942,7 @@ function renderGateway() {
     const p = document.createElement('p');
     p.className = 'note';
     p.style.margin = '0';
-    p.textContent = 'No API keys yet. /v1 is open to the whole network — create one to lock it down.';
+    p.textContent = t('gw_no_keys');
     host.appendChild(p);
   }
   for (const entry of keys) {
@@ -817,16 +955,16 @@ function renderGateway() {
     masked.textContent = entry.masked + (entry.createdAt ? ' · ' + entry.createdAt.slice(0, 10) : '');
     const del = document.createElement('button');
     del.className = 'quiet';
-    del.textContent = 'Delete';
+    del.textContent = t('del');
     del.onclick = async () => {
-      if (!confirm('Delete gateway API key [' + entry.name + ']? Clients using it stop working.')) return;
+      if (!confirm(t('gw_confirm_del', { n: entry.name }))) return;
       del.disabled = true;
       try {
         await api('api/gateway-keys', {
           method: 'POST',
           body: JSON.stringify({ action: 'delete', name: entry.name }),
         });
-        toast('Deleted [' + entry.name + '].', 'good');
+        toast(t('gw_deleted', { n: entry.name }), 'good');
         await load();
       } catch (error) {
         toast(String(error.message || error), 'err');
@@ -890,40 +1028,38 @@ function card(host, key, value, cls) {
 function renderStatus() {
   const host = el('status-cards');
   host.textContent = '';
-  card(host, 'endpoint', state.endpoint);
-  card(host, 'config', state.configFile + ' (' + state.configFormat + ')');
+  card(host, t('card_endpoint'), state.endpoint);
+  card(host, t('card_config'), state.configFile + ' (' + state.configFormat + ')');
   const gwCount = (state.gateway && state.gateway.keys.length) || 0;
   card(
     host,
-    'gateway auth',
-    state.gateway.requireAuth ? 'required (' + gwCount + ' keys)' : (gwCount ? 'keys exist, not required' : 'disabled (open LAN)'),
+    t('card_gateway'),
+    state.gateway.requireAuth ? t('gw_on', { n: gwCount }) : (gwCount ? t('gw_off_keys') : t('gw_off')),
     state.gateway.requireAuth ? 'ok-text' : 'warn',
   );
   const noKey = state.providers.filter((entry) => !entry.configured).map((entry) => entry.name);
-  card(host, 'providers without key', noKey.length ? noKey.join(', ') : 'all configured', noKey.length ? 'warn' : 'ok-text');
+  card(host, t('card_nokey'), noKey.length ? noKey.join(', ') : t('nokey_all'), noKey.length ? 'warn' : 'ok-text');
   if (state.webui.defaultPassword) {
-    card(host, 'admin password', 'still default "admin" — change it in Settings', 'bad-text');
+    card(host, t('card_adminpw'), t('adminpw_warn'), 'bad-text');
   }
-  el('status-blurb').textContent =
-    'Live overview. Details live under the other tabs; route order below decides every request.';
+  el('status-blurb').textContent = t('status_blurb');
 }
 
 function renderUsage() {
   const host = el('usage');
   host.textContent = '';
-  el('usage-blurb').textContent =
-    'used is today (' + state.usage.today + ' ' + state.usage.timezone + '); rate limits and 404s are excluded.';
+  el('usage-blurb').textContent = t('usage_blurb', { today: state.usage.today, tz: state.usage.timezone });
   const models = (state.usage.models || []).slice(0, 12);
   if (!models.length) {
     const p = document.createElement('p');
     p.className = 'note';
     p.style.margin = '0';
-    p.textContent = 'No requests recorded yet.';
+    p.textContent = t('usage_empty');
     host.appendChild(p);
     return;
   }
   host.appendChild(table(
-    [{ label: 'model' }, { label: 'today', num: true }, { label: 'ok', num: true }, { label: 'fail', num: true }, { label: 'limit', num: true }],
+    [{ label: t('th_model') }, { label: t('th_today'), num: true }, { label: t('th_ok'), num: true }, { label: t('th_fail'), num: true }, { label: t('th_limit'), num: true }],
     models.map((entry) => [
       td(entry.key, 'mono'),
       td(entry.today ? entry.today.consumed : '-', 'num'),
@@ -954,7 +1090,7 @@ function renderRouteEditor() {
   for (const name of names) {
     const option = document.createElement('option');
     option.value = name;
-    option.textContent = name + (name === state.route ? ' (discovery)' : '');
+    option.textContent = name + (name === state.route ? t('route_disc_suffix') : '');
     select.appendChild(option);
   }
   select.value = current;
@@ -976,11 +1112,11 @@ function renderRouteEditor() {
     const st = document.createElement('span');
     st.className = 'st';
     const status = routeStatusFor(current, modelString);
-    if (!status) st.textContent = 'unsaved';
-    else if (!status.providerConfigured) st.textContent = 'no key';
-    else if (status.zeroCost === false) st.textContent = 'paid';
-    else if (status.cooldownSeconds > 0) st.textContent = 'cooldown';
-    else st.textContent = 'ready';
+    if (!status) st.textContent = t('st_unsaved');
+    else if (!status.providerConfigured) st.textContent = t('st_nokey');
+    else if (status.zeroCost === false) st.textContent = t('st_paid');
+    else if (status.cooldownSeconds > 0) st.textContent = t('st_cooldown', { n: status.cooldownSeconds });
+    else st.textContent = t('st_ready');
     const up = document.createElement('button');
     up.textContent = '↑';
     up.disabled = index === 0;
@@ -1010,9 +1146,7 @@ function renderRouteEditor() {
     line.appendChild(rm);
     host.appendChild(line);
   });
-  el('route-note').textContent = draftEntries.length
-    ? 'Save writes the whole list. Unsaved reorder is lost on reload.'
-    : 'Empty route: add models below, then save.';
+  el('route-note').textContent = draftEntries.length ? t('route_unsaved_note') : t('route_empty');
 }
 
 function renderLimits() {
@@ -1023,20 +1157,20 @@ function renderLimits() {
     const p = document.createElement('p');
     p.className = 'note';
     p.style.margin = '0';
-    p.textContent = 'No config limits. Provider-reported quotas still apply automatically.';
+    p.textContent = t('limits_empty');
     host.appendChild(p);
     return;
   }
   host.appendChild(table(
-    [{ label: 'model' }, { label: 'limit/day', num: true }, { label: 'source' }, { label: '' }],
+    [{ label: t('th_model') }, { label: t('th_limit_day'), num: true }, { label: t('th_source') }, { label: '' }],
     limits.map((entry) => {
       const del = document.createElement('button');
       del.className = 'quiet';
-      del.textContent = 'Delete';
+      del.textContent = t('del');
       del.onclick = async () => {
         try {
           await api('api/limits', { method: 'POST', body: JSON.stringify({ action: 'delete', key: entry.key }) });
-          toast('Deleted limit for ' + entry.key + '.', 'good');
+          toast(t('limit_deleted', { key: entry.key }), 'good');
           await load();
         } catch (error) {
           toast(String(error.message || error), 'err');
@@ -1061,7 +1195,7 @@ function renderDiscovery() {
   }
   providerSelect.value = disc.provider;
   el('disc-interval').value = disc.intervalHours;
-  el('disc-route').textContent = disc.route;
+  el('disc-note').innerHTML = t('disc_note', { route: disc.route });
   const host = el('pinned-list');
   host.textContent = '';
   for (const model of disc.pinnedModels || []) {
@@ -1076,7 +1210,7 @@ function renderDiscovery() {
     rm.onclick = async () => {
       try {
         await api('api/discovery', { method: 'POST', body: JSON.stringify({ unpin: model }) });
-        toast('Unpinned ' + model + '.', 'good');
+        toast(t('unpinned_msg', { m: model }), 'good');
         await load();
       } catch (error) {
         toast(String(error.message || error), 'err');
@@ -1086,6 +1220,44 @@ function renderDiscovery() {
     chip.appendChild(rm);
     host.appendChild(chip);
   }
+}
+
+function renderMigration() {
+  const banner = el('migrate-banner');
+  const summary = state.migration;
+  const movedProviders = summary && summary.providers ? Object.entries(summary.providers) : [];
+  const movedGateway = summary ? Number(summary.gateway || 0) : 0;
+  if (!summary || summary.empty || (!movedProviders.length && !movedGateway)) {
+    banner.hidden = true;
+    banner.textContent = '';
+    return;
+  }
+  banner.hidden = false;
+  banner.textContent = '';
+  const text = document.createElement('span');
+  text.textContent = t('mig_text', {
+    p: movedProviders.map(([name, count]) => name + '×' + count).join(', '),
+    g: movedGateway ? t('mig_gw') : '',
+  });
+  const dismiss = document.createElement('button');
+  dismiss.textContent = t('mig_dismiss');
+  dismiss.onclick = async () => {
+    try {
+      await api('api/settings', { method: 'POST', body: JSON.stringify({ dismissMigrationNotice: true }) });
+      await load();
+    } catch (error) {
+      toast(String(error.message || error), 'err');
+    }
+  };
+  banner.appendChild(text);
+  banner.appendChild(dismiss);
+}
+
+function renderSession() {
+  el('sess-ttl').value = state.webui.sessionTtlHours;
+  el('sess-note').textContent = state.webui.sessionExpiresAt
+    ? t('sess_expires', { at: state.webui.sessionExpiresAt })
+    : t('sess_never');
 }
 
 function renderTuning() {
@@ -1113,29 +1285,42 @@ function bindOnce() {
   for (const button of document.querySelectorAll('#tabs button')) {
     button.onclick = () => switchTab(button.dataset.tab);
   }
+  el('lang').onchange = () => setLang(el('lang').value);
+  const doLogout = async () => {
+    try { await api('api/logout', { method: 'POST' }); } catch (error) { /* ignore */ }
+    showLogin();
+  };
+  el('logout').onclick = doLogout;
+  el('logout-top').onclick = doLogout;
   el('gw-create').onclick = async () => {
     const label = el('gw-name').value.trim();
-    if (!label) { toast('Give the key a name first.', 'err'); return; }
+    if (!label) { toast(t('gw_name_need'), 'err'); return; }
     try {
       const result = await api('api/gateway-keys', {
         method: 'POST',
         body: JSON.stringify({ action: 'create', name: label }),
       });
       el('gw-name').value = '';
-      prompt('Copy this key now — it is shown only once:', result.key);
-      toast('Created [' + label + ']; auth is now required.', 'good');
+      prompt(t('gw_copy_once'), result.key);
+      toast(t('gw_created', { n: label }), 'good');
       await load();
     } catch (error) {
       toast(String(error.message || error), 'err');
     }
   };
   el('gw-require').onchange = async () => {
+    const want = el('gw-require').checked;
+    if (want && !((state.gateway && state.gateway.keys) || []).length) {
+      el('gw-require').checked = false;
+      toast(t('gw_need_key'), 'err');
+      return;
+    }
     try {
       await api('api/gateway-keys', {
         method: 'POST',
-        body: JSON.stringify({ action: 'setRequireAuth', requireAuth: el('gw-require').checked }),
+        body: JSON.stringify({ action: 'setRequireAuth', requireAuth: want }),
       });
-      toast(el('gw-require').checked ? 'Gateway auth required.' : 'Gateway auth disabled.', 'good');
+      toast(want ? t('gw_on_msg') : t('gw_off_msg'), 'good');
       await load();
     } catch (error) {
       toast(String(error.message || error), 'err');
@@ -1144,19 +1329,27 @@ function bindOnce() {
   };
   el('admin-save').onclick = async () => {
     const value = el('admin-pass').value;
-    if (!value) { toast('Enter a new password first.', 'err'); return; }
+    if (!value) { toast(t('admin_need'), 'err'); return; }
     try {
       await api('api/webui-password', { method: 'POST', body: JSON.stringify({ password: value }) });
       el('admin-pass').value = '';
-      toast('Password changed. Please log in again.', 'good');
+      toast(t('admin_changed'), 'good');
       showLogin();
     } catch (error) {
       toast(String(error.message || error), 'err');
     }
   };
-  el('logout').onclick = async () => {
-    try { await api('api/logout', { method: 'POST' }); } catch (error) { /* ignore */ }
-    showLogin();
+  el('sess-save').onclick = async () => {
+    try {
+      const result = await api('api/settings', {
+        method: 'POST',
+        body: JSON.stringify({ sessionTtlHours: Number(el('sess-ttl').value) }),
+      });
+      toast(t('saved') + ((result.notes || []).length ? ' ' + result.notes.join(' ') : ''), 'good');
+      await load();
+    } catch (error) {
+      toast(String(error.message || error), 'err');
+    }
   };
   el('srv-save').onclick = async () => {
     try {
@@ -1164,7 +1357,7 @@ function bindOnce() {
         method: 'POST',
         body: JSON.stringify({ host: el('srv-host').value.trim(), port: Number(el('srv-port').value) }),
       });
-      toast('Saved. ' + (result.notes || []).join(' '), 'good');
+      toast(t('srv_saved', { notes: (result.notes || []).join(' ') }), 'good');
       await load();
     } catch (error) {
       toast(String(error.message || error), 'err');
@@ -1177,7 +1370,7 @@ function bindOnce() {
   el('np-create').onclick = async () => {
     const name = el('np-name').value.trim().toLowerCase();
     const baseUrl = el('np-baseurl').value.trim();
-    if (!name || !baseUrl) { toast('Name and base URL are required.', 'err'); return; }
+    if (!name || !baseUrl) { toast(t('np_need'), 'err'); return; }
     try {
       await api('api/providers', {
         method: 'POST',
@@ -1193,7 +1386,7 @@ function bindOnce() {
       el('np-name').value = '';
       el('np-baseurl').value = '';
       el('np-freemodels').value = '';
-      toast('Added provider ' + name + '. Paste its key above.', 'good');
+      toast(t('np_added', { n: name }), 'good');
       await load();
     } catch (error) {
       toast(String(error.message || error), 'err');
@@ -1207,7 +1400,7 @@ function bindOnce() {
   el('route-add-btn').onclick = () => {
     const value = el('route-add').value.trim();
     if (!value) return;
-    if (draftEntries.includes(value)) { toast('Already in the list.', 'err'); return; }
+    if (draftEntries.includes(value)) { toast(t('route_in_list'), 'err'); return; }
     draftEntries.push(value);
     el('route-add').value = '';
     renderRouteEditor();
@@ -1219,32 +1412,32 @@ function bindOnce() {
         body: JSON.stringify({ action: 'save', route: draftRoute, models: draftEntries }),
       });
       if ((result.notes || []).length) toast(result.notes.join(' '), 'good');
-      toast('Saved route ' + draftRoute + ' (' + result.count + ' entries).', 'good');
+      toast(t('route_saved', { r: draftRoute, n: result.count }), 'good');
       await load();
     } catch (error) {
       toast(String(error.message || error), 'err');
     }
   };
   el('route-new').onclick = async () => {
-    const name = prompt('New route name (letters, digits, _ or -):', 'my-route');
+    const name = prompt(t('route_new_prompt'), 'my-route');
     if (!name) return;
     try {
       await api('api/routes', { method: 'POST', body: JSON.stringify({ action: 'save', route: name.trim(), models: [] }) });
       draftRoute = name.trim();
       draftEntries = [];
-      toast('Created route ' + draftRoute + '.', 'good');
+      toast(t('route_created', { r: draftRoute }), 'good');
       await load();
     } catch (error) {
       toast(String(error.message || error), 'err');
     }
   };
   el('route-del').onclick = async () => {
-    if (!confirm('Delete route ' + draftRoute + '?')) return;
+    if (!confirm(t('route_confirm_del', { r: draftRoute }))) return;
     try {
       await api('api/routes', { method: 'POST', body: JSON.stringify({ action: 'delete', route: draftRoute }) });
       draftRoute = '';
       draftEntries = [];
-      toast('Deleted route.', 'good');
+      toast(t('route_deleted'), 'good');
       await load();
     } catch (error) {
       toast(String(error.message || error), 'err');
@@ -1253,12 +1446,12 @@ function bindOnce() {
   el('limit-add').onclick = async () => {
     const key = el('limit-key').value.trim();
     const limit = Number(el('limit-val').value);
-    if (!key || !Number.isFinite(limit)) { toast('Model key and a numeric limit are required.', 'err'); return; }
+    if (!key || !Number.isFinite(limit)) { toast(t('limit_need'), 'err'); return; }
     try {
       await api('api/limits', { method: 'POST', body: JSON.stringify({ action: 'set', key, limit }) });
       el('limit-key').value = '';
       el('limit-val').value = '';
-      toast('Set limit for ' + key + '.', 'good');
+      toast(t('limit_set', { key }), 'good');
       await load();
     } catch (error) {
       toast(String(error.message || error), 'err');
@@ -1275,7 +1468,7 @@ function bindOnce() {
           intervalHours: Number(el('disc-interval').value),
         }),
       });
-      toast('Saved.' + ((result.notes || []).length ? ' ' + result.notes.join(' ') : ''), 'good');
+      toast(t('saved') + ((result.notes || []).length ? ' ' + result.notes.join(' ') : ''), 'good');
       await load();
     } catch (error) {
       toast(String(error.message || error), 'err');
@@ -1287,7 +1480,7 @@ function bindOnce() {
     try {
       await api('api/discovery', { method: 'POST', body: JSON.stringify({ pin: value }) });
       el('pin-input').value = '';
-      toast('Pinned ' + value + '.', 'good');
+      toast(t('pinned_msg', { m: value }), 'good');
       await load();
     } catch (error) {
       toast(String(error.message || error), 'err');
@@ -1307,7 +1500,7 @@ function bindOnce() {
           timezone: el('set-timezone').value.trim(),
         }),
       });
-      toast('Saved.' + ((result.notes || []).length ? ' ' + result.notes.join(' ') : ''), 'good');
+      toast(t('saved') + ((result.notes || []).length ? ' ' + result.notes.join(' ') : ''), 'good');
       await load();
     } catch (error) {
       toast(String(error.message || error), 'err');
@@ -1317,7 +1510,7 @@ function bindOnce() {
 
 async function doLogin() {
   const value = el('login-pass').value;
-  if (!value) { toast('Enter the admin password.', 'err'); return; }
+  if (!value) { toast(t('err_admin_pass'), 'err'); return; }
   try {
     await api('api/login', { method: 'POST', body: JSON.stringify({ password: value }) });
     el('login-pass').value = '';
@@ -1330,7 +1523,9 @@ async function doLogin() {
 function showLogin() {
   el('login').style.display = '';
   el('app').style.display = 'none';
+  el('logout-top').style.display = 'none';
   state = null;
+  applyI18n();
 }
 
 async function load() {
@@ -1343,34 +1538,23 @@ async function load() {
   }
   el('login').style.display = 'none';
   el('app').style.display = '';
+  el('logout-top').style.display = '';
   el('endpoint').textContent = state.endpoint;
   bindOnce();
-  switchTab(activeTab);
-  renderStatus();
-  renderGateway();
-  renderServer();
-  renderProviders();
-  renderRoutes();
-  renderUsage();
-  renderRouteEditor();
-  renderLimits();
-  renderDiscovery();
-  renderTuning();
+  applyI18n();
+  renderAll();
 }
 
 function renderRoutes() {
   const host = el('routes');
   host.textContent = '';
-  el('routes-blurb').textContent =
-    'Order the gateway tries models in. It stops at the first one that returns usable content. '
-    + 'used is today (' + state.usage.today + ' ' + state.usage.timezone
-    + '); rate limits and 404s are excluded, because the provider rejected those before running the model.';
+  el('routes-blurb').textContent = t('routes_blurb', { today: state.usage.today, tz: state.usage.timezone });
   const rows = state.routes.map((entry) => {
-    let status = 'ready';
+    let status = t('st_ready');
     let kind = 'ok';
-    if (!entry.providerConfigured) { status = 'no key'; kind = 'no'; }
-    else if (entry.zeroCost === false) { status = 'paid'; kind = 'bad'; }
-    else if (entry.cooldownSeconds > 0) { status = 'cooldown ' + entry.cooldownSeconds + 's'; kind = 'warn'; }
+    if (!entry.providerConfigured) { status = t('st_nokey'); kind = 'no'; }
+    else if (entry.zeroCost === false) { status = t('st_paid'); kind = 'bad'; }
+    else if (entry.cooldownSeconds > 0) { status = t('st_cooldown', { n: entry.cooldownSeconds }); kind = 'warn'; }
     const used = entry.usage ? entry.usage.today.consumed : 0;
     return [
       td(String(entry.priority), 'num'),
@@ -1382,26 +1566,24 @@ function renderRoutes() {
   });
   host.appendChild(table(
     [
-      { label: '#', num: true },
-      { label: 'status' },
-      { label: 'provider' },
-      { label: 'model' },
-      { label: 'used', num: true },
+      { label: t('th_num'), num: true },
+      { label: t('th_status') },
+      { label: t('th_provider') },
+      { label: t('th_model') },
+      { label: t('th_used'), num: true },
     ],
     rows,
   ));
   const note = document.createElement('p');
   note.className = 'note';
-  note.textContent = '* = pinned, always tried first.';
+  note.textContent = t('pinned_note');
   host.appendChild(note);
 
   if (state.unavailableModels && state.unavailableModels.length) {
     const gone = document.createElement('p');
     gone.className = 'note';
-    gone.appendChild(pill('withdrawn', 'warn'));
-    gone.appendChild(document.createTextNode(
-      ' Configured but missing from the provider catalog, so left out of the route above: ',
-    ));
+    gone.appendChild(pill(t('withdrawn'), 'warn'));
+    gone.appendChild(document.createTextNode(' ' + t('withdrawn_note') + ' '));
     const ids = document.createElement('span');
     ids.className = 'mono';
     ids.textContent = state.unavailableModels.join(', ');
@@ -1412,14 +1594,13 @@ function renderRoutes() {
   for (const entry of state.excludedByProvider || []) {
     const line = document.createElement('p');
     line.className = 'note';
-    line.appendChild(pill('not free', 'bad'));
+    line.appendChild(pill(t('notfree_badge'), 'bad'));
     line.appendChild(document.createTextNode(' '));
     const id = document.createElement('span');
     id.className = 'mono';
     id.textContent = entry.key;
     line.appendChild(id);
-    line.appendChild(document.createTextNode(' \u2014 configured but '
-      + entry.reason + '. Left out of the route above, since retrying cannot succeed.'));
+    line.appendChild(document.createTextNode(' ' + t('notfree_mid') + ' ' + entry.reason + t('notfree_end')));
     host.appendChild(line);
   }
 }
