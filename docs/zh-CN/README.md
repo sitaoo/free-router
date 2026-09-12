@@ -15,13 +15,11 @@ OpenAI 兼容 provider** 的当前免费模型做排名，遇到限流、宕机�
 
 ## 运行
 
-Node.js 20+。把 `.env.example` 复制为 `.env`，填至少一个 provider 的 Key，
-然后：
+Node.js 20+。直接启动，Key 进 UI 里加：
 
 ```bash
 git clone https://github.com/www222fff/free-router.git
 cd free-router
-cp .env.example .env
 ./start.sh
 ```
 

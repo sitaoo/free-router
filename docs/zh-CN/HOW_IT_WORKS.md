@@ -7,22 +7,32 @@
 ## 环境要求
 
 - Node.js 20+
-- 至少一个渠道的 API Key——放 `.env`，或在 Web UI（渠道 tab）里粘贴，
-  会存进 gitignored 的 `config.local.json`
 
-缺 Key 的 provider 直接从排名里跳过。
+Key 不用提前准备——先把服务跑起来，再去 Web UI 里加。缺 Key 的
+provider 直接从排名里跳过。
 
 ## 配置 API Key
 
-Provider Key 放在 `config.local.json`（gitignored，永不入库）或环境变量
-里。首次启动时，`.env` 里找到的 Key 会自动导入 `config.local.json`。
-`config.json` 只放默认值、保持可合并；服务端启动时深度合并两者（对象
-按 key 递归，数组和标量以覆盖层为准）。复制示例文件，解开你有的 Key
-并填值：
+推荐 UI 优先：零配置启动，打开 Web UI 登录，去渠道 tab 粘贴 Key 就行。
+命名 Key 存 gitignored 的 `config.local.json`，立即生效；`config.json`
+只放默认值、保持可合并，服务端启动时深度合并两者（对象按 key 递归，
+数组和标量以覆盖层为准）。
 
-```bash
-cp .env.example .env
-```
+`.env` 只做兼容和迁移：
+
+- 首次启动时，`.env` 里的 Key 一次性导入 `config.local.json`（命名为
+  `migrated-N`），并从 `.env` 里删掉。
+- 之后 Key 也可以继续放环境变量，适合无 UI 的 headless 或容器环境；
+  多 Key 变量（`<KEYENV>S`、`<KEYENV>_KEYS`，逗号分隔）都认。
+
+查找顺序，第一个非空值获胜：
+
+1. `config.local.json` 的命名 Key（最高）
+2. 进程环境变量（`export OPENROUTER_API_KEY=...`）
+3. 项目目录的 `.env`
+4. `~/.hermes/.env`，如果你本来就在那里存 Key
+
+Key 来源和获取位置：
 
 | 变量 | 是否必需 | 获取位置 |
 | --- | --- | --- |
@@ -43,29 +53,33 @@ cp .env.example .env
 `.env` 是 gitignored 的。不要把 Key 写进 systemd unit、README 或配置里。
 
 `.env.example` 列了可选设置：监听地址、上游 base URL、OpenRouter 的
-app 标题/referer。
+app 标题/referer。示例 `.env` 文件是可选的——只有偏好文件存 Key 才需要
+复制：
+
+```bash
+cp .env.example .env
+```
 
 ## 运行
 
 ```bash
 git clone https://github.com/www222fff/free-router.git
 cd free-router
-cp .env.example .env
-# 编辑 .env，填上你有的 Key
 ./start.sh
+# 打开 http://127.0.0.1:8787/ 登录，去渠道 tab 加 Key
 ```
 
-网关默认监听 `127.0.0.1:8787`。`./stop.sh` 停止。请用普通用户跑这两个
-脚本；如果以 root 启动，它们会 re-exec 到目录属主身份，拒绝保持 root。
+零配置就能起：没有配置文件就按内置默认生成。网关默认监听
+`127.0.0.1:8787`。`./stop.sh` 停止。请用普通用户跑这两个脚本；如果以
+root 启动，它们会 re-exec 到目录属主身份，拒绝保持 root。
 
 ## Docker 运行
 
 ```bash
 git clone https://github.com/www222fff/free-router.git
 cd free-router
-cp .env.example .env
-# 编辑 .env，填上你有的 Key
 docker compose up -d
+# 打开 http://127.0.0.1:8787/ 登录，去渠道 tab 加 Key
 ```
 
 网关默认在 `http://127.0.0.1:8787/v1` 可达，和非 Docker 一样；设置
@@ -305,8 +319,8 @@ OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers
 2. 把 `{ "provider": "<name>", "model": "<id>" }` 插进 `routes.free-best`
    想排的位置。裸字符串归 `defaultProvider`。
 3. 可选：`discovery.evaluation.pinnedModels` 里 `name:model` 置顶。
-4. `.env` 或 `~/.hermes/.env` 里设 `<NAME>_API_KEY`；URL 不一样用
-   `<NAME>_BASE_URL` 覆盖。
+4. Web UI（渠道 tab）里粘贴 `<NAME>_API_KEY`，或写进 `.env` /
+   `~/.hermes/.env`（文件方式）；URL 不一样用 `<NAME>_BASE_URL` 覆盖。
 5. 只有改了要重启的开关（`catalog`、`pricing`）才重启；Key、地址、
    白名单都是即时生效。
 
