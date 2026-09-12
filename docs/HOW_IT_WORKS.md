@@ -5,7 +5,8 @@ Technical reference. The short overview lives in the [README](../README.md).
 ## Requirements
 
 - Node.js 20+
-- An API key for at least one provider in `config.json`
+- An API key for at least one provider — in `.env`, or pasted in the web UI
+  (Providers tab), which stores it in the gitignored `config.local.json`
 
 A missing key just drops that provider from ranking.
 
@@ -67,11 +68,13 @@ cp .env.example .env
 docker compose up -d
 ```
 
-The gateway is reachable at `http://127.0.0.1:8787/v1`, the same address as
-the non-Docker run. Keys are injected at runtime from `.env` and never baked
-into the image. Weekly-discovery state is ephemeral: it lives inside the
-container and is reset on rebuild (the gateway re-discovers free models on
-the weekly schedule).
+The gateway is reachable at `http://127.0.0.1:8787/v1` by default; set
+`FREE_ROUTER_HOST=0.0.0.0` (already the Docker default) and publish the port
+to allow LAN access — but create a gateway API key and change the admin
+password first (see LAN access below). Keys are injected at runtime from
+`.env` and never baked into the image. Weekly-discovery state is ephemeral:
+it lives inside the container and is reset on rebuild (the gateway
+re-discovers free models on the weekly schedule).
 
 ```bash
 docker compose ps
@@ -107,12 +110,15 @@ See where requests actually landed, and how much of today's quota is left:
 
 ## Web interface
 
-Open <http://127.0.0.1:8787/> to set provider keys and read usage. A saved key
-is written to the env file and applied to the running process immediately, so
-no restart is needed.
+Open <http://127.0.0.1:8787/> and log in (default password `admin123`, change
+it in Settings → Admin). The interface has tabs for status, access keys,
+providers, routes, quotas, and settings, follows the browser language, and
+applies every change to the running process immediately — except host, port,
+and a few marked settings, which need a restart (there is a Restart button
+next to Save; under Docker the supervisor brings the server back up).
 
 ```json
-"ui": {
+"webui": {
   "enabled": true,
   "envFile": ".env"
 }
@@ -120,41 +126,109 @@ no restart is needed.
 
 Set `enabled: false` to remove `/` and `/api/*` entirely.
 
-### Why this needs care
+### Authentication model
 
-The router does not authenticate callers, and a page open in your browser can
-send requests to localhost. Since `start.sh` sources the env file with
-`set -a`, being able to write an arbitrary variable there would mean code
-execution on the next start. The write path is therefore constrained:
+There are two independent gates:
 
-- Keys are addressed **by provider name**, never by raw variable name. The
-  server resolves `keyEnv` from `config.json`, so nothing outside a configured
-  provider's key variable can ever be written.
+- **Web UI + management APIs** (`/`, `/api/*`): admin password login issuing
+  an `HttpOnly` session cookie. Sessions expire after
+  `webui.sessionTtlHours` (default 24, `0` means never, browser-session
+  cookie in that case). Changing the password revokes all sessions.
+- **Gateway API** (`/v1/*`): bearer keys once at least one exists (Access
+  tab). Without any gateway key, `/v1` stays open for local use.
+
+On top of authentication, browser-driven abuse is still filtered: cross-site
+requests per `Sec-Fetch-Site` are rejected, and a `Host` header pointing at a
+public domain (DNS rebinding) is rejected while loopback, LAN, and `.local`
+names are accepted. A plain `curl` call sends neither header and still works.
+
+### Why the key endpoints need care
+
+Since `start.sh` sources the env file with `set -a`, being able to write an
+arbitrary variable there would mean code execution on the next start. The
+write path is therefore constrained:
+
+- Provider keys are addressed **by provider name**, never by raw variable
+  name. The server resolves `keyEnv` from the merged config, so nothing
+  outside a configured provider's key variable can ever be written.
 - Values containing a newline or NUL are rejected, so one field cannot append
   a second assignment.
 - The env file is written atomically with mode `0600`, and an existing file is
   chmod'ed down to match.
-- `/` and `/api/*` require the peer to be on loopback, the `Host` header to be
-  a loopback name (blocking DNS rebinding), and the request not to be
-  cross-site per `Origin` / `Sec-Fetch-Site` (blocking CSRF). A plain `curl`
-  call sends neither header and still works.
-- Keys are returned masked, never in full.
+- Keys are returned masked, never in full (a new gateway key is shown once,
+  at creation).
 - The secret redactor is rebuilt after a key change, so a key added through the
   UI is still stripped from upstream payloads.
 
-The `/v1/*` endpoints are deliberately left unguarded so existing clients keep
-working unchanged.
+## LAN access
+
+1. Bind wider: `FREE_ROUTER_HOST=0.0.0.0` and publish the port
+   (`8787:8787` in `docker-compose.yml`, plus any host firewall rule).
+2. In the web UI, create a gateway API key (Access tab) and change the admin
+   password (Settings tab). The status tab links directly to both until done.
+3. Call `/v1/*` with `Authorization: Bearer <key>`; open the UI from any LAN
+   browser and log in.
+
+The admin password is stored as a salted scrypt hash, never plaintext.
+`FREE_ROUTER_WEBUI_PASSWORD` overrides it for emergency recovery.
+
+## Gateway API keys
+
+Named client credentials (`sk-fr-…`, shown once at creation) for anything
+calling `/v1/*`. Creating the first key enables auth; deleting the last one
+disables it again (or flip the switch in the Access title row — it refuses to
+enable with zero keys). Keys are checked on `/v1/models` and
+`/v1/chat/completions`; `/health` stays open for container probes.
+
+## Provider keys (multi-account)
+
+Each provider can hold any number of keys. Named keys live in
+`config.local.json` (UI-managed, with remarks); environment keys come from
+`<KEYENV>`, `<KEYENV>S`, or `<KEYENV>_KEYS` (comma-separated, auto-named,
+read-only in the UI). Effective order per request: file keys, then the single
+variable, then the plurals, deduplicated by value. Requests rotate across
+them; a `401` retires only that key, rate limits and timeouts cool down only
+that key, and the next key is tried before moving to the next model.
+
+On first boot, keys found in `.env` are imported into `config.local.json`
+once (named `migrated-N`) and removed from `.env`, with a dismissible notice
+in the UI. A personal `FREE_ROUTER_API_KEY` in `.env` additionally becomes a
+named gateway key (it stays in `.env` too, since `models.sh` needs it).
+
+## Layered configuration
+
+`config.json` holds defaults and stays merge-clean (byte-identical to
+upstream where possible). Everything the operator changes — via the web UI
+or the first-boot `.env` import — is written to the gitignored
+`config.local.json`, which the server deep-merges over defaults at startup
+(objects merge per key, arrays and scalars are replaced). The base file is
+never written at runtime.
+
+Consequences worth knowing:
+
+- `git pull` can never conflict with your settings, and your settings can
+  never leak into a commit.
+- Route and provider deletions are recorded as tombstones, so a base entry
+  you deleted stays deleted after upgrades.
+- Structural additions ship as additive-only schema migrations (new skeleton
+  keys, never touching your values), stamped with `_schemaVersion`.
+- Full precedence, highest first: process environment → `config.local.json`
+  → `config.json` → code defaults. `FREE_ROUTER_CONFIG` swaps the base file;
+  the overlay is always `config.local.json` next to it.
 
 ## Use with any OpenAI-compatible client
 
-The local server does not authenticate callers. Keep it bound to localhost.
-Upstream provider keys stay on the gateway.
+Point the client at the gateway and, when gateway auth is on, send any of
+your gateway keys as the bearer token (with auth off, any placeholder like
+`local` works). Upstream provider keys stay on the gateway. Keep a
+localhost-only bind if you never enabled auth.
 
 **curl**
 
 ```bash
 curl -s http://127.0.0.1:8787/v1/chat/completions \
   -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer sk-fr-...' \
   -d '{
     "model": "free-best",
     "messages": [{"role": "user", "content": "Reply with exactly: router-ok"}]
@@ -198,12 +272,23 @@ The selected upstream is returned in `X-Free-Router-Provider` and
 ## Endpoints
 
 ```text
-GET  /                       web interface
-GET  /api/state              providers (masked keys), usage, route priority
-POST /api/keys               { "provider": "gemini", "key": "..." }
+GET  /                       web interface (login required)
+POST /api/login              { "password": "..." } -> session cookie
+POST /api/logout             revoke current session
+GET  /api/state              full UI state (session required)
+POST /api/keys               provider keys: { "provider", "name"?, "key" }
+POST /api/gateway-keys       gateway keys: { "action": "create|delete|setRequireAuth", ... }
+POST /api/providers          { "action": "create|update|delete", ... }
+POST /api/routes             { "action": "save|delete", "route", "models" }
+POST /api/limits             daily limits: { "action": "set|delete", "key", "limit" }
+POST /api/discovery          discovery toggles, provider, interval, pins
+POST /api/settings           tuning knobs, session TTL, migration notice
+POST /api/webui-password     { "password": "..." } (stored hashed, revokes sessions)
+POST /api/server             { "host", "port" } (restart to apply)
+POST /api/restart            exit for supervisor restart (session required)
 GET  /health
-GET  /v1/models
-POST /v1/chat/completions
+GET  /v1/models              gateway key required once auth is on
+POST /v1/chat/completions    gateway key required once auth is on
 ```
 
 `GET /health` reports `version` from `package.json` (currently `1.0.0`). Releases are
@@ -224,17 +309,18 @@ curl -s http://127.0.0.1:8787/health | jq
 - `free-best`: one ranked list of models; the same model can be tried from
   more than one provider
 
-Edit `config.json` to change ordering, timeout, and cooldowns. Pin entries with
-`provider:model` in `discovery.evaluation.pinnedModels`. Models without a key,
-or that are no longer free, are skipped. IDs that differ only by org prefix or
-a `:free` suffix (for example `gemini-3.8-flash` and
+Reorder, add, or delete entries in the web UI (Routes tab) instead of editing
+files. Pin entries with `provider:model` in `discovery.evaluation.pinnedModels`.
+Models without a key, or that are no longer free, are skipped. IDs that differ
+only by org prefix or a `:free` suffix (for example `gemini-3.8-flash` and
 `google/gemini-3.8-flash:free`) count as the same model.
 
 ## Add a provider
 
 No code change is needed for an OpenAI-compatible `/chat/completions` endpoint.
 The registry in `providers.mjs` loads every block under `config.json`
-`providers`.
+`providers`. Easiest is the web UI (Providers tab → Add provider, name plus
+base URL); to do it by hand:
 
 1. Add a provider object. Set `"catalog": true` if it exposes `GET /models`.
    Add `"pricing": true` only when that response carries per-token prices;
@@ -242,9 +328,10 @@ The registry in `providers.mjs` loads every block under `config.json`
 2. Insert `{ "provider": "<name>", "model": "<id>" }` into `routes.free-best`
    where you want it ranked. Bare strings belong to `defaultProvider`.
 3. Optionally pin `name:model` in `discovery.evaluation.pinnedModels`.
-4. Set `<NAME>_API_KEY` in `.env` or `~/.hermes/.env`. Override the URL with
-   `<NAME>_BASE_URL` if needed.
-5. Restart.
+4. Set `<NAME>_API_KEY` in `.env` or `~/.hermes/.env`, or paste the key in the
+   web UI. Override the URL with `<NAME>_BASE_URL` if needed.
+5. Restart only if you changed flags that require it (`catalog`, `pricing`);
+   keys, URLs, and allowlists apply immediately.
 
 ```json
 "newvendor": {
@@ -517,7 +604,7 @@ journalctl --user -u free-router -f
    and a trailing `:free`, so a later free OpenRouter copy of a Google or
    B.AI model is tried immediately after the original instead of as a
    separate rank.
-3. Skips a provider when its API key is missing.
+3. Skips a provider when none of its API keys is usable.
 4. Refreshes catalog providers every 15 minutes.
 5. Collects newly free catalog text models every `discovery.intervalMs`, evaluates them, and inserts them
    into `free-best` by score. A catalog listing of a model that is already
@@ -527,10 +614,11 @@ journalctl --user -u free-router -f
 7. Removes models missing capabilities required by the request, such as tools
    or image input.
 8. Tries remaining candidates in that unified order.
-9. Applies per-provider/model cooldowns after rate limits, timeouts, server failures, and empty
-   successful responses.
+9. Applies per-provider/model/key cooldowns after rate limits, timeouts, server failures, and empty
+   successful responses. A `401` retires only that key; other keys keep serving.
 10. Before sending a request upstream, redacts values of `*_API_KEY` / `*_TOKEN` /
-   `*_SECRET` / `*_PASSWORD` from the local environment, and `NAME=...` assignment
+   `*_SECRET` / `*_PASSWORD` from the local environment (including provider
+   keys, gateway keys, and the admin password), and `NAME=...` assignment
    lines for those names. This cannot stop Hermes from reading `.env` locally; it
    only keeps those values out of OpenRouter, TokenRouter, and B.AI payloads.
 11. Buffers reasoning-only stream chunks. Nothing is sent to the client until a
