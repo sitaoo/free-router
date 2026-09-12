@@ -473,7 +473,7 @@ function verdictFor(key) {
 }
 
 // What the provider itself told us outranks any local allowlist, in both
-// directions: a list in user_config.toml is only ever a guess about someone else's
+// directions: a list in config.json is only ever a guess about someone else's
 // pricing, while a served request or a quota figure is a direct answer.
 function candidateIsFree(candidate) {
   const verdict = verdictFor(candidateKey(candidate));
@@ -496,7 +496,7 @@ function setModelVerdict(key, verdict) {
   scheduleStateSave();
 }
 
-// Models named in user_config.toml, either in a route or a provider allowlist.
+// Models named in config.json, either in a route or a provider allowlist.
 function configuredCandidateKeys() {
   const keys = new Set();
   for (const entries of Object.values(config.routes || {})) {
@@ -512,7 +512,7 @@ function configuredCandidateKeys() {
 // Only the verdicts that contradict something asked for. A probe finding that
 // some catalog model has no free tier is discovery working, not news: reporting
 // every one of those buries the single case that needs attention, a model
-// written into user_config.toml that the provider will not serve for free.
+// written into config.json that the provider will not serve for free.
 function rejectedConfiguredModels() {
   const configured = configuredCandidateKeys();
   return Object.keys(modelVerdicts)
@@ -521,7 +521,7 @@ function rejectedConfiguredModels() {
     .map((key) => ({ key, reason: modelVerdicts[key].reason || '' }));
 }
 
-// The provider's own number beats the hand-written one in user_config.toml.
+// The provider's own number beats the hand-written one in config.json.
 function learnedDailyLimit(key) {
   const learned = Number(modelVerdicts[key]?.dailyRequestLimit);
   return Number.isFinite(learned) && learned > 0 ? learned : null;
@@ -533,7 +533,7 @@ function discoveredCandidate(id) {
 
 // Narrow, domain-tuned models score well on a generic benchmark but are a poor
 // default for general traffic. Returns a reason string, or '' to keep the model.
-// Only applies to auto-discovered models; anything listed in user_config.toml stays.
+// Only applies to auto-discovered models; anything listed in config.json stays.
 function discoveryExclusionReason(id) {
   for (const pattern of EXCLUDE_MODEL_PATTERNS) {
     if (pattern.test(id)) return `model id matches /${pattern.source}/`;

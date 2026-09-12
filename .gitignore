@@ -1,9 +1,9 @@
 .env
 .env.local
-# Holds real API keys after the first boot (.env migration / web UI saves).
-user_config.toml
-# Legacy user file, auto-migrated to user_config.toml on boot.
+# One-time migration leftovers; the live file is the tracked config.json.
 config.toml
+config.toml.bak
+user_config.toml
 router.log
 router.pid
 discovered-free-models.json

@@ -318,48 +318,8 @@ export function stringifyToml(config) {
   return `${lines.join('\n').replace(/\n{3,}/g, '\n\n').trim()}\n`;
 }
 
-export const USER_CONFIG_FILENAME = 'user_config.toml';
-
 export function defaultConfigPath(here) {
-  const user = path.join(here, USER_CONFIG_FILENAME);
-  try {
-    if (fs.existsSync(user)) return user;
-  } catch {
-    // Fall through to legacy locations below.
-  }
-  // One-time upgrade from the legacy layout: adopt the old file's content
-  // as user_config.toml so there is exactly one user file afterwards.
-  const legacyToml = path.join(here, 'config.toml');
-  try {
-    if (fs.existsSync(legacyToml) && fs.statSync(legacyToml).isFile()) {
-      fs.copyFileSync(legacyToml, user);
-      try {
-        fs.chmodSync(user, 0o600);
-      } catch {
-        // Best effort; the file content matters more than its mode here.
-      }
-      console.log(`[${new Date().toISOString()}] migrated legacy config.toml to ${USER_CONFIG_FILENAME}`);
-      return user;
-    }
-  } catch {
-    // Unreadable legacy file: fall through and try reading it in place.
-  }
-  try {
-    if (fs.existsSync(legacyToml)) return legacyToml;
-  } catch {
-    // Ignore and fall through to the JSON legacy below.
-  }
-  const legacyJson = path.join(here, 'config.json');
-  try {
-    if (fs.existsSync(legacyJson) && fs.statSync(legacyJson).isFile()) {
-      saveConfigFile(user, loadConfigFile(legacyJson).config);
-      console.log(`[${new Date().toISOString()}] migrated legacy config.json to ${USER_CONFIG_FILENAME}`);
-      return user;
-    }
-  } catch {
-    // Ignore and fall through to a fresh default below.
-  }
-  return user;
+  return path.join(here, 'config.json');
 }
 
 export function loadConfigFile(configPath) {

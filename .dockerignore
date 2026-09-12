@@ -4,6 +4,7 @@
 # Never bake the host's real keys into the image.
 user_config.toml
 config.toml
+config.toml.bak
 node_modules
 discovered-free-models.json
 router.log

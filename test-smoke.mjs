@@ -58,7 +58,7 @@ const googleCatalog = normalizeCatalogPayload({
   ],
 });
 assert.equal(googleCatalog.shape, 'google');
-// The "models/" prefix is dropped so catalog IDs match what user_config.toml and
+// The "models/" prefix is dropped so catalog IDs match what config.json and
 // the chat endpoint use.
 assert.deepEqual(
   googleCatalog.models.map((model) => model.id),
@@ -1529,7 +1529,7 @@ try {
   assert.ok(authedState.usage.models.length > 0);
   assert.ok(authedState.routes.length > 0);
 
-  // The interface warns about a rejection only when it contradicts user_config.toml.
+  // The interface warns about a rejection only when it contradicts config.json.
   // quotamock:no-free-tier was written into the route by hand, so its refusal is
   // worth surfacing; bai's glm-5.3-paid was merely a probe candidate, and
   // listing every one of those would bury the case that needs attention.
