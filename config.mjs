@@ -455,7 +455,7 @@ export function defaultConfigObject() {
         { provider: 'bai', model: 'mimo-v2.5' },
       ],
     },
-    webui: { enabled: true, envFile: '.env', password: 'admin' },
+    webui: { enabled: true, envFile: '.env', password: 'admin123' },
     gateway: { requireAuth: false, keys: [] },
   };
 }

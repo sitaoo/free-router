@@ -165,10 +165,10 @@ const USAGE_DAY_FORMATTER = (() => {
 const uiConfig = config.webui || config.ui || {};
 const UI_ENABLED = uiConfig.enabled !== false;
 const UI_ENV_PATH = path.resolve(path.dirname(CONFIG_PATH), uiConfig.envFile || '.env');
-// Web UI single admin password (default "admin"). Env override wins so a
+// Web UI single admin password (default "admin123"). Env override wins so a
 // locked-out operator can recover without editing the config file.
 const webuiPassword = () =>
-  String(process.env.FREE_ROUTER_WEBUI_PASSWORD || uiConfig.password || config.ui?.password || 'admin');
+  String(process.env.FREE_ROUTER_WEBUI_PASSWORD || uiConfig.password || config.ui?.password || 'admin123');
 // Login session TTL in hours (default 24, 0 = never expires).
 const sessionTtlHours = () => {
   const raw = Number(config.webui?.sessionTtlHours ?? 24);
@@ -2127,7 +2127,7 @@ async function handleKeyUpdate(req, res) {
 }
 
 function randomGatewayKey() {
-  return `fr-${crypto.randomBytes(24).toString('base64url')}`;
+  return `sk-fr-${crypto.randomBytes(24).toString('base64url')}`;
 }
 
 // Gateway client keys (downstream). Creating the first key enables auth;
@@ -2843,7 +2843,7 @@ async function handler(req, res) {
           })),
         },
         webui: {
-          defaultPassword: webuiPassword() === 'admin',
+          defaultPassword: webuiPassword() === 'admin123',
           sessionTtlHours: sessionTtlHours(),
           sessionExpiresAt: (() => {
             const expiresAt = webuiSessions.get(webuiSessionToken(req));
@@ -2994,7 +2994,7 @@ server.listen(PORT, HOST, async () => {
   } else {
     log('warning: gateway auth is disabled; anyone on the network can call /v1');
   }
-  if (webuiPassword() === 'admin') log('warning: web UI still uses the default password "admin"');
+  if (webuiPassword() === 'admin123') log('warning: web UI still uses the default password "admin123"');
   for (const provider of PROVIDERS.values()) {
     if (!registry.hasUsableKey(provider)) log(`warning: ${provider.keyEnv} is missing`);
     else if (provider.apiKeys.length > 1) log(`${provider.name}: ${provider.apiKeys.length} keys configured`);

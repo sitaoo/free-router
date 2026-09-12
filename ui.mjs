@@ -536,7 +536,7 @@ select {
     <section>
       <div class="sec-head">
         <h2 data-i18n="admin_title">Admin</h2>
-        <p data-i18n="admin_blurb">Web UI password (default <span class="mono">admin</span>). Changing it logs out all sessions.</p>
+        <p data-i18n="admin_blurb">Web UI password (default <span class="mono">admin123</span>). Changing it logs out all sessions.</p>
       </div>
       <div class="sec-body">
         <div class="row">
@@ -561,7 +561,7 @@ select {
       <h2 style="margin:0 0 4px">Free Router</h2>
       <p class="note" style="margin:0 0 14px" data-i18n="login_blurb">Enter the admin password to continue.</p>
       <div class="row">
-        <input id="login-pass" type="password" data-i18n-ph="login_pass_ph" placeholder="Admin password (default admin)" style="flex:1">
+        <input id="login-pass" type="password" data-i18n-ph="login_pass_ph" placeholder="Admin password (default admin123)" style="flex:1">
         <button class="primary" id="login-go" data-i18n="login_go">Log in</button>
       </div>
     </div></section>

@@ -1478,7 +1478,7 @@ try {
   const loginResponse = await fetch(`${base}/api/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password: 'admin' }),
+    body: JSON.stringify({ password: 'admin123' }),
   });
   assert.equal(loginResponse.status, 200);
   const sessionCookie = String(loginResponse.headers.get('set-cookie') || '').split(';')[0];
