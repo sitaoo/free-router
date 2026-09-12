@@ -7,10 +7,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  buildLiveConfig,
   defaultConfigPath,
   ensureConfigFile,
+  isPlainObject,
   loadConfigFile,
-  saveConfigFile,
+  loadOverlayFile,
+  OVERLAY_FILENAME,
+  resolveConfigPaths,
+  runOverlayMigrations,
+  saveOverlayFile,
 } from './config.mjs';
 import { hashPassword, isPasswordHash, verifyPassword } from './auth.mjs';
 import {
@@ -62,6 +68,7 @@ for (const file of envCandidates) {
 }
 
 const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || defaultConfigPath(HERE);
+const { overlayPath: OVERLAY_PATH } = resolveConfigPaths(HERE, process.env.FREE_ROUTER_CONFIG);
 try {
   // Docker creates a directory for a volume-mounted file that does not exist
   // on the host yet; replace it with a real default config instead of
@@ -75,13 +82,71 @@ try {
 if (ensureConfigFile(CONFIG_PATH)) {
   console.log(`[${new Date().toISOString()}] wrote default config to ${CONFIG_PATH}; set keys in the web UI`);
 }
-const { config, format: CONFIG_FORMAT } = loadConfigFile(CONFIG_PATH);
-config.webui ||= {};
-config.gateway ||= {};
-if (!Array.isArray(config.gateway.keys)) config.gateway.keys = [];
-// Persist runtime mutations back in the format we loaded (TOML preferred).
-function persistConfig() {
-  saveConfigFile(CONFIG_PATH, config);
+// Layered config: config.json (tracked defaults) + config.local.json
+// (gitignored operator overlay). The live view merges both; only the
+// overlay file is ever written back, so the base stays merge-clean.
+const { config: baseConfig, format: CONFIG_FORMAT } = loadConfigFile(CONFIG_PATH);
+const overlayLoaded = loadOverlayFile(OVERLAY_PATH);
+let overlay = overlayLoaded.overlay;
+if (overlayLoaded.error) {
+  log(`ignoring unreadable overlay ${displayPath(OVERLAY_PATH)}: ${overlayLoaded.error}`);
+}
+if (runOverlayMigrations(overlay)) persistOverlayFile();
+const config = buildLiveConfig(baseConfig, overlay);
+// Live-view-only normalization (memory, never persisted): the overlay file
+// stays sparse until a real mutation lands through the helpers below.
+if (!isPlainObject(config.webui)) config.webui = {};
+if (!isPlainObject(config.gateway)) config.gateway = {};
+if (!Array.isArray(config.gateway.keys)) config.gateway = { ...config.gateway, keys: [] };
+// Write helpers below always target the overlay object, so a base-owned
+// subtree is materialized there on first write (copy-on-write) and the base
+// file is never touched at runtime.
+function overlayParent(path) {
+  let overlayNode = overlay;
+  let liveNode = config;
+  for (const key of path.slice(0, -1)) {
+    if (!isPlainObject(overlayNode[key])) overlayNode[key] = {};
+    if (!isPlainObject(liveNode[key])) liveNode[key] = {};
+    overlayNode = overlayNode[key];
+    liveNode = liveNode[key];
+  }
+  return [overlayNode, liveNode];
+}
+function setOverlayValue(path, value) {
+  const [overlayNode, liveNode] = overlayParent(path);
+  const leaf = path[path.length - 1];
+  overlayNode[leaf] = value;
+  liveNode[leaf] = value;
+}
+function deleteOverlayValue(path) {
+  const [overlayNode, liveNode] = overlayParent(path);
+  const leaf = path[path.length - 1];
+  delete overlayNode[leaf];
+  delete liveNode[leaf];
+}
+// Provider raw blocks need whole-object ownership (nested partial updates
+// like freeModels/baseUrl must not orphan sibling keys from the live view).
+function editableProviderRaw(name) {
+  overlay.providers ||= {};
+  if (!isPlainObject(overlay.providers[name])) {
+    overlay.providers[name] = structuredClone(config.providers?.[name] || {});
+  }
+  const raw = overlay.providers[name];
+  const provider = PROVIDERS.get(name);
+  if (provider) provider.configRef = raw;
+  config.providers ||= {};
+  config.providers[name] = raw;
+  return raw;
+}
+function persistOverlayFile() {
+  saveOverlayFile(OVERLAY_PATH, overlay);
+}
+function tombstone(listKey, name, present) {
+  if (!Array.isArray(overlay[listKey])) overlay[listKey] = [];
+  const key = String(name);
+  const index = overlay[listKey].indexOf(key);
+  if (present && index < 0) overlay[listKey].push(key);
+  if (!present && index >= 0) overlay[listKey].splice(index, 1);
 }
 installUpstreamProxy(
   (message) => {
@@ -188,13 +253,13 @@ function isDefaultPassword() {
 }
 
 function setStoredWebuiPassword(value, { persist = true } = {}) {
-  config.webui ||= {};
-  config.webui.password = value;
-  if (config.ui && typeof config.ui === 'object') config.ui.password = value;
+  // Readers prefer config.webui over the legacy config.ui mirror, so the
+  // overlay copy alone is authoritative; the tracked base file is untouched.
+  setOverlayValue(['webui', 'password'], value);
   defaultPwCache.key = null;
   if (!persist) return true;
   try {
-    persistConfig();
+    persistOverlayFile();
   } catch (error) {
     log(`could not persist web UI password: ${error instanceof Error ? error.message : String(error)}`);
     return false;
@@ -241,9 +306,9 @@ function pruneWebuiSessions() {
 let secretRedactor = config.redactSecrets === false ? null : createSecretRedactor(redactorEnv());
 
 // The redactor snapshots secrets at build time, so keys added through the
-// UI would otherwise never be stripped from upstream payloads. TOML-stored
-// provider keys and gateway keys are not in process.env, so they are merged
-// in under synthetic names the redactor recognises as secrets.
+// UI would otherwise never be stripped from upstream payloads. Overlay-
+// stored provider keys and gateway keys are not in process.env, so they are
+// merged in under synthetic names the redactor recognises as secrets.
 function redactorEnv() {
   const merged = { ...process.env };
   let index = 0;
@@ -271,10 +336,10 @@ function refreshSecretRedactor() {
 }
 
 // One-time legacy migration: on the first boot with no migration record,
-// import provider keys found in the .env file into the TOML/JSON config so
-// the file becomes the single source of truth afterwards. Imported vars are
-// removed from .env (their values already live in the config); the web UI
-// shows a notice with what was moved.
+// import provider keys found in the .env file into the overlay so
+// config.local.json becomes the single place user data lives afterwards.
+// Imported vars are removed from .env (their values already live in the
+// overlay); the web UI shows a notice with what was moved.
 function parseEnvAssignments(text) {
   const vars = new Map();
   for (const line of String(text || '').split(/\r?\n/)) {
@@ -336,6 +401,7 @@ function migrateEnvFileOnce() {
       }
       if (fresh.length) {
         const named = fresh.map((key, i) => ({ name: `migrated-${i + 1}`, key }));
+        editableProviderRaw(provider.name);
         registry.setProviderKeys(provider.name, [...fileKeys, ...named]);
         summary.providers[provider.name] = fresh.length;
       }
@@ -346,9 +412,10 @@ function migrateEnvFileOnce() {
     const clientEffective = String(process.env.FREE_ROUTER_API_KEY || '');
     const clientKey = clientEffective || clientFileKey;
     if (clientKey && !gatewayKeys().length) {
-      config.gateway ||= {};
-      config.gateway.keys = [{ name: 'migrated', key: clientKey, createdAt: new Date().toISOString() }];
-      config.gateway.requireAuth = true;
+      setOverlayValue(['gateway', 'keys'], [
+        { name: 'migrated', key: clientKey, createdAt: new Date().toISOString() },
+      ]);
+      setOverlayValue(['gateway', 'requireAuth'], true);
       summary.gateway = 1;
     }
     if (Object.keys(clearVars).length && envFileExisted) {
@@ -366,16 +433,16 @@ function migrateEnvFileOnce() {
       for (const provider of PROVIDERS.values()) registry.refreshKeysFromEnv(provider.name);
     }
   }
-  config.migratedFromEnv = summary;
+  setOverlayValue(['migratedFromEnv'], summary);
   try {
-    persistConfig();
+    persistOverlayFile();
   } catch (error) {
     log(`env migration: could not persist config: ${error instanceof Error ? error.message : String(error)}`);
   }
   refreshSecretRedactor();
   const imported = Object.values(summary.providers).reduce((a, b) => a + b, 0);
   if (imported || summary.gateway) {
-    log(`migrated ${imported} provider key(s) and ${summary.gateway} gateway key(s) from ${displayPath(UI_ENV_PATH)} into config; the config file is now the source of truth`);
+    log(`migrated ${imported} provider key(s) and ${summary.gateway} gateway key(s) from ${displayPath(UI_ENV_PATH)} into ${OVERLAY_FILENAME}; the overlay file is now where user data lives`);
   }
 }
 
@@ -2145,20 +2212,20 @@ async function handleKeyUpdate(req, res) {
     return sendJson(res, 400, { error: { message: problem, type: 'invalid_request_error' } });
   }
 
-  // Named path: file-backed multi-account keys -> config file.
+  // Named path: file-backed multi-account keys -> overlay file.
   if (keyName) {
     const next = providerFileKeys(name)
       .filter((entry) => String(entry?.name || '') !== keyName)
       .map((entry) => ({ name: String(entry.name), key: String(entry.key || '') }));
     if (key) next.push({ name: keyName, key });
-    config.providers[name].keys = next;
+    editableProviderRaw(name);
     registry.setProviderKeys(name, next);
     try {
-      persistConfig();
+      persistOverlayFile();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       return sendJson(res, 500, {
-        error: { message: `could not write config file: ${reason}`, type: 'config_write_failed' },
+        error: { message: `could not write ${OVERLAY_FILENAME}: ${reason}`, type: 'config_write_failed' },
       });
     }
     refreshSecretRedactor();
@@ -2210,22 +2277,20 @@ async function handleGatewayKeys(req, res) {
     return sendJson(res, 400, { error: { message: String(error), type: 'invalid_request_error' } });
   }
   const action = String(body.action || 'create');
-  config.gateway ||= {};
-  if (!Array.isArray(config.gateway.keys)) config.gateway.keys = [];
-
   if (action === 'setRequireAuth') {
-    config.gateway.requireAuth = Boolean(body.requireAuth);
-    if (config.gateway.requireAuth && !gatewayKeys().length) {
+    setOverlayValue(['gateway', 'requireAuth'], Boolean(body.requireAuth));
+    if (gatewayAuthRequired() && !gatewayKeys().length) {
+      setOverlayValue(['gateway', 'requireAuth'], false);
       return sendJson(res, 400, {
         error: { message: 'create at least one API key before enabling auth', type: 'invalid_request_error' },
       });
     }
     try {
-      persistConfig();
+      persistOverlayFile();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       return sendJson(res, 500, {
-        error: { message: `could not write config file: ${reason}`, type: 'config_write_failed' },
+        error: { message: `could not write ${OVERLAY_FILENAME}: ${reason}`, type: 'config_write_failed' },
       });
     }
     refreshSecretRedactor();
@@ -2234,18 +2299,18 @@ async function handleGatewayKeys(req, res) {
 
   if (action === 'delete') {
     const keyName = String(body.name || '');
-    const before = config.gateway.keys.length;
-    config.gateway.keys = config.gateway.keys.filter((entry) => entry?.name !== keyName);
-    if (config.gateway.keys.length === before) {
+    const kept = gatewayKeys().filter((entry) => entry?.name !== keyName);
+    if (kept.length === gatewayKeys().length) {
       return sendJson(res, 404, { error: { message: `unknown key: ${keyName}`, type: 'not_found' } });
     }
-    if (!config.gateway.keys.length) config.gateway.requireAuth = false;
+    setOverlayValue(['gateway', 'keys'], kept);
+    if (!kept.length) setOverlayValue(['gateway', 'requireAuth'], false);
     try {
-      persistConfig();
+      persistOverlayFile();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       return sendJson(res, 500, {
-        error: { message: `could not write config file: ${reason}`, type: 'config_write_failed' },
+        error: { message: `could not write ${OVERLAY_FILENAME}: ${reason}`, type: 'config_write_failed' },
       });
     }
     refreshSecretRedactor();
@@ -2258,7 +2323,7 @@ async function handleGatewayKeys(req, res) {
     if (!keyName) {
       return sendJson(res, 400, { error: { message: 'name is required', type: 'invalid_request_error' } });
     }
-    if (config.gateway.keys.some((entry) => entry?.name === keyName)) {
+    if (gatewayKeys().some((entry) => entry?.name === keyName)) {
       return sendJson(res, 400, { error: { message: `key already exists: ${keyName}`, type: 'invalid_request_error' } });
     }
     const value = typeof body.key === 'string' && body.key.trim() ? body.key.trim() : randomGatewayKey();
@@ -2266,14 +2331,17 @@ async function handleGatewayKeys(req, res) {
     if (problem) {
       return sendJson(res, 400, { error: { message: problem, type: 'invalid_request_error' } });
     }
-    config.gateway.keys.push({ name: keyName, key: value, createdAt: new Date().toISOString() });
-    config.gateway.requireAuth = true;
+    setOverlayValue(['gateway', 'keys'], [
+      ...gatewayKeys(),
+      { name: keyName, key: value, createdAt: new Date().toISOString() },
+    ]);
+    setOverlayValue(['gateway', 'requireAuth'], true);
     try {
-      persistConfig();
+      persistOverlayFile();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       return sendJson(res, 500, {
-        error: { message: `could not write config file: ${reason}`, type: 'config_write_failed' },
+        error: { message: `could not write ${OVERLAY_FILENAME}: ${reason}`, type: 'config_write_failed' },
       });
     }
     refreshSecretRedactor();
@@ -2301,7 +2369,7 @@ async function handleWebuiPassword(req, res) {
   config.webui ||= {};
   if (!setStoredWebuiPassword(hashPassword(password))) {
     return sendJson(res, 500, {
-      error: { message: 'could not write config file', type: 'config_write_failed' },
+      error: { message: `could not write ${OVERLAY_FILENAME}`, type: 'config_write_failed' },
     });
   }
   webuiSessions.clear();
@@ -2323,7 +2391,7 @@ async function handleServerConfig(req, res) {
     if (!host) {
       return sendJson(res, 400, { error: { message: 'host is required', type: 'invalid_request_error' } });
     }
-    config.host = host;
+    setOverlayValue(['host'], host);
     notes.push('host saved; restart to take effect');
   }
   if (body.port !== undefined) {
@@ -2331,15 +2399,15 @@ async function handleServerConfig(req, res) {
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       return sendJson(res, 400, { error: { message: 'port must be 1-65535', type: 'invalid_request_error' } });
     }
-    config.port = port;
+    setOverlayValue(['port'], port);
     notes.push('port saved; restart to take effect');
   }
   try {
-    persistConfig();
+    persistOverlayFile();
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     return sendJson(res, 500, {
-      error: { message: `could not write config file: ${reason}`, type: 'config_write_failed' },
+      error: { message: `could not write ${OVERLAY_FILENAME}: ${reason}`, type: 'config_write_failed' },
     });
   }
   return sendJson(res, 200, { ok: true, host: config.host, port: config.port, notes });
@@ -2418,11 +2486,11 @@ function editableConfigState() {
 
 function persistOrFail(res) {
   try {
-    persistConfig();
+    persistOverlayFile();
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     sendJson(res, 500, {
-      error: { message: `could not write config file: ${reason}`, type: 'config_write_failed' },
+      error: { message: `could not write ${OVERLAY_FILENAME}: ${reason}`, type: 'config_write_failed' },
     });
     return false;
   }
@@ -2477,14 +2545,14 @@ async function handleProviders(req, res) {
       freeModels,
       keys: [],
     };
-    config.providers ||= {};
-    config.providers[name] = cfg;
+    setOverlayValue(['providers', name], cfg);
     try {
       registry.addProvider(name, cfg);
     } catch (error) {
-      delete config.providers[name];
+      deleteOverlayValue(['providers', name]);
       return sendJson(res, 400, { error: { message: String(error.message || error), type: 'invalid_request_error' } });
     }
+    tombstone('_removedProviders', name, false);
     if (!persistOrFail(res)) return undefined;
     refreshSecretRedactor();
     if (cfg.catalog) {
@@ -2509,13 +2577,15 @@ async function handleProviders(req, res) {
     } catch (error) {
       return sendJson(res, 400, { error: { message: String(error.message || error), type: 'invalid_request_error' } });
     }
-    delete config.providers[name];
+    deleteOverlayValue(['providers', name]);
+    tombstone('_removedProviders', name, true);
     let purged = 0;
     for (const [routeName, entries] of Object.entries(config.routes || {})) {
       if (!Array.isArray(entries)) continue;
       const kept = entries.filter((entry) => normalizeCandidate(entry).provider !== name);
+      if (kept.length === entries.length) continue;
       purged += entries.length - kept.length;
-      config.routes[routeName] = kept;
+      setOverlayValue(['routes', routeName], kept);
     }
     if (!persistOrFail(res)) return undefined;
     refreshSecretRedactor();
@@ -2525,7 +2595,7 @@ async function handleProviders(req, res) {
 
   if (action === 'update') {
     const notes = [];
-    const cfg = config.providers[name] && typeof config.providers[name] === 'object' ? config.providers[name] : {};
+    const cfg = editableProviderRaw(name);
     if (body.baseUrl !== undefined) {
       const baseUrl = String(body.baseUrl || '').trim().replace(/\/+$/, '');
       if (!validHttpUrl(baseUrl)) {
@@ -2533,7 +2603,6 @@ async function handleProviders(req, res) {
       }
       cfg.baseUrl = baseUrl;
       provider.baseUrl = baseUrl;
-      provider.configRef.baseUrl = baseUrl;
       notes.push('baseUrl updated');
     }
     if (body.freeModels !== undefined) {
@@ -2543,7 +2612,6 @@ async function handleProviders(req, res) {
       const list = [...new Set(body.freeModels.map((m) => String(m || '').trim()).filter(Boolean))];
       cfg.freeModels = list;
       provider.freeModels = new Set(list);
-      provider.configRef.freeModels = list;
       notes.push('freeModels updated');
     }
     if (body.catalog !== undefined) {
@@ -2558,7 +2626,7 @@ async function handleProviders(req, res) {
       cfg.probeFreeTier = body.probeFreeTier === true;
       notes.push('probeFreeTier saved; restart to take effect');
     }
-    config.providers[name] = cfg;
+    // cfg is already the overlay-owned raw (see editableProviderRaw above).
     if (!persistOrFail(res)) return undefined;
     if (body.baseUrl !== undefined && provider.usesCatalog) {
       try {
@@ -2597,6 +2665,7 @@ async function handleRoutes(req, res) {
       return sendJson(res, 404, { error: { message: `unknown route: ${route}`, type: 'not_found' } });
     }
     delete config.routes[route];
+    tombstone('_removedRoutes', route, true);
     if (!persistOrFail(res)) return undefined;
     log(`deleted route ${route} via web interface`);
     return sendJson(res, 200, { ok: true });
@@ -2627,16 +2696,14 @@ async function handleRoutes(req, res) {
       }
       if (!provider.catalogHasPricing && !provider.freeModels.has(entry.model)) {
         provider.freeModels.add(entry.model);
-        const cfg = config.providers[entry.provider];
-        if (cfg && typeof cfg === 'object') {
-          cfg.freeModels = [...provider.freeModels];
-        }
+        const cfg = editableProviderRaw(entry.provider);
+        cfg.freeModels = [...provider.freeModels];
         notes.push(`added ${entry.model} to ${entry.provider} freeModels`);
       }
     }
   }
-  config.routes ||= {};
-  config.routes[route] = parsed;
+  setOverlayValue(['routes', route], parsed);
+  tombstone('_removedRoutes', route, false);
   if (!persistOrFail(res)) return undefined;
   log(`saved route ${route} via web interface (${parsed.length} entries)`);
   return sendJson(res, 200, { ok: true, route, count: parsed.length, notes });
@@ -2655,10 +2722,8 @@ async function handleLimits(req, res) {
   if (!key) {
     return sendJson(res, 400, { error: { message: 'key is required, e.g. "gemini:gemini-3.8-flash"', type: 'invalid_request_error' } });
   }
-  config.usage ||= {};
-  config.usage.dailyLimits ||= {};
   if (action === 'delete') {
-    delete config.usage.dailyLimits[key];
+    deleteOverlayValue(['usage', 'dailyLimits', key]);
     if (!persistOrFail(res)) return undefined;
     return sendJson(res, 200, { ok: true });
   }
@@ -2669,7 +2734,7 @@ async function handleLimits(req, res) {
   if (!Number.isFinite(limit) || limit <= 0) {
     return sendJson(res, 400, { error: { message: 'limit must be a positive number', type: 'invalid_request_error' } });
   }
-  config.usage.dailyLimits[key] = limit;
+  setOverlayValue(['usage', 'dailyLimits', key], limit);
   if (!persistOrFail(res)) return undefined;
   return sendJson(res, 200, { ok: true, key, limit });
 }
@@ -2684,15 +2749,13 @@ async function handleDiscovery(req, res) {
     return sendJson(res, 400, { error: { message: String(error), type: 'invalid_request_error' } });
   }
   const notes = [];
-  config.discovery ||= {};
   if (body.enabled !== undefined) {
     discoveryEnabled = body.enabled !== false;
-    config.discovery.enabled = discoveryEnabled;
+    setOverlayValue(['discovery', 'enabled'], discoveryEnabled);
   }
   if (body.evaluationEnabled !== undefined) {
     evaluationEnabled = body.evaluationEnabled !== false;
-    config.discovery.evaluation ||= {};
-    config.discovery.evaluation.enabled = evaluationEnabled;
+    setOverlayValue(['discovery', 'evaluation', 'enabled'], evaluationEnabled);
   }
   if (body.provider !== undefined) {
     const name = String(body.provider || '');
@@ -2701,19 +2764,18 @@ async function handleDiscovery(req, res) {
     } catch (error) {
       return sendJson(res, 400, { error: { message: String(error.message || error), type: 'invalid_request_error' } });
     }
-    config.discovery.provider = name;
+    setOverlayValue(['discovery', 'provider'], name);
   }
   if (body.intervalHours !== undefined) {
     const hours = Number(body.intervalHours);
     if (!Number.isFinite(hours) || hours < 1 || hours > 720) {
       return sendJson(res, 400, { error: { message: 'intervalHours must be 1-720', type: 'invalid_request_error' } });
     }
-    config.discovery.intervalMs = Math.round(hours * 3600000);
+    setOverlayValue(['discovery', 'intervalMs'], Math.round(hours * 3600000));
     notes.push('interval saved; restart to take effect');
   }
   if (body.pin !== undefined || body.unpin !== undefined) {
-    config.discovery.evaluation ||= {};
-    const pinned = new Set(config.discovery.evaluation.pinnedModels || [...PINNED_MODELS]);
+    const pinned = new Set(config.discovery?.evaluation?.pinnedModels || [...PINNED_MODELS]);
     if (body.pin) {
       const model = String(body.pin).trim();
       if (!model) {
@@ -2726,7 +2788,7 @@ async function handleDiscovery(req, res) {
       pinned.delete(String(body.unpin));
       PINNED_MODELS.delete(String(body.unpin));
     }
-    config.discovery.evaluation.pinnedModels = [...pinned];
+    setOverlayValue(['discovery', 'evaluation', 'pinnedModels'], [...pinned]);
   }
   if (!persistOrFail(res)) return undefined;
   return sendJson(res, 200, { ok: true, notes });
@@ -2748,7 +2810,7 @@ async function handleSettings(req, res) {
       return sendJson(res, 400, { error: { message: 'attemptTimeoutMs must be 5000-900000', type: 'invalid_request_error' } });
     }
     attemptTimeoutMs = value;
-    config.attemptTimeoutMs = value;
+    setOverlayValue(['attemptTimeoutMs'], value);
   }
   if (body.catalogRefreshMs !== undefined) {
     const value = Number(body.catalogRefreshMs);
@@ -2756,17 +2818,17 @@ async function handleSettings(req, res) {
       return sendJson(res, 400, { error: { message: 'catalogRefreshMs must be 60000-86400000', type: 'invalid_request_error' } });
     }
     catalogRefreshMs = value;
-    config.catalogRefreshMs = value;
+    setOverlayValue(['catalogRefreshMs'], value);
   }
   if (body.redactSecrets !== undefined) {
-    config.redactSecrets = body.redactSecrets !== false;
+    setOverlayValue(['redactSecrets'], body.redactSecrets !== false);
     refreshSecretRedactor();
   }
   if (body.socksFirstHosts !== undefined) {
     if (!Array.isArray(body.socksFirstHosts)) {
       return sendJson(res, 400, { error: { message: 'socksFirstHosts must be an array', type: 'invalid_request_error' } });
     }
-    config.socksFirstHosts = body.socksFirstHosts.map((h) => String(h || '').trim()).filter(Boolean);
+    setOverlayValue(['socksFirstHosts'], body.socksFirstHosts.map((h) => String(h || '').trim()).filter(Boolean));
     notes.push('socksFirstHosts saved; restart to take effect');
   }
   if (body.defaultProvider !== undefined) {
@@ -2776,20 +2838,18 @@ async function handleSettings(req, res) {
     } catch (error) {
       return sendJson(res, 400, { error: { message: String(error.message || error), type: 'invalid_request_error' } });
     }
-    config.defaultProvider = name;
+    setOverlayValue(['defaultProvider'], name);
   }
   if (body.retentionDays !== undefined) {
     const value = Number(body.retentionDays);
     if (!Number.isInteger(value) || value < 1 || value > 90) {
       return sendJson(res, 400, { error: { message: 'retentionDays must be 1-90', type: 'invalid_request_error' } });
     }
-    config.usage ||= {};
-    config.usage.retentionDays = value;
+    setOverlayValue(['usage', 'retentionDays'], value);
     notes.push('retentionDays saved; restart to take effect');
   }
   if (body.timezone !== undefined) {
-    config.usage ||= {};
-    config.usage.timezone = String(body.timezone || '');
+    setOverlayValue(['usage', 'timezone'], String(body.timezone || ''));
     notes.push('timezone saved; restart to take effect');
   }
   if (body.sessionTtlHours !== undefined) {
@@ -2797,12 +2857,11 @@ async function handleSettings(req, res) {
     if (!Number.isFinite(value) || value < 0 || value > 8760) {
       return sendJson(res, 400, { error: { message: 'sessionTtlHours must be 0-8760 (0 = never expires)', type: 'invalid_request_error' } });
     }
-    config.webui ||= {};
-    config.webui.sessionTtlHours = value;
+    setOverlayValue(['webui', 'sessionTtlHours'], value);
     notes.push(value === 0 ? 'sessions never expire' : `sessions expire after ${value} hour(s); existing sessions keep their old expiry`);
   }
   if (body.dismissMigrationNotice === true) {
-    delete config.migratedFromEnv;
+    deleteOverlayValue(['migratedFromEnv']);
   }
   if (!persistOrFail(res)) return undefined;
   return sendJson(res, 200, { ok: true, notes });
@@ -2898,6 +2957,7 @@ async function handler(req, res) {
         envFile: displayPath(UI_ENV_PATH),
         configFile: displayPath(CONFIG_PATH),
         configFormat: CONFIG_FORMAT,
+        overlayFile: displayPath(OVERLAY_PATH),
         route: DISCOVERY_ROUTE,
         server: { host: config.host, port: config.port, runningHost: HOST, runningPort: PORT },
         gateway: {

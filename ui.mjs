@@ -974,7 +974,7 @@ function renderProviders() {
     row.appendChild(actions);
     host.appendChild(row);
   }
-  el('keys-blurb').textContent = t('keys_blurb', { file: state.configFile, format: state.configFormat });
+  el('keys-blurb').textContent = t('keys_blurb', { file: state.overlayFile, format: state.configFormat });
 }
 
 function renderGateway() {

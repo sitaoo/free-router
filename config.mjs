@@ -322,6 +322,126 @@ export function defaultConfigPath(here) {
   return path.join(here, 'config.json');
 }
 
+// The user layer. config.json (tracked) holds defaults; this file
+// (gitignored) holds everything the operator changed. The server merges
+// them at boot and persists only this file.
+export const OVERLAY_FILENAME = 'config.local.json';
+
+export function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function cloneValue(value) {
+  return value === undefined ? undefined : structuredClone(value);
+}
+
+// Deep merge for the boot-time view: plain objects recurse, everything else
+// (scalars, arrays) comes from the overlay when present, else the base.
+// Base-only branches are cloned so runtime code can never mutate the base
+// objects in memory; overlay branches are shared by reference so targeted
+// writes land in the overlay object that gets persisted.
+export function deepMerge(base, over) {
+  if (over === undefined) return cloneValue(base);
+  if (!isPlainObject(base) || !isPlainObject(over)) return over;
+  const merged = {};
+  for (const [key, value] of Object.entries(base)) {
+    merged[key] = Object.prototype.hasOwnProperty.call(over, key)
+      ? deepMerge(value, over[key])
+      : cloneValue(value);
+  }
+  for (const [key, value] of Object.entries(over)) {
+    if (!Object.prototype.hasOwnProperty.call(merged, key)) merged[key] = value;
+  }
+  return merged;
+}
+
+// Additive-only merge for schema updates: copies keys missing in `target`
+// from `defaults`, never overwrites or deletes what the operator set.
+// This is what keeps structural updates non-destructive.
+export function addMissingKeys(target, defaults) {
+  if (!isPlainObject(defaults)) return false;
+  if (!isPlainObject(target)) return false;
+  let changed = false;
+  for (const [key, value] of Object.entries(defaults)) {
+    if (!Object.prototype.hasOwnProperty.call(target, key)) {
+      target[key] = cloneValue(value);
+      changed = true;
+    } else if (isPlainObject(target[key]) && isPlainObject(value)) {
+      changed = addMissingKeys(target[key], value) || changed;
+    }
+  }
+  return changed;
+}
+
+// Schema version of the overlay file. Bump when new structural fields are
+// introduced and append a migration step that adds ONLY the new skeleton
+// (addMissingKeys semantics: user values are never touched).
+export const SCHEMA_VERSION = 1;
+const OVERLAY_MIGRATIONS = [
+  // v1: baseline marker. The live code tolerates absent sections, so the
+  // first version needs no structural backfill.
+];
+
+export function runOverlayMigrations(overlay) {
+  if (!isPlainObject(overlay)) return false;
+  let changed = false;
+  const current = Number(overlay._schemaVersion || 0);
+  for (const step of OVERLAY_MIGRATIONS) {
+    if (step.version <= current) continue;
+    if (step.addDefaults) changed = addMissingKeys(overlay, step.addDefaults) || changed;
+  }
+  if (current !== SCHEMA_VERSION) {
+    overlay._schemaVersion = SCHEMA_VERSION;
+    changed = true;
+  }
+  return changed;
+}
+
+export function resolveConfigPaths(here, customPath) {
+  const basePath = customPath || path.join(here, 'config.json');
+  return { basePath, overlayPath: path.join(path.dirname(basePath), OVERLAY_FILENAME) };
+}
+
+// Reads the overlay file; missing or corrupt files behave as an empty
+// overlay (the returned error lets the caller log it once).
+export function loadOverlayFile(overlayPath) {
+  try {
+    if (!fs.existsSync(overlayPath)) return { overlay: {}, error: '' };
+    const raw = fs.readFileSync(overlayPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!isPlainObject(parsed)) return { overlay: {}, error: 'overlay is not an object' };
+    return { overlay: parsed, error: '' };
+  } catch (error) {
+    return { overlay: {}, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export function saveOverlayFile(overlayPath, overlay) {
+  try {
+    fs.mkdirSync(path.dirname(overlayPath), { recursive: true });
+  } catch {
+    // The directory normally exists; a failure surfaces on write below.
+  }
+  saveConfigFile(overlayPath, overlay);
+}
+
+// Builds the live view: base defaults + overlay, minus anything the
+// operator deleted (tombstones in overlay._removedRoutes/_removedProviders
+// keep deletions sticky across restarts, since the base file still lists them).
+export function buildLiveConfig(base, overlay) {
+  const merged = deepMerge(base || {}, overlay || {});
+  if (!isPlainObject(merged)) return {};
+  const removedRoutes = overlay?._removedRoutes;
+  if (Array.isArray(removedRoutes) && isPlainObject(merged.routes)) {
+    for (const name of removedRoutes) delete merged.routes[String(name)];
+  }
+  const removedProviders = overlay?._removedProviders;
+  if (Array.isArray(removedProviders) && isPlainObject(merged.providers)) {
+    for (const name of removedProviders) delete merged.providers[String(name)];
+  }
+  return merged;
+}
+
 export function loadConfigFile(configPath) {
   const raw = fs.readFileSync(configPath, 'utf8');
   if (configPath.endsWith('.toml')) return { config: parseToml(raw), format: 'toml' };

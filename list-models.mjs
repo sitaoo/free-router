@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defaultConfigPath } from './config.mjs';
+import { buildLiveConfig, defaultConfigPath, loadConfigFile, loadOverlayFile } from './config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -30,31 +30,17 @@ for (const file of [path.join(HERE, '.env'), path.join(os.homedir(), '.hermes', 
 }
 
 const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || defaultConfigPath(HERE);
+// Same layered view as the server: tracked defaults + operator overlay.
 function loadConfigLite(configPath) {
   if (!fs.existsSync(configPath)) return {};
-  const raw = fs.readFileSync(configPath, 'utf8');
-  if (configPath.endsWith('.toml')) {
-    const get = (section, key) => {
-      const sectionMatch = raw.match(new RegExp(`\\[${section}\\][^\\[]*?^${key}\\s*=\\s*(.+)$`, 'm'));
-      return sectionMatch ? sectionMatch[1].trim().replace(/^"|"$/g, '') : '';
-    };
-    const top = (key, fallback = '') => {
-      const match = raw.match(new RegExp(`^${key}\\s*=\\s*(.+)$`, 'm'));
-      if (!match) return fallback;
-      const value = match[1].trim();
-      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-        return value.slice(1, -1);
-      }
-      const num = Number(value);
-      return Number.isFinite(num) && value !== '' ? num : value;
-    };
-    return {
-      host: top('host', '127.0.0.1'),
-      port: top('port', 8787),
-      discovery: { route: get('discovery', 'route') || 'free-best' },
-    };
+  try {
+    const base = loadConfigFile(configPath).config;
+    const overlayPath = path.join(path.dirname(configPath), 'config.local.json');
+    const { overlay } = loadOverlayFile(overlayPath);
+    return buildLiveConfig(base, overlay);
+  } catch {
+    return {};
   }
-  return JSON.parse(raw);
 }
 const config = loadConfigLite(CONFIG_PATH);
 const GATEWAY_KEY = process.env.FREE_ROUTER_API_KEY || '';

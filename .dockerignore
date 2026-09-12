@@ -2,6 +2,7 @@
 .env
 .env.local
 # Never bake the host's real keys into the image.
+config.local.json
 user_config.toml
 config.toml
 config.toml.bak

@@ -11,10 +11,12 @@ A missing key just drops that provider from ranking.
 
 ## Configure API keys
 
-Provider keys live in `config.json` (gitignored, never committed) or in the
+Provider keys live in `config.local.json` (gitignored, never committed) or in the
 environment. On first boot, keys found in `.env` are imported into
-`config.json` automatically. Copy the example file, uncomment the keys
-you have, and fill them in:
+`config.local.json` automatically. `config.json` holds defaults only and stays
+merge-clean; the server deep-merges both at startup (objects recurse, arrays
+and scalars come from the overlay when present). Copy the example file,
+uncomment the keys you have, and fill them in:
 
 ```bash
 cp .env.example .env

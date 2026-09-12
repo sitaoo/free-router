@@ -21,7 +21,14 @@ import {
 } from './thought-signature.mjs';
 import { displayPath, maskSecret, validateSecret } from './ui.mjs';
 import { hashPassword, isPasswordHash, verifyPassword } from './auth.mjs';
-import { defaultConfigObject } from './config.mjs';
+import {
+  addMissingKeys,
+  buildLiveConfig,
+  deepMerge,
+  defaultConfigObject,
+  runOverlayMigrations,
+  SCHEMA_VERSION,
+} from './config.mjs';
 
 const PACKAGE_VERSION = JSON.parse(
   fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'package.json'), 'utf8'),
@@ -264,6 +271,53 @@ assert.equal(validateSecret('sk-normal-key'), '');
   assert.equal(verifyPassword('x', '$scrypt$broken'), false);
   assert.equal(verifyPassword('x', '$scrypt$N=16384$r=8$p=1$zz$zz'), false);
   assert.notEqual(hashPassword('same'), hashPassword('same'));
+}
+
+// Layered config: base defaults + sparse overlay, tombstones for deletions,
+// additive-only schema migrations.
+{
+  const base = {
+    host: '127.0.0.1',
+    nested: { keep: 1, overrideMe: 'base' },
+    list: ['a', 'b'],
+    routes: { r1: ['x'], r2: ['y'] },
+    providers: { p1: { baseUrl: 'https://a', freeModels: ['m'] } },
+  };
+  // Overlay wins per key; arrays replace wholesale; base-only branches are
+  // cloned so mutating the live view never touches base objects.
+  const merged = deepMerge(base, { nested: { overrideMe: 'user' }, list: ['c'] });
+  assert.deepEqual(merged, {
+    host: '127.0.0.1',
+    nested: { keep: 1, overrideMe: 'user' },
+    list: ['c'],
+    routes: { r1: ['x'], r2: ['y'] },
+    providers: { p1: { baseUrl: 'https://a', freeModels: ['m'] } },
+  });
+  merged.nested.keep = 99;
+  merged.providers.p1.freeModels.push('zzz');
+  assert.equal(base.nested.keep, 1);
+  assert.deepEqual(base.providers.p1.freeModels, ['m']);
+  // Tombstones keep operator deletions sticky across restarts.
+  const live = buildLiveConfig(base, {
+    routes: { r3: ['z'] },
+    _removedRoutes: ['r1'],
+    _removedProviders: ['p1'],
+  });
+  assert.deepEqual(Object.keys(live.routes).sort(), ['r2', 'r3']);
+  assert.deepEqual(live.providers, {});
+  // Schema migrations only add missing skeleton keys, never overwrite.
+  const overlay = { custom: 'mine', nested: { overrideMe: 'user' } };
+  assert.equal(runOverlayMigrations(overlay), true);
+  assert.equal(overlay._schemaVersion, SCHEMA_VERSION);
+  assert.equal(
+    runOverlayMigrations(overlay),
+    false,
+    'second run is a no-op',
+  );
+  const target = { a: 1, nested: { x: 1 } };
+  assert.equal(addMissingKeys(target, { a: 2, b: 3, nested: { x: 2, y: 4 } }), true);
+  assert.deepEqual(target, { a: 1, b: 3, nested: { x: 1, y: 4 } });
+  assert.equal(addMissingKeys(target, { a: 1, b: 3, nested: { x: 1, y: 4 } }), false);
 }
 
 assert.equal(providerNeedsThoughtSignatures({ name: 'gemini', baseUrl: 'http://127.0.0.1' }), true);
@@ -1759,9 +1813,14 @@ try {
     body: JSON.stringify({ password: 's3cret-newpw' }),
   });
   assert.equal(pwChange.status, 200);
-  const persistedConfig = fs.readFileSync(testConfig, 'utf8');
-  assert.match(persistedConfig, /\$scrypt\$/);
-  assert.equal(persistedConfig.includes('s3cret-newpw'), false);
+  // The hash lands in the overlay file; the tracked base config is untouched.
+  const overlayPath = path.join(tempDir, 'config.local.json');
+  const persistedOverlay = fs.readFileSync(overlayPath, 'utf8');
+  assert.match(persistedOverlay, /\$scrypt\$/);
+  assert.equal(persistedOverlay.includes('s3cret-newpw'), false);
+  const persistedBase = fs.readFileSync(testConfig, 'utf8');
+  assert.equal(persistedBase.includes('$scrypt$'), false);
+  assert.equal(persistedBase.includes('s3cret-newpw'), false);
   const staleLogin = await fetch(`${base}/api/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

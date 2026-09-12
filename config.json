@@ -8,10 +8,9 @@
     "generativelanguage.googleapis.com"
   ],
   "defaultProvider": "openrouter",
-  "webui": {
+  "ui": {
     "enabled": true,
-    "envFile": ".env",
-    "password": "admin123"
+    "envFile": ".env"
   },
   "providers": {
     "gemini": {

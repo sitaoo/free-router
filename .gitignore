@@ -1,5 +1,8 @@
 .env
 .env.local
+# Operator overlay: everything changed via WebUI/.env migration lands here.
+# The tracked config.json stays pristine (defaults only).
+config.local.json
 # One-time migration leftovers; the live file is the tracked config.json.
 config.toml
 config.toml.bak
