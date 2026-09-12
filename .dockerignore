@@ -1,6 +1,8 @@
 .git
 .env
 .env.local
+# Never bake the host's real keys into the image.
+config.toml
 node_modules
 discovered-free-models.json
 router.log

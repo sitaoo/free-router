@@ -1,5 +1,7 @@
 .env
 .env.local
+# Holds real API keys after the first boot (.env migration / web UI saves).
+config.toml
 router.log
 router.pid
 discovered-free-models.json
