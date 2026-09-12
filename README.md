@@ -11,6 +11,7 @@ over when one is rate-limited, down, or empty. A missing key just drops that
 provider.
 
 Site: [www222fff.github.io/free-router](https://www222fff.github.io/free-router/)
+中文文档：[docs/zh-CN/README.md](docs/zh-CN/README.md)
 
 ## Run
 
