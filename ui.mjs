@@ -219,6 +219,11 @@ tbody tr:hover { background: #fafbfc; }
 }
 #tabs button.active:hover { background: #0954b5; }
 
+/* Tab panes stack their cards with a fixed gap (main's grid gap does not
+   reach inside the pane wrapper). */
+[data-pane] { display: grid; gap: 10px; align-content: start; }
+[data-pane][hidden] { display: none; }
+
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
 .card {
   border: 1px solid var(--line-soft); border-radius: 10px; padding: 12px 14px;
@@ -256,6 +261,8 @@ select {
 /* Title row with a trailing switch (Access pane). */
 .head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .head-row > div { flex: 1; min-width: 0; }
+.title-switch { display: flex; align-items: center; gap: 10px; }
+.title-switch .switch { margin-top: 0; }
 .switch { position: relative; display: inline-block; width: 44px; height: 24px; flex: none; margin-top: 2px; }
 .switch input { opacity: 0; width: 0; height: 0; }
 .switch .slider {
@@ -355,12 +362,9 @@ select {
 
   <div data-pane="access" hidden>
     <section>
-      <div class="sec-head head-row">
-        <div>
-          <h2 data-i18n="access_title">Access</h2>
-          <p data-i18n="access_blurb">Gateway API keys for LAN clients (send as <span class="mono">Authorization: Bearer &lt;key&gt;</span> on <span class="mono">/v1/*</span>). Creating the first key enables auth; deleting the last one disables it.</p>
-        </div>
-        <label class="switch" data-i18n-title="require_auth"><input type="checkbox" id="gw-require"><span class="slider"></span></label>
+      <div class="sec-head">
+        <h2 class="title-switch"><span data-i18n="access_title">API key access</span> <label class="switch" data-i18n-title="require_auth"><input type="checkbox" id="gw-require"><span class="slider"></span></label></h2>
+        <p data-i18n="access_blurb">Gateway API keys for LAN clients (send as <span class="mono">Authorization: Bearer &lt;key&gt;</span> on <span class="mono">/v1/*</span>). Creating the first key enables auth; deleting the last one disables it.</p>
       </div>
       <div class="sec-body">
         <div id="gateway"></div>
@@ -506,7 +510,10 @@ select {
           <button class="quiet" id="logout" data-i18n="logout">Log out</button>
         </div>
         <div class="row">
-          <label><span data-i18n="sess_ttl">Session expires after (hours, 0 = never)</span> <input id="sess-ttl" class="mono" style="max-width:90px"></label>
+          <label><span data-i18n="sess_ttl">Session expires after (hours, 0 = never)</span>
+            <select id="sess-preset"></select>
+            <input id="sess-ttl" class="mono" style="max-width:90px">
+          </label>
           <button id="sess-save" data-i18n="sess_save">Save session</button>
         </div>
         <p class="note" id="sess-note"></p>
@@ -1253,8 +1260,31 @@ function renderMigration() {
   banner.appendChild(dismiss);
 }
 
+const SESS_PRESETS = [
+  [1, 'sess_p1h'],
+  [12, 'sess_p12h'],
+  [24, 'sess_p24h'],
+  [168, 'sess_p7d'],
+  [720, 'sess_p30d'],
+  [0, 'sess_pnever'],
+];
+
 function renderSession() {
   el('sess-ttl').value = state.webui.sessionTtlHours;
+  const select = el('sess-preset');
+  select.textContent = '';
+  for (const [hours, labelKey] of SESS_PRESETS) {
+    const option = document.createElement('option');
+    option.value = String(hours);
+    option.textContent = t(labelKey);
+    select.appendChild(option);
+  }
+  const custom = document.createElement('option');
+  custom.value = 'custom';
+  custom.textContent = t('sess_pcustom');
+  select.appendChild(custom);
+  const current = String(state.webui.sessionTtlHours);
+  select.value = SESS_PRESETS.some(([hours]) => String(hours) === current) ? current : 'custom';
   el('sess-note').textContent = state.webui.sessionExpiresAt
     ? t('sess_expires', { at: state.webui.sessionExpiresAt })
     : t('sess_never');
@@ -1338,6 +1368,15 @@ function bindOnce() {
     } catch (error) {
       toast(String(error.message || error), 'err');
     }
+  };
+  el('sess-preset').onchange = () => {
+    const value = el('sess-preset').value;
+    if (value === 'custom') {
+      el('sess-ttl').focus();
+      el('sess-ttl').select();
+      return;
+    }
+    el('sess-ttl').value = value;
   };
   el('sess-save').onclick = async () => {
     try {

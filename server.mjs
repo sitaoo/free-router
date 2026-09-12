@@ -61,6 +61,16 @@ for (const file of envCandidates) {
 }
 
 const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || defaultConfigPath(HERE);
+try {
+  // Docker creates a directory for a volume-mounted file that does not exist
+  // on the host yet; replace it with a real default config instead of
+  // crashing on read.
+  if (fs.existsSync(CONFIG_PATH) && fs.statSync(CONFIG_PATH).isDirectory()) {
+    fs.rmSync(CONFIG_PATH, { recursive: true, force: true });
+  }
+} catch {
+  // Fall through to the normal load path, which reports the problem.
+}
 if (ensureConfigFile(CONFIG_PATH)) {
   console.log(`[${new Date().toISOString()}] wrote default config to ${CONFIG_PATH}; set keys in the web UI`);
 }
@@ -226,9 +236,11 @@ function parseEnvAssignments(text) {
 
 function migrateEnvFileOnce() {
   if (config.migratedFromEnv) return;
+  let envFileExisted = false;
   let fileVars = new Map();
   try {
-    if (fs.existsSync(UI_ENV_PATH)) fileVars = parseEnvAssignments(fs.readFileSync(UI_ENV_PATH, 'utf8'));
+    envFileExisted = fs.existsSync(UI_ENV_PATH);
+    if (envFileExisted) fileVars = parseEnvAssignments(fs.readFileSync(UI_ENV_PATH, 'utf8'));
   } catch {
     fileVars = new Map();
   }
@@ -284,7 +296,7 @@ function migrateEnvFileOnce() {
       config.gateway.requireAuth = true;
       summary.gateway = 1;
     }
-    if (Object.keys(clearVars).length) {
+    if (Object.keys(clearVars).length && envFileExisted) {
       try {
         updateEnvFile(UI_ENV_PATH, clearVars);
         for (const name of Object.keys(clearVars)) delete process.env[name];
@@ -292,6 +304,11 @@ function migrateEnvFileOnce() {
       } catch (error) {
         log(`env migration: could not clean ${displayPath(UI_ENV_PATH)}: ${error instanceof Error ? error.message : String(error)}`);
       }
+    } else if (Object.keys(clearVars).length) {
+      // No .env file (e.g. docker env_file injects variables without one):
+      // drop the migrated values from this process so TOML stays canonical.
+      for (const name of Object.keys(clearVars)) delete process.env[name];
+      for (const provider of PROVIDERS.values()) registry.refreshKeysFromEnv(provider.name);
     }
   }
   config.migratedFromEnv = summary;
