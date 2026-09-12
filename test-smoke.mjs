@@ -21,6 +21,7 @@ import {
 } from './thought-signature.mjs';
 import { displayPath, maskSecret, validateSecret } from './ui.mjs';
 import { hashPassword, isPasswordHash, verifyPassword } from './auth.mjs';
+import { defaultConfigObject } from './config.mjs';
 
 const PACKAGE_VERSION = JSON.parse(
   fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'package.json'), 'utf8'),
@@ -57,7 +58,7 @@ const googleCatalog = normalizeCatalogPayload({
   ],
 });
 assert.equal(googleCatalog.shape, 'google');
-// The "models/" prefix is dropped so catalog IDs match what config.json and
+// The "models/" prefix is dropped so catalog IDs match what user_config.toml and
 // the chat endpoint use.
 assert.deepEqual(
   googleCatalog.models.map((model) => model.id),
@@ -94,11 +95,11 @@ assert.equal(normalizeCatalogPayload({ weird: true }).shape, 'unknown');
 
 // `generateContent` is necessary but not sufficient: Google serves images,
 // speech, and music through the same method, so the exclusion patterns in
-// config.json carry the rest. These are the real IDs the live listing returns.
+// the default config carry the rest. These are the real IDs the live listing returns.
 {
-  const patterns = JSON.parse(
-    fs.readFileSync(new URL('config.json', import.meta.url), 'utf8'),
-  ).discovery.exclude.modelPatterns.map((source) => new RegExp(source, 'i'));
+  const patterns = defaultConfigObject().discovery.exclude.modelPatterns.map(
+    (source) => new RegExp(source, 'i'),
+  );
   const excluded = (id) => patterns.some((pattern) => pattern.test(`gemini:${id}`));
 
   for (const id of [
@@ -1528,7 +1529,7 @@ try {
   assert.ok(authedState.usage.models.length > 0);
   assert.ok(authedState.routes.length > 0);
 
-  // The interface warns about a rejection only when it contradicts config.json.
+  // The interface warns about a rejection only when it contradicts user_config.toml.
   // quotamock:no-free-tier was written into the route by hand, so its refusal is
   // worth surfacing; bai's glm-5.3-paid was merely a probe candidate, and
   // listing every one of those would bury the case that needs attention.

@@ -236,7 +236,7 @@ export function createProviderRegistry(config, { host, port }) {
   }
 
   // Providers disagree on how to spell the same model: Gemini's OpenAI-compat
-  // catalog returns "models/gemini-3.8-flash" where config.json says
+  // catalog returns "models/gemini-3.8-flash" where user_config.toml says
   // "gemini-3.8-flash". Fall back to the slug so a naming difference does not
   // read as a model that vanished upstream.
   function catalogEntry(provider, modelId) {

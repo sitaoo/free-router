@@ -34,7 +34,7 @@ Stop with `./stop.sh`. Docker: `docker compose up -d`. Open
 | `TOKENROUTER_API_KEY` | TokenRouter |
 | `BAI_API_KEY` | [chat.b.ai](https://chat.b.ai) |
 
-More providers: add a block in `config.json`. See [How it works](docs/HOW_IT_WORKS.md).
+More providers: add a block in `user_config.toml`. See [How it works](docs/HOW_IT_WORKS.md).
 
 ```bash
 ./models.sh          # current free-best order

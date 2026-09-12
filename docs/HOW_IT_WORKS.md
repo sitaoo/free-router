@@ -5,14 +5,16 @@ Technical reference. The short overview lives in the [README](../README.md).
 ## Requirements
 
 - Node.js 20+
-- An API key for at least one provider in `config.json`
+- An API key for at least one provider in `user_config.toml`
 
 A missing key just drops that provider from ranking.
 
 ## Configure API keys
 
-Keys are never stored in `config.json` or committed to git. Copy the example
-file, uncomment the keys you have, and fill them in:
+Provider keys live in `user_config.toml` (gitignored, never committed) or in the
+environment. On first boot, keys found in `.env` are imported into
+`user_config.toml` automatically. Copy the example file, uncomment the keys
+you have, and fill them in:
 
 ```bash
 cp .env.example .env
@@ -124,7 +126,7 @@ send requests to localhost. Since `start.sh` sources the env file with
 execution on the next start. The write path is therefore constrained:
 
 - Keys are addressed **by provider name**, never by raw variable name. The
-  server resolves `keyEnv` from `config.json`, so nothing outside a configured
+  server resolves `keyEnv` from `user_config.toml`, so nothing outside a configured
   provider's key variable can ever be written.
 - Values containing a newline or NUL are rejected, so one field cannot append
   a second assignment.
@@ -220,7 +222,7 @@ curl -s http://127.0.0.1:8787/health | jq
 - `free-best`: one ranked list of models; the same model can be tried from
   more than one provider
 
-Edit `config.json` to change ordering, timeout, and cooldowns. Pin entries with
+Edit `user_config.toml` to change ordering, timeout, and cooldowns. Pin entries with
 `provider:model` in `discovery.evaluation.pinnedModels`. Models without a key,
 or that are no longer free, are skipped. IDs that differ only by org prefix or
 a `:free` suffix (for example `gemini-3.8-flash` and
@@ -229,7 +231,7 @@ a `:free` suffix (for example `gemini-3.8-flash` and
 ## Add a provider
 
 No code change is needed for an OpenAI-compatible `/chat/completions` endpoint.
-The registry in `providers.mjs` loads every block under `config.json`
+The registry in `providers.mjs` loads every block under `user_config.toml`
 `providers`.
 
 1. Add a provider object. Set `"catalog": true` if it exposes `GET /models`.
@@ -348,7 +350,7 @@ does not expire, because ordinary traffic revisits it and a later refusal
 replaces it.
 
 Verdicts outrank `freeModels` in both directions. That is the point: an
-allowlist in `config.json` is a guess about someone else's pricing, while a
+allowlist in `user_config.toml` is a guess about someone else's pricing, while a
 quota figure is that provider stating its own terms.
 
 The candidate list is narrowed before anything is sent. Google's native listing
@@ -361,7 +363,7 @@ model they resolve to.
 
 ### Daily limits the provider reported
 
-`usage.dailyLimits` in `config.json` is a starting guess. When a provider
+`usage.dailyLimits` in `user_config.toml` is a starting guess. When a provider
 refuses a request and states the real allowance, that number replaces the
 configured one for that model. `/health` marks which is in use: `reported` came
 from the provider, `configured` is still the local guess.
@@ -382,7 +384,7 @@ keeps those out:
   and `description`. This is the more durable check, because a vendor's naming
   suffix changes but the description keeps saying what the model is for.
 
-Two boundaries are deliberate. Anything listed in `config.json` routes is
+Two boundaries are deliberate. Anything listed in `user_config.toml` routes is
 exempt, so an explicit entry always beats the filter. And exclusion only
 removes a model from automatic ranking: it stays in `GET /v1/models` and can
 still be called by its exact ID, since naming it is a deliberate choice.
@@ -398,7 +400,7 @@ is the way to bury a model whose automatic score you do not trust.
 
 If a routed catalog model becomes paid, disappears, or stops qualifying as a
 text chat model, the next catalog check removes it from every effective route
-automatically. It remains in `config.json` as ranking history and becomes
+automatically. It remains in `user_config.toml` as ranking history and becomes
 active again only if that catalog lists it as free in the future.
 
 Candidates from a `static` provider stay in the ranking as long as they are
@@ -409,7 +411,7 @@ reported under `discovery.unavailableModels`.
 Discovery and evaluation state is stored in `discovered-free-models.json` and
 survives service restarts. That file is gitignored.
 
-Configure the schedule and destination route in `config.json`:
+Configure the schedule and destination route in `user_config.toml`:
 
 ```json
 "discovery": {

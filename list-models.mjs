@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { defaultConfigPath } from './config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -28,8 +29,7 @@ for (const file of [path.join(HERE, '.env'), path.join(os.homedir(), '.hermes', 
   loadEnvFile(file);
 }
 
-const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG
-  || (fs.existsSync(path.join(HERE, 'config.toml')) ? path.join(HERE, 'config.toml') : path.join(HERE, 'config.json'));
+const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || defaultConfigPath(HERE);
 function loadConfigLite(configPath) {
   if (!fs.existsSync(configPath)) return {};
   const raw = fs.readFileSync(configPath, 'utf8');

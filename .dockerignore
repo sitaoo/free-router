@@ -2,6 +2,7 @@
 .env
 .env.local
 # Never bake the host's real keys into the image.
+user_config.toml
 config.toml
 node_modules
 discovered-free-models.json

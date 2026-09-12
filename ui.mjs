@@ -561,7 +561,7 @@ select {
       <h2 style="margin:0 0 4px">Free Router</h2>
       <p class="note" style="margin:0 0 14px" data-i18n="login_blurb">Enter the admin password to continue.</p>
       <div class="row">
-        <input id="login-pass" type="password" data-i18n-ph="login_pass_ph" placeholder="Admin password (default admin123)" style="flex:1">
+        <input id="login-pass" type="password" data-i18n-ph="login_pass_ph" placeholder="Default admin123" style="flex:1">
         <button class="primary" id="login-go" data-i18n="login_go">Log in</button>
       </div>
     </div></section>

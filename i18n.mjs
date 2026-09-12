@@ -56,7 +56,7 @@ export const STRINGS = {
 en: {
   tab_status: "Status", tab_access: "Access", tab_providers: "Providers", tab_routes: "Routes", tab_quota: "Quota", tab_settings: "Settings",
   logout: "Log out",
-  login_blurb: "Enter the admin password to continue.", login_pass_ph: "Admin password (default admin123)", login_go: "Log in",
+  login_blurb: "Enter the admin password to continue.", login_pass_ph: "Default admin123", login_go: "Log in",
   overview: "Overview", route_priority: "Route priority", usage_today: "Usage today",
   card_endpoint: "endpoint", card_config: "config", card_gateway: "gateway auth", card_nokey: "providers without key", card_adminpw: "admin password",
   gw_on: "required ({n} keys)", gw_off_keys: "keys exist, not required", gw_off: "disabled — /v1 is open to the whole network",
@@ -171,7 +171,7 @@ en: {
 "zh-CN": {
   tab_status: "状态", tab_access: "访问", tab_providers: "上游", tab_routes: "路由", tab_quota: "配额", tab_settings: "设置",
   logout: "登出", lang_name: "语言",
-  login_blurb: "输入管理员密码以继续。", login_pass_ph: "管理员密码（默认 admin123）", login_go: "登录",
+  login_blurb: "输入管理员密码以继续。", login_pass_ph: "Default admin123", login_go: "登录",
   overview: "概览", route_priority: "路由优先级", usage_today: "今日用量",
   card_endpoint: "接口地址", card_config: "配置文件", card_gateway: "网关鉴权", card_nokey: "未配置 Key 的渠道", card_adminpw: "管理密码",
   gw_on: "已启用（{n} 个 Key）", gw_off_keys: "有 Key 但未启用", gw_off: "未启用——/v1 对全网开放",
@@ -286,7 +286,7 @@ en: {
 "zh-TW": {
   tab_status: "狀態", tab_access: "存取", tab_providers: "上游", tab_routes: "路由", tab_quota: "配額", tab_settings: "設定",
   logout: "登出", lang_name: "語言",
-  login_blurb: "輸入管理員密碼以繼續。", login_pass_ph: "管理員密碼（預設 admin123）", login_go: "登入",
+  login_blurb: "輸入管理員密碼以繼續。", login_pass_ph: "Default admin123", login_go: "登入",
   overview: "總覽", route_priority: "路由優先順序", usage_today: "今日用量",
   card_endpoint: "介面位址", card_config: "設定檔", card_gateway: "閘道鑑權", card_nokey: "未設定 Key 的管道", card_adminpw: "管理密碼",
   gw_on: "已啟用（{n} 組 Key）", gw_off_keys: "有 Key 但未啟用", gw_off: "未啟用——/v1 對全網開放",
@@ -401,7 +401,7 @@ en: {
 "ja": {
   tab_status: "ステータス", tab_access: "アクセス", tab_providers: "プロバイダー", tab_routes: "ルート", tab_quota: "クォータ", tab_settings: "設定",
   logout: "ログアウト", lang_name: "言語",
-  login_blurb: "管理者パスワードを入力してください。", login_pass_ph: "管理者パスワード（既定値 admin123）", login_go: "ログイン",
+  login_blurb: "管理者パスワードを入力してください。", login_pass_ph: "Default admin123", login_go: "ログイン",
   overview: "概要", route_priority: "ルート優先度", usage_today: "今日の使用量",
   card_endpoint: "エンドポイント", card_config: "設定ファイル", card_gateway: "ゲートウェイ認証", card_nokey: "キー未設定のプロバイダー", card_adminpw: "管理者パスワード",
   gw_on: "有効（{n} 件のキー）", gw_off_keys: "キーはあるが無効", gw_off: "無効 — /v1 はネットワーク全体に公開",
@@ -516,7 +516,7 @@ en: {
 "ko": {
   tab_status: "상태", tab_access: "액세스", tab_providers: "프로바이더", tab_routes: "경로", tab_quota: "할당량", tab_settings: "설정",
   logout: "로그아웃", lang_name: "언어",
-  login_blurb: "관리자 비밀번호를 입력하세요.", login_pass_ph: "관리자 비밀번호(기본값 admin123)", login_go: "로그인",
+  login_blurb: "관리자 비밀번호를 입력하세요.", login_pass_ph: "Default admin123", login_go: "로그인",
   overview: "개요", route_priority: "경로 우선순위", usage_today: "오늘 사용량",
   card_endpoint: "엔드포인트", card_config: "설정 파일", card_gateway: "게이트웨이 인증", card_nokey: "키 미설정 프로바이더", card_adminpw: "관리자 비밀번호",
   gw_on: "필요({n}개 키)", gw_off_keys: "키는 있으나 미적용", gw_off: "비활성화 — /v1이 전체 네트워크에 공개",
@@ -631,7 +631,7 @@ en: {
 "es": {
   tab_status: "Estado", tab_access: "Acceso", tab_providers: "Proveedores", tab_routes: "Rutas", tab_quota: "Cuota", tab_settings: "Ajustes",
   logout: "Cerrar sesión", lang_name: "Idioma",
-  login_blurb: "Introduce la contraseña de administrador.", login_pass_ph: "Contraseña de administrador (admin123)", login_go: "Iniciar sesión",
+  login_blurb: "Introduce la contraseña de administrador.", login_pass_ph: "Default admin123", login_go: "Iniciar sesión",
   overview: "Resumen", route_priority: "Prioridad de rutas", usage_today: "Uso de hoy",
   card_endpoint: "endpoint", card_config: "config", card_gateway: "auth del gateway", card_nokey: "proveedores sin clave", card_adminpw: "contraseña admin",
   gw_on: "requerida ({n} claves)", gw_off_keys: "hay claves, no requerida", gw_off: "desactivada — /v1 abierto a toda la red",
@@ -746,7 +746,7 @@ en: {
 "fr": {
   tab_status: "Statut", tab_access: "Accès", tab_providers: "Fournisseurs", tab_routes: "Routes", tab_quota: "Quota", tab_settings: "Paramètres",
   logout: "Déconnexion", lang_name: "Langue",
-  login_blurb: "Entrez le mot de passe admin.", login_pass_ph: "Mot de passe admin (admin123)", login_go: "Se connecter",
+  login_blurb: "Entrez le mot de passe admin.", login_pass_ph: "Default admin123", login_go: "Se connecter",
   overview: "Aperçu", route_priority: "Priorité des routes", usage_today: "Usage du jour",
   card_endpoint: "endpoint", card_config: "config", card_gateway: "auth passerelle", card_nokey: "fournisseurs sans clé", card_adminpw: "mot de passe admin",
   gw_on: "requise ({n} clés)", gw_off_keys: "clés présentes, non requise", gw_off: "désactivée — /v1 ouvert à tout le réseau",
@@ -861,7 +861,7 @@ en: {
 "de": {
   tab_status: "Status", tab_access: "Zugang", tab_providers: "Provider", tab_routes: "Routen", tab_quota: "Kontingent", tab_settings: "Einstellungen",
   logout: "Abmelden", lang_name: "Sprache",
-  login_blurb: "Admin-Passwort eingeben.", login_pass_ph: "Admin-Passwort (admin123)", login_go: "Anmelden",
+  login_blurb: "Admin-Passwort eingeben.", login_pass_ph: "Default admin123", login_go: "Anmelden",
   overview: "Übersicht", route_priority: "Routenpriorität", usage_today: "Heutige Nutzung",
   card_endpoint: "Endpoint", card_config: "Konfig", card_gateway: "Gateway-Auth", card_nokey: "Provider ohne Key", card_adminpw: "Admin-Passwort",
   gw_on: "erforderlich ({n} Keys)", gw_off_keys: "Keys vorhanden, nicht erforderlich", gw_off: "deaktiviert — /v1 im ganzen Netz offen",
@@ -976,7 +976,7 @@ en: {
 "ru": {
   tab_status: "Статус", tab_access: "Доступ", tab_providers: "Провайдеры", tab_routes: "Маршруты", tab_quota: "Квота", tab_settings: "Настройки",
   logout: "Выйти", lang_name: "Язык",
-  login_blurb: "Введите пароль администратора.", login_pass_ph: "Пароль администратора (admin123)", login_go: "Войти",
+  login_blurb: "Введите пароль администратора.", login_pass_ph: "Default admin123", login_go: "Войти",
   overview: "Обзор", route_priority: "Приоритет маршрутов", usage_today: "Использование сегодня",
   card_endpoint: "эндпоинт", card_config: "конфиг", card_gateway: "auth шлюза", card_nokey: "провайдеры без ключа", card_adminpw: "пароль админа",
   gw_on: "требуется ({n} ключей)", gw_off_keys: "ключи есть, не требуется", gw_off: "отключено — /v1 открыт всей сети",
@@ -1091,7 +1091,7 @@ en: {
 "pt": {
   tab_status: "Estado", tab_access: "Acesso", tab_providers: "Provedores", tab_routes: "Rotas", tab_quota: "Cota", tab_settings: "Configurações",
   logout: "Sair", lang_name: "Idioma",
-  login_blurb: "Digite a senha de admin.", login_pass_ph: "Senha de admin (admin123)", login_go: "Entrar",
+  login_blurb: "Digite a senha de admin.", login_pass_ph: "Default admin123", login_go: "Entrar",
   overview: "Visão geral", route_priority: "Prioridade das rotas", usage_today: "Uso de hoje",
   card_endpoint: "endpoint", card_config: "config", card_gateway: "auth do gateway", card_nokey: "provedores sem chave", card_adminpw: "senha admin",
   gw_on: "obrigatória ({n} chaves)", gw_off_keys: "há chaves, não obrigatória", gw_off: "desativada — /v1 aberto a toda a rede",
@@ -1206,7 +1206,7 @@ en: {
 "it": {
   tab_status: "Stato", tab_access: "Accesso", tab_providers: "Provider", tab_routes: "Rotte", tab_quota: "Quote", tab_settings: "Impostazioni",
   logout: "Esci", lang_name: "Lingua",
-  login_blurb: "Inserisci la password admin.", login_pass_ph: "Password admin (admin123)", login_go: "Accedi",
+  login_blurb: "Inserisci la password admin.", login_pass_ph: "Default admin123", login_go: "Accedi",
   overview: "Panoramica", route_priority: "Priorità rotte", usage_today: "Uso odierno",
   card_endpoint: "endpoint", card_config: "config", card_gateway: "auth gateway", card_nokey: "provider senza chiave", card_adminpw: "password admin",
   gw_on: "obbligatoria ({n} chiavi)", gw_off_keys: "chiavi presenti, non obbligatoria", gw_off: "disattivata — /v1 aperto a tutta la rete",
@@ -1321,7 +1321,7 @@ en: {
 "ar": {
   tab_status: "الحالة", tab_access: "الوصول", tab_providers: "المزودون", tab_routes: "المسارات", tab_quota: "الحصص", tab_settings: "الإعدادات",
   logout: "تسجيل الخروج", lang_name: "اللغة",
-  login_blurb: "أدخل كلمة مرور المدير.", login_pass_ph: "كلمة مرور المدير (admin123)", login_go: "تسجيل الدخول",
+  login_blurb: "أدخل كلمة مرور المدير.", login_pass_ph: "Default admin123", login_go: "تسجيل الدخول",
   overview: "نظرة عامة", route_priority: "أولوية المسارات", usage_today: "استخدام اليوم",
   card_endpoint: "endpoint", card_config: "config", card_gateway: "مصادقة البوابة", card_nokey: "مزودون بلا مفتاح", card_adminpw: "كلمة مرور المدير",
   gw_on: "مطلوبة ({n} مفاتيح)", gw_off_keys: "توجد مفاتيح لكنها غير مطلوبة", gw_off: "معطلة — /v1 مفتوح للشبكة كلها",

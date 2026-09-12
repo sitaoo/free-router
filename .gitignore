@@ -1,6 +1,8 @@
 .env
 .env.local
 # Holds real API keys after the first boot (.env migration / web UI saves).
+user_config.toml
+# Legacy user file, auto-migrated to user_config.toml on boot.
 config.toml
 router.log
 router.pid
