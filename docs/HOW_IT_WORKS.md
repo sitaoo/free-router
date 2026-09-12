@@ -84,10 +84,10 @@ docker compose up -d
 The gateway is reachable at `http://127.0.0.1:8787/v1` by default; set
 `FREE_ROUTER_HOST=0.0.0.0` (already the Docker default) and publish the port
 to allow LAN access — but create a gateway API key and change the admin
-password first (see LAN access below). Keys are injected at runtime from
-`.env` and never baked into the image. Weekly-discovery state is ephemeral:
-it lives inside the container and is reset on rebuild (the gateway
-re-discovers free models on the weekly schedule).
+password first (see LAN access below). Keys come from compose `environment:`
+entries or the mounted `data/.env` (read by the server itself), never baked
+into the image. Discovery state and usage history persist in the same
+`./data` volume across rebuilds.
 
 ```bash
 docker compose ps

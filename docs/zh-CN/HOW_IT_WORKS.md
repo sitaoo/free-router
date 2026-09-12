@@ -84,9 +84,9 @@ docker compose up -d
 
 网关默认在 `http://127.0.0.1:8787/v1` 可达，和非 Docker 一样；设置
 `FREE_ROUTER_HOST=0.0.0.0`（Docker 默认已是）并发布端口即允许局域网
-访问——但先建网关 API Key、改管理密码（下面局域网一节）。Key 运行时从
-`.env` 注入，永远不会 bake 进镜像。每周发现的状态是临时的：住在容器
-里，重建就重置（网关按每周计划重新发现免费模型）。
+访问——但先建网关 API Key、改管理密码（下面局域网一节）。Key 来自
+compose 的 `environment:` 或挂载的 `data/.env`（服务端自己读），永远不
+会 bake 进镜像。发现状态和用量历史跟着同一个 `./data` volume 跨重建保留。
 
 ```bash
 docker compose ps
