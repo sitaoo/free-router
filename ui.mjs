@@ -506,10 +506,10 @@ select {
         <div class="row">
           <label><span data-i18n="srv_host">Host</span> <input id="srv-host" class="mono" style="max-width:200px"></label>
           <label><span data-i18n="srv_port">Port</span> <input id="srv-port" class="mono" style="max-width:100px"></label>
-          <button id="srv-save" data-i18n="srv_save">Save (restart needed)</button>
+          <button id="srv-save" data-i18n="srv_save">Save</button>
           <button id="srv-restart" data-i18n="restart_btn">Restart</button>
         </div>
-        <p class="note" data-i18n="srv_note">Bind <span class="mono">0.0.0.0</span> to allow LAN access. Keep the admin password set.</p>
+        <p class="note" data-i18n="srv_note">Bind <span class="mono">0.0.0.0</span> to allow LAN access. Keep the admin password set. Host and port changes need a restart — use the Restart button.</p>
       </div>
     </section>
     <section>
