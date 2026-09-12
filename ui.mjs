@@ -507,6 +507,7 @@ select {
           <label><span data-i18n="srv_host">Host</span> <input id="srv-host" class="mono" style="max-width:200px"></label>
           <label><span data-i18n="srv_port">Port</span> <input id="srv-port" class="mono" style="max-width:100px"></label>
           <button id="srv-save" data-i18n="srv_save">Save (restart needed)</button>
+          <button id="srv-restart" data-i18n="restart_btn">Restart</button>
         </div>
         <p class="note" data-i18n="srv_note">Bind <span class="mono">0.0.0.0</span> to allow LAN access. Keep the admin password set.</p>
       </div>
@@ -1514,6 +1515,15 @@ function bindOnce() {
       });
       toast(t('srv_saved', { notes: (result.notes || []).join(' ') }), 'good');
       await load();
+    } catch (error) {
+      toast(String(error.message || error), 'err');
+    }
+  };
+  el('srv-restart').onclick = async () => {
+    if (!confirm(t('restart_confirm'))) return;
+    try {
+      await api('api/restart', { method: 'POST' });
+      toast(t('restarting_msg'), 'good');
     } catch (error) {
       toast(String(error.message || error), 'err');
     }

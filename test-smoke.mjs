@@ -1848,6 +1848,33 @@ try {
   const afterLogout = await fetch(`${base}/api/state`, { headers: { Cookie: freshCookie } });
   assert.equal(afterLogout.status, 401);
 
+  // Restart must be last: the server exits and stops answering. Re-login
+  // first since the password change above revoked all sessions.
+  const relogin = await fetch(`${base}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: 's3cret-newpw' }),
+  });
+  assert.equal(relogin.status, 200);
+  const restartCookie = String(relogin.headers.get('set-cookie') || '').split(';')[0];
+  const restart = await fetch(`${base}/api/restart`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: restartCookie },
+  });
+  assert.equal(restart.status, 200);
+  assert.equal((await restart.json()).ok, true);
+  let wentAway = false;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      await fetch(`${base}/health`, { signal: AbortSignal.timeout(2000) });
+    } catch {
+      wentAway = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.equal(wentAway, true, 'server did not exit after /api/restart');
+
   console.log(
     'smoke test passed: pluggable providers, ranking, fallback, discovery, usage counters, and tracking work',
   );

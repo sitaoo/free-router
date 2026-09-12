@@ -2867,6 +2867,28 @@ async function handleSettings(req, res) {
   return sendJson(res, 200, { ok: true, notes });
 }
 
+// Graceful restart for applying host/port changes from the web UI.
+// Responds first, then flushes state and exits: process supervisors
+// (docker restart policy, systemd) bring the server back up. Without a
+// supervisor (plain ./start.sh) the process simply stops — the UI says so.
+async function handleRestart(req, res) {
+  sendJson(res, 200, { ok: true });
+  setTimeout(() => {
+    log('restart requested via web interface; exiting for supervisor restart');
+    try {
+      if (stateSaveTimer) flushStateSave();
+    } catch {
+      // Best effort; the process is exiting either way.
+    }
+    try {
+      server.close(() => process.exit(0));
+    } catch {
+      process.exit(0);
+    }
+    setTimeout(() => process.exit(0), 3000).unref?.();
+  }, 300).unref?.();
+}
+
 async function handleLogin(req, res) {
   let body;
   try {
@@ -3002,6 +3024,9 @@ async function handler(req, res) {
   }
   if (req.method === 'POST' && url.pathname === '/api/server') {
     return handleServerConfig(req, res);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/restart') {
+    return handleRestart(req, res);
   }
   if (req.method === 'POST' && url.pathname === '/api/providers') {
     return handleProviders(req, res);
