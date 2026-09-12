@@ -1467,6 +1467,10 @@ try {
   const pageScript = pageHtml.split('<script>')[1]?.split('</script>')[0];
   assert.ok(pageScript);
   new Function(pageScript);
+  // The page script is embedded in a JS template literal: a single-backslash
+  // regex like /\{(\w+)\}/ would be cooked into /{(w+)}/ and silently break
+  // every {var} interpolation. Assert the served bytes kept the backslashes.
+  assert.ok(pageHtml.includes('\\{(\\w+)\\}'));
 
   const uiState = await fetch(`${base}/api/state`).then((res) => res.json());
   assert.equal(uiState.error?.type, 'unauthorized');

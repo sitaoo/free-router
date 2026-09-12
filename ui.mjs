@@ -569,7 +569,9 @@ function t(key, vars) {
   const table = FR_STR[lang] || {};
   const value = table[key] !== undefined ? table[key] : (FR_STR.en[key] !== undefined ? FR_STR.en[key] : key);
   if (!vars) return value;
-  return String(value).replace(/\{(\w+)\}/g, (_, name) =>
+  // NOTE: this script is embedded in a JS template literal, so backslashes
+  // must be doubled here to arrive intact in the served page.
+  return String(value).replace(/\\{(\\w+)\\}/g, (_, name) =>
     vars[name] === undefined || vars[name] === null ? '' : String(vars[name]),
   );
 }
