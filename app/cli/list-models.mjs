@@ -4,9 +4,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildLiveConfig, defaultConfigPath, loadConfigFile, loadOverlayFile } from './config.mjs';
+import { buildLiveConfig, loadConfigFile, loadOverlayFile, resolveLayout } from '../config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const LAYOUT = resolveLayout({
+  appDir: path.resolve(HERE, '..'),
+  configPath: process.env.FREE_ROUTER_CONFIG || '',
+  dataDir: process.env.FREE_ROUTER_DATA_DIR || '',
+});
 
 function loadEnvFile(file) {
   if (!fs.existsSync(file)) return;
@@ -25,18 +30,17 @@ function loadEnvFile(file) {
   }
 }
 
-for (const file of [path.join(HERE, '.env'), path.join(os.homedir(), '.hermes', '.env')]) {
+for (const file of [...LAYOUT.envFiles, path.join(os.homedir(), '.hermes', '.env')]) {
   loadEnvFile(file);
 }
 
-const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || defaultConfigPath(HERE);
+const CONFIG_PATH = LAYOUT.basePath;
 // Same layered view as the server: tracked defaults + operator overlay.
 function loadConfigLite(configPath) {
   if (!fs.existsSync(configPath)) return {};
   try {
     const base = loadConfigFile(configPath).config;
-    const overlayPath = path.join(path.dirname(configPath), 'config.local.json');
-    const { overlay } = loadOverlayFile(overlayPath);
+    const { overlay } = loadOverlayFile(LAYOUT.overlayPath);
     return buildLiveConfig(base, overlay);
   } catch {
     return {};

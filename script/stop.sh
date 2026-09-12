@@ -10,7 +10,7 @@ if [ "$(id -u)" -eq 0 ]; then
   fi
 fi
 
-PID_FILE="$DIR/router.pid"
+PID_FILE="$(dirname "$DIR")/data/router.pid"
 
 if [ ! -s "$PID_FILE" ]; then
   echo "free-router is not running"

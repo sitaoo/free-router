@@ -8,13 +8,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   buildLiveConfig,
-  defaultConfigPath,
   ensureConfigFile,
+  ensureDir,
   isPlainObject,
   loadConfigFile,
   loadOverlayFile,
   OVERLAY_FILENAME,
-  resolveConfigPaths,
+  resolveLayout,
   runOverlayMigrations,
   saveOverlayFile,
 } from './config.mjs';
@@ -39,8 +39,15 @@ import {
 } from './thought-signature.mjs';
 import { displayPath, maskSecret, renderPage, updateEnvFile, validateSecret } from './ui.mjs';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const VERSION = JSON.parse(fs.readFileSync(path.join(HERE, 'package.json'), 'utf8')).version;
+const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
+const LAYOUT = resolveLayout({
+  appDir: APP_DIR,
+  configPath: process.env.FREE_ROUTER_CONFIG || '',
+  dataDir: process.env.FREE_ROUTER_DATA_DIR || '',
+});
+const VERSION = JSON.parse(
+  fs.readFileSync(path.join(LAYOUT.repoDir, 'package.json'), 'utf8'),
+).version;
 
 function loadEnvFile(file) {
   if (!fs.existsSync(file)) return;
@@ -59,16 +66,14 @@ function loadEnvFile(file) {
   }
 }
 
-const envCandidates = [
-  path.join(HERE, '.env'),
-  path.join(os.homedir(), '.hermes', '.env'),
-];
+ensureDir(LAYOUT.dataDir);
+const envCandidates = [...LAYOUT.envFiles, path.join(os.homedir(), '.hermes', '.env')];
 for (const file of envCandidates) {
   if (file) loadEnvFile(file);
 }
 
-const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || defaultConfigPath(HERE);
-const { overlayPath: OVERLAY_PATH } = resolveConfigPaths(HERE, process.env.FREE_ROUTER_CONFIG);
+const CONFIG_PATH = LAYOUT.basePath;
+const OVERLAY_PATH = LAYOUT.overlayPath;
 try {
   // Docker creates a directory for a volume-mounted file that does not exist
   // on the host yet; replace it with a real default config instead of
@@ -168,10 +173,7 @@ const DISCOVERY_INTERVAL_MS = Number(discoveryConfig.intervalMs || 7 * 24 * 60 *
 const DISCOVERY_ROUTE = String(discoveryConfig.route || 'free-best');
 // How long a "not free" verdict stands before the model is worth asking again.
 const VERDICT_RETRY_MS = Number(discoveryConfig.verdictRetryMs || DISCOVERY_INTERVAL_MS);
-const DISCOVERY_STATE_PATH = path.resolve(
-  path.dirname(CONFIG_PATH),
-  discoveryConfig.stateFile || 'discovered-free-models.json',
-);
+const DISCOVERY_STATE_PATH = LAYOUT.statePath(discoveryConfig.stateFile);
 function compilePatterns(patterns, label) {
   const compiled = [];
   for (const pattern of patterns || []) {
@@ -230,7 +232,7 @@ const USAGE_DAY_FORMATTER = (() => {
 })();
 const uiConfig = config.webui || config.ui || {};
 const UI_ENABLED = uiConfig.enabled !== false;
-const UI_ENV_PATH = path.resolve(path.dirname(CONFIG_PATH), uiConfig.envFile || '.env');
+const UI_ENV_PATH = path.resolve(LAYOUT.dataDir, uiConfig.envFile || '.env');
 // Web UI single admin password (default "admin123"). Stored as a salted
 // scrypt hash; legacy plaintext values are upgraded on boot and on login.
 // Env override wins so a locked-out operator can recover without editing
@@ -356,13 +358,23 @@ function parseEnvAssignments(text) {
 
 function migrateEnvFileOnce() {
   if (config.migratedFromEnv) return;
-  let envFileExisted = false;
-  let fileVars = new Map();
-  try {
-    envFileExisted = fs.existsSync(UI_ENV_PATH);
-    if (envFileExisted) fileVars = parseEnvAssignments(fs.readFileSync(UI_ENV_PATH, 'utf8'));
-  } catch {
-    fileVars = new Map();
+  // Read data/.env first, then the legacy repo-root .env (data wins on
+  // conflict). Each file remembers which vars it contributed for cleanup.
+  const envSources = [];
+  for (const file of LAYOUT.envFiles) {
+    try {
+      if (!fs.existsSync(file)) continue;
+      const vars = parseEnvAssignments(fs.readFileSync(file, 'utf8'));
+      if (vars.size) envSources.push({ file, vars });
+    } catch {
+      // Unreadable file: skipped, never blocks boot.
+    }
+  }
+  const fileVars = new Map();
+  for (const { vars } of envSources) {
+    for (const [name, value] of vars) {
+      if (!fileVars.has(name)) fileVars.set(name, value);
+    }
   }
   const summary = { at: new Date().toISOString(), providers: {}, gateway: 0 };
   if (fileVars.size) {
@@ -418,17 +430,24 @@ function migrateEnvFileOnce() {
       setOverlayValue(['gateway', 'requireAuth'], true);
       summary.gateway = 1;
     }
-    if (Object.keys(clearVars).length && envFileExisted) {
+    // Clean each source file of the vars it contributed. Vars with no file
+    // source (docker env_file injects variables without one) are dropped
+    // from this process instead, so the overlay stays canonical.
+    const perFile = new Map();
+    for (const name of Object.keys(clearVars)) {
+      const owner = envSources.find(({ vars }) => vars.has(name));
+      if (!owner) continue;
+      if (!perFile.has(owner.file)) perFile.set(owner.file, {});
+      perFile.get(owner.file)[name] = '';
+    }
+    for (const [file, removals] of perFile) {
       try {
-        updateEnvFile(UI_ENV_PATH, clearVars);
-        for (const name of Object.keys(clearVars)) delete process.env[name];
-        for (const provider of PROVIDERS.values()) registry.refreshKeysFromEnv(provider.name);
+        updateEnvFile(file, removals);
       } catch (error) {
-        log(`env migration: could not clean ${displayPath(UI_ENV_PATH)}: ${error instanceof Error ? error.message : String(error)}`);
+        log(`env migration: could not clean ${displayPath(file)}: ${error instanceof Error ? error.message : String(error)}`);
       }
-    } else if (Object.keys(clearVars).length) {
-      // No .env file (e.g. docker env_file injects variables without one):
-      // drop the migrated values from this process so TOML stays canonical.
+    }
+    if (Object.keys(clearVars).length) {
       for (const name of Object.keys(clearVars)) delete process.env[name];
       for (const provider of PROVIDERS.values()) registry.refreshKeysFromEnv(provider.name);
     }
@@ -442,7 +461,8 @@ function migrateEnvFileOnce() {
   refreshSecretRedactor();
   const imported = Object.values(summary.providers).reduce((a, b) => a + b, 0);
   if (imported || summary.gateway) {
-    log(`migrated ${imported} provider key(s) and ${summary.gateway} gateway key(s) from ${displayPath(UI_ENV_PATH)} into ${OVERLAY_FILENAME}; the overlay file is now where user data lives`);
+    const sources = envSources.map(({ file }) => displayPath(file)).join(', ');
+    log(`migrated ${imported} provider key(s) and ${summary.gateway} gateway key(s) from ${sources} into ${OVERLAY_FILENAME}; the overlay file is now where user data lives`);
   }
 }
 

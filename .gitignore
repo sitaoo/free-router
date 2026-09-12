@@ -1,8 +1,8 @@
 .env
 .env.local
-# Operator overlay: everything changed via WebUI/.env migration lands here.
-# The tracked config.json stays pristine (defaults only).
-config.local.json
+# The only writable dir at runtime (overlay, state, .env, logs).
+data/
+# Strays from the old flat layout; belong in data/.
 router.log
 router.pid
 discovered-free-models.json

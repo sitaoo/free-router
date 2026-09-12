@@ -1,13 +1,14 @@
 .git
-.env
-.env.local
-# Never bake the host's real keys into the image.
-config.local.json
-user_config.toml
+data/
+node_modules
+docs/
+script/
+test/
+.env*
+# Legacy user files from the flat layout; never bake stale secrets.
 config.toml
 config.toml.bak
-node_modules
-discovered-free-models.json
+user_config.toml
 router.log
 router.pid
-docs
+discovered-free-models.json

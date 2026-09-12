@@ -16,7 +16,11 @@ if [ "$(id -u)" -eq 0 ]; then
   exec runuser -u "$owner" -- "$DIR/start.sh" "$@"
 fi
 
-PID_FILE="$DIR/router.pid"
+REPO="$(dirname "$DIR")"
+DATA_DIR="$REPO/data"
+mkdir -p "$DATA_DIR"
+
+PID_FILE="$DATA_DIR/router.pid"
 
 if [ -s "$PID_FILE" ]; then
   PID="$(cat "$PID_FILE")"
@@ -37,9 +41,10 @@ load_env() {
 }
 
 load_env "${HOME}/.hermes/.env"
-load_env "$DIR/.env"
+load_env "$DATA_DIR/.env"
+load_env "$REPO/.env"
 
-nohup node "$DIR/server.mjs" >>"$DIR/router.log" 2>&1 &
+nohup node "$REPO/app/server.mjs" >>"$DATA_DIR/router.log" 2>&1 &
 PID=$!
 echo "$PID" >"$PID_FILE"
 

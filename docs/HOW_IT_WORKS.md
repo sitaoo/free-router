@@ -62,13 +62,13 @@ cp .env.example .env
 ```bash
 git clone https://github.com/www222fff/free-router.git
 cd free-router
-./start.sh
+./script/start.sh
 # open http://127.0.0.1:8787/, log in, add keys under Providers
 ```
 
 No configuration step is needed: with no config present the server creates
 one from built-in defaults on first boot. The gateway listens on
-`127.0.0.1:8787` by default. Stop it with `./stop.sh`.
+`127.0.0.1:8787` by default. Stop it with `./script/stop.sh`.
 Run these scripts as a normal user. If started as root, they re-exec as the
 directory owner and refuse to stay root.
 
@@ -101,24 +101,52 @@ To pick up code changes, rebuild and recreate:
 docker compose up -d --build
 ```
 
+The compose file mounts one volume, `./data:/srv/free-router/data` — the
+only writable directory. Everything else in the image is read-only code and
+defaults. On a fresh checkout, create the files Docker needs before the
+first `up` (an absent mount source would otherwise become a directory):
+
+```bash
+mkdir -p data && touch data/.env
+```
+
+## Project layout
+
+```text
+app/            code (server, providers, UI, config module)
+app/cli/        list-models command
+app/config/     tracked defaults (config.json; .env.example stays at root)
+test/           smoke tests (`npm test` from the repo root)
+data/           the only writable dir (overlay, state, .env, logs)
+script/         start/stop/models/migrate helpers
+docs/           this documentation, plus one folder per language
+```
+
+Paths resolve from `app/server.mjs` upward, so the tree can move again
+without touching every file: tracked base is `app/config/config.json`,
+the overlay, state file, and `.env` live in `data/` (`FREE_ROUTER_CONFIG`
+and `FREE_ROUTER_DATA_DIR` override either). Upgrading from the old flat
+layout is one command: `./script/migrate-layout.sh` moves overlay, state,
+`.env`, and logs into `data/` (never overwriting what is already there).
+
 Foreground:
 
 ```bash
-node server.mjs
+node app/server.mjs
 ```
 
 List the current `free-best` priority (same order the gateway will try models):
 
 ```bash
-./models.sh
-./models.sh --ready-only
+./script/models.sh
+./script/models.sh --ready-only
 npm run models -- --json
 ```
 
 See where requests actually landed, and how much of today's quota is left:
 
 ```bash
-./models.sh --usage
+./script/models.sh --usage
 ```
 
 ## Web interface
@@ -206,7 +234,7 @@ that key, and the next key is tried before moving to the next model.
 On first boot, keys found in `.env` are imported into `config.local.json`
 once (named `migrated-N`) and removed from `.env`, with a dismissible notice
 in the UI. A personal `FREE_ROUTER_API_KEY` in `.env` additionally becomes a
-named gateway key (it stays in `.env` too, since `models.sh` needs it).
+named gateway key (it stays in `.env` too, since `script/models.sh` needs it).
 
 ## Layered configuration
 
@@ -423,7 +451,7 @@ success rate shifts its score by up to `evaluation.usageWeight` points: 100%
 success adds the full weight, 80% is neutral, 60% or worse subtracts the full
 weight. Pinned models are exempt. When one model is offered by several
 providers, the group is ranked by its best provider, so one bad provider does
-not sink the model. `./models.sh` shows the current shift in the `rank+-`
+not sink the model. `./script/models.sh` shows the current shift in the `rank+-`
 column, and `/health` reports `baseScore` and `scoreAdjustment` per entry.
 
 ### Asking a provider what is free
@@ -562,8 +590,8 @@ state file, are written back at most once every 1.5 seconds, and are pruned to
 `usage.retentionDays`.
 
 ```bash
-./models.sh            # priority list with today / 7d / fail columns
-./models.sh --usage    # per-day and per-model history
+./script/models.sh            # priority list with today / 7d / fail columns
+./script/models.sh --usage    # per-day and per-model history
 ```
 
 ```json
@@ -606,7 +634,7 @@ systemctl --user enable --now free-router
 journalctl --user -u free-router -f
 ```
 
-`./start.sh` also works without systemd.
+`./script/start.sh` also works without systemd.
 
 ## Routing behavior
 

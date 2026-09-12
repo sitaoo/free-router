@@ -65,12 +65,12 @@ cp .env.example .env
 ```bash
 git clone https://github.com/www222fff/free-router.git
 cd free-router
-./start.sh
+./script/start.sh
 # 打开 http://127.0.0.1:8787/ 登录，去渠道 tab 加 Key
 ```
 
 零配置就能起：没有配置文件就按内置默认生成。网关默认监听
-`127.0.0.1:8787`。`./stop.sh` 停止。请用普通用户跑这两个脚本；如果以
+`127.0.0.1:8787`。`./script/stop.sh` 停止。请用普通用户跑这两个脚本；如果以
 root 启动，它们会 re-exec 到目录属主身份，拒绝保持 root。
 
 ## Docker 运行
@@ -100,24 +100,50 @@ docker compose down
 docker compose up -d --build
 ```
 
+compose 只挂一个 volume，`./data:/srv/free-router/data`——它是唯一的
+可写目录，镜像里其余都是只读代码和默认值。全新 checkout 先把 Docker
+要的文件建出来再第一次 `up`（挂载源不存在会被建成目录）：
+
+```bash
+mkdir -p data && touch data/.env
+```
+
+## 项目结构
+
+```text
+app/            程序（server、providers、UI、config 模块）
+app/cli/        list-models 命令
+app/config/     tracked 默认值（config.json；.env.example 留根目录）
+test/           冒烟测试（仓库根跑 `npm test`）
+data/           唯一可写目录（overlay、state、.env、日志）
+script/         start/stop/models/migrate 脚本
+docs/           本文档，每种语言一个目录
+```
+
+路径全从 `app/server.mjs` 往上推：tracked base 是
+`app/config/config.json`，overlay、state、`.env` 都在 `data/` 下
+（`FREE_ROUTER_CONFIG` 和 `FREE_ROUTER_DATA_DIR` 可覆盖）。老平铺结构
+升级一条命令：`./script/migrate-layout.sh` 把 overlay、state、`.env`、
+日志搬进 `data/`（已存在的目标不动）。
+
 前台运行：
 
 ```bash
-node server.mjs
+node app/server.mjs
 ```
 
 看当前 `free-best` 优先级（就是网关尝试模型的顺序）：
 
 ```bash
-./models.sh
-./models.sh --ready-only
+./script/models.sh
+./script/models.sh --ready-only
 npm run models -- --json
 ```
 
 看请求实际落到哪、今日配额还剩多少：
 
 ```bash
-./models.sh --usage
+./script/models.sh --usage
 ```
 
 ## Web 界面
@@ -194,7 +220,7 @@ npm run models -- --json
 首次启动时，`.env` 里的 Key 会一次性导入 `config.local.json`（命名为
 `migrated-N`）并从 `.env` 里删掉，UI 里有条可关闭的横幅提示迁了几个。
 `.env` 里的个人 `FREE_ROUTER_API_KEY` 会额外变成一个命名网关 Key（它
-留在 `.env` 里不动，因为 `models.sh` 还要用它）。
+留在 `.env` 里不动，因为 `script/models.sh` 还要用它）。
 
 ## 配置分层
 
@@ -389,7 +415,7 @@ TokenRouter 的 `/models` 没有 `pricing` 字段，免费收费混在一起，�
 `evaluation.usageMinRequests` 次尝试后，成功率按
 `evaluation.usageWeight` 上下调分：100% 加满，80% 不动，60% 及以下扣
 满。置顶模型豁免。同一模型多家提供时按最好的一家排名，一家拉胯不连累
-模型。`./models.sh` 的 `rank+-` 列看当前偏移，`/health` 里每条有
+模型。`./script/models.sh` 的 `rank+-` 列看当前偏移，`/health` 里每条有
 `baseScore` 和 `scoreAdjustment`。
 
 ### 问渠道什么免费
@@ -507,8 +533,8 @@ serve 了、谁快摸到免费日 cap。计数器和发现状态住同一个
 `usage.retentionDays` 裁剪。
 
 ```bash
-./models.sh            # 优先级表，带 today / 7d / fail 列
-./models.sh --usage    # 按天、按模型的历史
+./script/models.sh            # 优先级表，带 today / 7d / fail 列
+./script/models.sh --usage    # 按天、按模型的历史
 ```
 
 ```json
@@ -547,7 +573,7 @@ systemctl --user enable --now free-router
 journalctl --user -u free-router -f
 ```
 
-不用 systemd 就 `./start.sh`。
+不用 systemd 就 `./script/start.sh`。
 
 ## 路由行为
 

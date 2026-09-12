@@ -319,7 +319,43 @@ export function stringifyToml(config) {
 }
 
 export function defaultConfigPath(here) {
-  return path.join(here, 'config.json');
+  return resolveLayout({ appDir: here }).basePath;
+}
+
+// Single place that knows the project layout. Everything (server, CLI,
+// tests) resolves paths through here so the tree can move again:
+//
+//   <repo>/app/*.mjs          code (read-only at runtime)
+//   <repo>/app/config/        tracked defaults (config.json, .env.example)
+//   <repo>/data/              the only writable dir (overlay, state, .env, logs)
+//   <repo>/script/            start/stop/models/migrate helpers
+//
+// FREE_ROUTER_CONFIG overrides just the base file; the overlay and the
+// state file always live next to it, which keeps tests isolated without
+// extra flags (tests point both at a temp dir).
+export function resolveLayout({ appDir, configPath = '', dataDir = '' } = {}) {
+  const repoDir = path.dirname(appDir);
+  const basePath = configPath || path.join(appDir, 'config', 'config.json');
+  const resolvedDataDir = dataDir || path.join(repoDir, 'data');
+  return {
+    appDir,
+    repoDir,
+    basePath,
+    dataDir: resolvedDataDir,
+    overlayPath: path.join(resolvedDataDir, 'config.local.json'),
+    statePath: (stateFile) =>
+      path.join(resolvedDataDir, path.basename(stateFile || 'discovered-free-models.json')),
+    // New home first, repo-root legacy second (read-only fallback).
+    envFiles: [path.join(resolvedDataDir, '.env'), path.join(repoDir, '.env')],
+  };
+}
+
+export function ensureDir(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch {
+    // Save paths below create parents too; this is best effort.
+  }
 }
 
 // The user layer. config.json (tracked) holds defaults; this file

@@ -5,10 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/free-router
+WorkingDirectory=%h/free-router/app
 EnvironmentFile=-%h/.hermes/.env
-EnvironmentFile=-%h/free-router/.env
-ExecStart=/usr/bin/node %h/free-router/server.mjs
+EnvironmentFile=-%h/free-router/data/.env
+ExecStart=/usr/bin/node %h/free-router/app/server.mjs
 Restart=on-failure
 RestartSec=3
 

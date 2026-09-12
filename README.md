@@ -15,17 +15,15 @@ Site: [www222fff.github.io/free-router](https://www222fff.github.io/free-router/
 
 ## Run
 
-Node.js 20+. Copy `.env.example` to `.env`, add at least one provider key,
-then:
+Node.js 20+, zero configuration to start:
 
 ```bash
 git clone https://github.com/www222fff/free-router.git
 cd free-router
-cp .env.example .env
-./start.sh
+./script/start.sh
 ```
 
-Stop with `./stop.sh`. Docker: `docker compose up -d`. Open
+Stop with `./script/stop.sh`. Docker: `docker compose up -d`. Open
 <http://127.0.0.1:8787/> to log in (default password `admin123`), set keys
 and watch usage. The interface has tabs for status, access keys, providers,
 routes, quotas, and settings — almost everything is configurable there, and
@@ -65,15 +63,31 @@ curl -s http://<lan-ip>:8787/v1/chat/completions \
 
 ## Configuration layers
 
-`config.json` holds defaults and stays merge-clean. Everything you change —
-in the web UI or via the first-boot `.env` import — is written to the
-gitignored `config.local.json`, which wins over defaults at startup (objects
-merge per key, arrays are replaced). Provider keys also work straight from
-the environment, so `.env` remains a valid key store that never needs a UI.
+`app/config/config.json` holds defaults and stays merge-clean. Everything
+you change — in the web UI or via the first-boot `.env` import — is written
+to the gitignored `data/config.local.json`, which wins over defaults at
+startup (objects merge per key, arrays are replaced). Provider keys also work
+straight from the environment, so `data/.env` remains a valid key store that
+never needs a UI.
+
+## Project layout
+
+```text
+app/            code (server, providers, UI, config module)
+app/cli/        list-models command
+app/config/     tracked defaults (config.json)
+test/           smoke tests
+data/           the only writable dir (overlay, state, .env, logs)
+script/         start/stop/models/migrate helpers
+docs/           this documentation, plus one folder per language
+```
+
+Upgrading from the old flat layout: run `./script/migrate-layout.sh` once,
+it moves your overlay, state, `.env`, and logs into `data/`.
 
 ```bash
-./models.sh          # current free-best order
-./models.sh --usage  # today's quota
+./script/models.sh          # current free-best order
+./script/models.sh --usage  # today's quota
 ```
 
 ## Star History

@@ -7,8 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { isChatModel, normalizeCatalogPayload, normalizeModelSlug, supportsRequest } from './providers.mjs';
-import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
+import { isChatModel, normalizeCatalogPayload, normalizeModelSlug, supportsRequest } from '../app/providers.mjs';
+import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from '../app/quota.mjs';
 import {
   SKIP_THOUGHT_SIGNATURE,
   createStreamSignatureExtractor,
@@ -18,9 +18,9 @@ import {
   providerNeedsThoughtSignatures,
   readThoughtSignature,
   rememberSignaturesFromPayload,
-} from './thought-signature.mjs';
-import { displayPath, maskSecret, validateSecret } from './ui.mjs';
-import { hashPassword, isPasswordHash, verifyPassword } from './auth.mjs';
+} from '../app/thought-signature.mjs';
+import { displayPath, maskSecret, validateSecret } from '../app/ui.mjs';
+import { hashPassword, isPasswordHash, verifyPassword } from '../app/auth.mjs';
 import {
   addMissingKeys,
   buildLiveConfig,
@@ -28,10 +28,10 @@ import {
   defaultConfigObject,
   runOverlayMigrations,
   SCHEMA_VERSION,
-} from './config.mjs';
+} from '../app/config.mjs';
 
 const PACKAGE_VERSION = JSON.parse(
-  fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'package.json'), 'utf8'),
+  fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8'),
 ).version;
 assert.match(PACKAGE_VERSION, /^\d+\.\d+\.\d+$/);
 
@@ -944,7 +944,7 @@ fs.writeFileSync(
   }),
 );
 
-const child = spawn(process.execPath, [path.join(HERE, 'server.mjs')], {
+const child = spawn(process.execPath, [path.join(HERE, '..', 'app', 'server.mjs')], {
   env: {
     ...process.env,
     OPENROUTER_API_KEY: 'test-key',
@@ -960,6 +960,7 @@ const child = spawn(process.execPath, [path.join(HERE, 'server.mjs')], {
     QUOTAMOCK_API_KEY: 'quota-test-key',
     QUOTAMOCK_BASE_URL: `http://127.0.0.1:${quotaPort}/v1`,
     FREE_ROUTER_CONFIG: testConfig,
+    FREE_ROUTER_DATA_DIR: tempDir,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });

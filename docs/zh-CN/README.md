@@ -20,10 +20,10 @@ Node.js 20+。直接启动，Key 进 UI 里加：
 ```bash
 git clone https://github.com/www222fff/free-router.git
 cd free-router
-./start.sh
+./script/start.sh
 ```
 
-`./stop.sh` 停止。Docker：`docker compose up -d`。打开
+`./script/stop.sh` 停止。Docker：`docker compose up -d`。打开
 <http://127.0.0.1:8787/> 登录（默认密码 `admin123`）、填 Key、看用量。
 界面有状态、访问、渠道、路由、配额、设置几个标签页，几乎所有配置都能
 在里面改，并跟随浏览器语言（内置 12 种语言）。
@@ -62,14 +62,29 @@ curl -s http://<lan-ip>:8787/v1/chat/completions \
 
 ## 配置分层
 
-`config.json` 只放默认值，保持可合并。你的所有改动——Web UI 里改的、
-首次启动从 `.env` 导入的——都写进 gitignored 的 `config.local.json`，
-启动时覆盖默认值（对象按 key 合并，数组整体替换）。Provider Key 也可以
-直接走环境变量，`.env` 永远是一个免 UI 的 Key 存储。
+`app/config/config.json` 只放默认值，保持可合并。你的所有改动——Web UI
+里改的、首次启动从 `.env` 导入的——都写进 gitignored 的
+`data/config.local.json`，启动时覆盖默认值（对象按 key 合并，数组整体
+替换）。Provider Key 也可以直接走环境变量，`data/.env` 永远是一个免 UI
+的 Key 存储。
+
+## 项目结构
+
+```text
+app/            程序（server、providers、UI、config 模块）
+app/cli/        list-models 命令
+app/config/     tracked 默认值（config.json）
+test/           冒烟测试
+data/           唯一可写目录（overlay、state、.env、日志）
+script/         start/stop/models/migrate 脚本
+docs/           本文档，每种语言一个目录
+```
+
+老平铺结构升级：跑一次 `./script/migrate-layout.sh`。
 
 ```bash
-./models.sh          # 当前 free-best 排序
-./models.sh --usage  # 今日配额
+./script/models.sh          # 当前 free-best 排序
+./script/models.sh --usage  # 今日配额
 ```
 
 ## Star History
