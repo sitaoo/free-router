@@ -117,7 +117,8 @@ body {
 header {
   background: var(--card);
   border-bottom: 1px solid var(--line);
-  padding: 20px 28px;
+  padding: 16px 28px;
+  box-shadow: 0 1px 10px rgba(20, 28, 40, .06);
 }
 .head-inner {
   max-width: 1040px; margin: 0 auto;
@@ -128,7 +129,11 @@ header {
 #logout-top { padding: 6px 12px; font-size: 12.5px; }
 h1 { font-size: 19px; font-weight: 650; margin: 0; letter-spacing: -.2px; }
 .head-inner .sep { color: var(--line); }
-.head-inner .mono { font-size: 13px; color: var(--muted); }
+.head-inner .mono {
+  font-size: 12.5px; color: var(--muted);
+  background: var(--accent-soft); padding: 3px 12px; border-radius: 999px;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 main { max-width: 1040px; margin: 0 auto; padding: 28px; display: grid; gap: 26px; }
 
@@ -141,9 +146,12 @@ section { background: var(--card); border: 1px solid var(--line); border-radius:
 .prov {
   display: grid; grid-template-columns: minmax(160px, 210px) 1fr auto;
   gap: 18px; align-items: start;
-  padding: 18px 0; border-top: 1px solid var(--line-soft);
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 16px 18px;
+  transition: box-shadow .18s, border-color .18s;
 }
-.prov:first-child { border-top: 0; padding-top: 6px; }
+.prov:hover { border-color: #c6cdd6; box-shadow: 0 4px 16px rgba(20, 28, 40, .07); }
+#providers { display: grid; gap: 10px; }
 .prov-name { font-weight: 600; padding-top: 7px; }
 .prov-name span { display: block; font-weight: 400; font-size: 12px; color: var(--faint); margin-top: 2px; }
 .prov-field input {
@@ -162,8 +170,13 @@ section { background: var(--card); border: 1px solid var(--line); border-radius:
 button {
   padding: 9px 15px; border-radius: 8px; font-size: 13px; font-weight: 550;
   border: 1px solid #ccd2db; background: #fff; color: var(--text); cursor: pointer;
+  transition: background .15s, border-color .15s, box-shadow .15s, transform .05s;
 }
 button:hover { background: #f3f5f8; }
+button:active:not(:disabled) { transform: translateY(1px); }
+button:focus-visible, input:focus-visible, select:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button.primary:hover { background: #0954b5; }
 button.quiet { border-color: transparent; background: transparent; color: var(--muted); }
@@ -198,24 +211,41 @@ tbody tr:hover { background: #fafbfc; }
 }
 .row label { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
 .check { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+
+/* Inline text link (card shortcuts across tabs). */
+.linklike {
+  border: 0; background: none; padding: 0;
+  color: var(--accent); font-size: inherit; font-weight: 600; cursor: pointer;
+  white-space: nowrap;
+}
+.linklike:hover { background: none; text-decoration: underline; }
+
+/* Small icon button (copy endpoint). */
+.iconbtn { padding: 3px 9px; font-size: 13px; line-height: 1.3; border-radius: 7px; }
 .keyrow {
   display: flex; gap: 10px; align-items: center; padding: 6px 0;
   font-size: 13px; border-top: 1px solid var(--line-soft);
 }
 .keyrow .mono { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 #login main { padding-top: 60px; }
+#login section { border-radius: 16px; box-shadow: 0 14px 44px rgba(20, 28, 40, .14); }
+
+details summary::marker { color: var(--accent); }
 
 #tabs {
   position: sticky; top: 0; z-index: 5;
-  display: flex; gap: 6px; flex-wrap: wrap;
-  background: var(--bg); padding: 14px 0 12px;
+  display: flex; gap: 4px; flex-wrap: wrap;
+  background: var(--bg); padding: 10px;
+  border: 1px solid var(--line); border-radius: 12px;
 }
 #tabs button {
-  border: 1px solid var(--line); background: var(--card);
-  padding: 8px 16px; font-weight: 600;
+  border: 1px solid transparent; background: transparent;
+  padding: 8px 16px; font-weight: 600; color: var(--muted);
 }
+#tabs button:hover { background: var(--accent-soft); color: var(--text); }
 #tabs button.active {
   background: var(--accent); border-color: var(--accent); color: #fff;
+  box-shadow: 0 2px 8px rgba(11, 98, 214, .3);
 }
 #tabs button.active:hover { background: #0954b5; }
 
@@ -283,6 +313,8 @@ select {
   border-radius: 10px; padding: 12px 14px; font-size: 13px; margin-bottom: 14px;
   display: flex; gap: 12px; align-items: center; justify-content: space-between;
 }
+/* display:flex above beats the hidden attribute's UA rule without this. */
+.banner[hidden] { display: none; }
 .banner button { flex: none; }
 
 @media (prefers-color-scheme: dark) {
@@ -301,6 +333,9 @@ select {
   button.primary:hover { background: #6aa5f3; }
   tbody tr:hover { background: #22282f; }
   .card, .chip { background: #22282f; }
+  .prov:hover { border-color: #3a424d; box-shadow: 0 4px 16px rgba(0, 0, 0, .35); }
+  .iconbtn { background: #262c35; border-color: #3a424d; }
+  .switch .slider { background: #3a424d; }
 }
 
 #toast {
@@ -510,9 +545,8 @@ select {
           <button class="quiet" id="logout" data-i18n="logout">Log out</button>
         </div>
         <div class="row">
-          <label><span data-i18n="sess_ttl">Session expires after (hours, 0 = never)</span>
+          <label><span data-i18n="sess_ttl">Session expires after</span>
             <select id="sess-preset"></select>
-            <input id="sess-ttl" class="mono" style="max-width:90px">
           </label>
           <button id="sess-save" data-i18n="sess_save">Save session</button>
         </div>
@@ -1034,22 +1068,76 @@ function card(host, key, value, cls) {
   host.appendChild(node);
 }
 
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (error) {
+    const area = document.createElement('textarea');
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch (ignored) {
+      ok = false;
+    }
+    area.remove();
+    return ok;
+  }
+}
+
+function gotoLink(label, tab) {
+  const link = document.createElement('button');
+  link.className = 'linklike';
+  link.textContent = label;
+  link.onclick = () => switchTab(tab);
+  return link;
+}
+
 function renderStatus() {
   const host = el('status-cards');
   host.textContent = '';
-  card(host, t('card_endpoint'), state.endpoint);
+  const endpointWrap = document.createElement('span');
+  const endpointText = document.createElement('span');
+  endpointText.className = 'mono';
+  endpointText.textContent = state.endpoint + ' ';
+  const copy = document.createElement('button');
+  copy.className = 'iconbtn';
+  copy.textContent = '⧉';
+  copy.title = t('copy_title');
+  copy.onclick = async () => {
+    const ok = await copyText(state.endpoint);
+    toast(ok ? t('copied_msg') : state.endpoint, ok ? 'good' : 'err');
+  };
+  endpointWrap.appendChild(endpointText);
+  endpointWrap.appendChild(copy);
+  card(host, t('card_endpoint'), endpointWrap);
   card(host, t('card_config'), state.configFile + ' (' + state.configFormat + ')');
   const gwCount = (state.gateway && state.gateway.keys.length) || 0;
-  card(
-    host,
-    t('card_gateway'),
-    state.gateway.requireAuth ? t('gw_on', { n: gwCount }) : (gwCount ? t('gw_off_keys') : t('gw_off')),
-    state.gateway.requireAuth ? 'ok-text' : 'warn',
-  );
+  const gwValue = document.createElement('span');
+  if (state.gateway.requireAuth) {
+    gwValue.textContent = t('gw_on', { n: gwCount });
+  } else {
+    gwValue.textContent = (gwCount ? t('gw_off_keys') : t('gw_off')) + ' ';
+    gwValue.appendChild(gotoLink(t('goto_access'), 'access'));
+  }
+  card(host, t('card_gateway'), gwValue, state.gateway.requireAuth ? 'ok-text' : 'warn');
   const noKey = state.providers.filter((entry) => !entry.configured).map((entry) => entry.name);
-  card(host, t('card_nokey'), noKey.length ? noKey.join(', ') : t('nokey_all'), noKey.length ? 'warn' : 'ok-text');
+  const noKeyValue = document.createElement('span');
+  if (!noKey.length) {
+    noKeyValue.textContent = t('nokey_all');
+  } else {
+    noKeyValue.textContent = noKey.join(', ') + ' ';
+    noKeyValue.appendChild(gotoLink(t('goto_providers'), 'providers'));
+  }
+  card(host, t('card_nokey'), noKeyValue, noKey.length ? 'warn' : 'ok-text');
   if (state.webui.defaultPassword) {
-    card(host, t('card_adminpw'), t('adminpw_warn'), 'bad-text');
+    const adminValue = document.createElement('span');
+    adminValue.textContent = t('adminpw_warn') + ' ';
+    adminValue.appendChild(gotoLink(t('goto_settings'), 'settings'));
+    card(host, t('card_adminpw'), adminValue, 'bad-text');
   }
   el('status-blurb').textContent = t('status_blurb');
 }
@@ -1271,8 +1359,11 @@ const SESS_PRESETS = [
   [0, 'sess_pnever'],
 ];
 
+// Custom choice resolves through a prompt and is kept here until saved,
+// because there is no text input anymore.
+let sessCustomHours = null;
+
 function renderSession() {
-  el('sess-ttl').value = state.webui.sessionTtlHours;
   const select = el('sess-preset');
   select.textContent = '';
   for (const [hours, labelKey] of SESS_PRESETS) {
@@ -1286,7 +1377,13 @@ function renderSession() {
   custom.textContent = t('sess_pcustom');
   select.appendChild(custom);
   const current = String(state.webui.sessionTtlHours);
-  select.value = SESS_PRESETS.some(([hours]) => String(hours) === current) ? current : 'custom';
+  if (SESS_PRESETS.some(([hours]) => String(hours) === current)) {
+    sessCustomHours = null;
+    select.value = current;
+  } else {
+    sessCustomHours = Number(state.webui.sessionTtlHours);
+    select.value = 'custom';
+  }
   el('sess-note').textContent = state.webui.sessionExpiresAt
     ? t('sess_expires', { at: state.webui.sessionExpiresAt })
     : t('sess_never');
@@ -1373,18 +1470,35 @@ function bindOnce() {
   };
   el('sess-preset').onchange = () => {
     const value = el('sess-preset').value;
-    if (value === 'custom') {
-      el('sess-ttl').focus();
-      el('sess-ttl').select();
+    if (value !== 'custom') {
+      sessCustomHours = null;
       return;
     }
-    el('sess-ttl').value = value;
+    const raw = prompt(t('sess_custom_prompt'), String(state.webui.sessionTtlHours));
+    if (raw === null) {
+      renderSession();
+      return;
+    }
+    const hours = Number(raw);
+    if (!Number.isFinite(hours) || hours < 0 || hours > 8760) {
+      toast(t('sess_invalid'), 'err');
+      renderSession();
+      return;
+    }
+    sessCustomHours = hours;
   };
   el('sess-save').onclick = async () => {
+    const hours = el('sess-preset').value === 'custom'
+      ? sessCustomHours
+      : Number(el('sess-preset').value);
+    if (hours === null || !Number.isFinite(hours)) {
+      toast(t('sess_invalid'), 'err');
+      return;
+    }
     try {
       const result = await api('api/settings', {
         method: 'POST',
-        body: JSON.stringify({ sessionTtlHours: Number(el('sess-ttl').value) }),
+        body: JSON.stringify({ sessionTtlHours: hours }),
       });
       toast(t('saved') + ((result.notes || []).length ? ' ' + result.notes.join(' ') : ''), 'good');
       await load();
@@ -1589,7 +1703,7 @@ async function load() {
 function renderRoutes() {
   const host = el('routes');
   host.textContent = '';
-  el('routes-blurb').textContent = t('routes_blurb', { today: state.usage.today, tz: state.usage.timezone });
+  el('routes-blurb').innerHTML = t('routes_blurb', { today: state.usage.today, tz: state.usage.timezone });
   const rows = state.routes.map((entry) => {
     let status = t('st_ready');
     let kind = 'ok';
