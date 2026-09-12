@@ -20,6 +20,7 @@ import {
   rememberSignaturesFromPayload,
 } from './thought-signature.mjs';
 import { displayPath, maskSecret, validateSecret } from './ui.mjs';
+import { hashPassword, isPasswordHash, verifyPassword } from './auth.mjs';
 
 const PACKAGE_VERSION = JSON.parse(
   fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'package.json'), 'utf8'),
@@ -247,6 +248,22 @@ assert.equal(maskSecret('sk-or-v1-0123456789abcdef'), 'sk-or********cdef (25)');
 assert.equal(maskSecret('sk-or-v1-0123456789abcdef').includes('0123456789'), false);
 assert.match(validateSecret('ok\nNODE_OPTIONS=x'), /newline/);
 assert.equal(validateSecret('sk-normal-key'), '');
+
+// Salted scrypt storage: hash shape, round trip, wrong password, legacy
+// plaintext comparison, and malformed hashes that must fail closed.
+{
+  const hashed = hashPassword('unit-test-pw');
+  assert.equal(isPasswordHash(hashed), true);
+  assert.equal(isPasswordHash('plain'), false);
+  assert.equal(isPasswordHash(''), false);
+  assert.equal(verifyPassword('unit-test-pw', hashed), true);
+  assert.equal(verifyPassword('wrong', hashed), false);
+  assert.equal(verifyPassword('plain', 'plain'), true);
+  assert.equal(verifyPassword('other', 'plain'), false);
+  assert.equal(verifyPassword('x', '$scrypt$broken'), false);
+  assert.equal(verifyPassword('x', '$scrypt$N=16384$r=8$p=1$zz$zz'), false);
+  assert.notEqual(hashPassword('same'), hashPassword('same'));
+}
 
 assert.equal(providerNeedsThoughtSignatures({ name: 'gemini', baseUrl: 'http://127.0.0.1' }), true);
 assert.equal(
@@ -1733,12 +1750,42 @@ try {
   assert.equal(counts.get('bai').freeCount, 2);
   assert.deepEqual(ttlState.migration.providers, {});
 
+  // Password change persists a salted hash (never plaintext); the old
+  // password stops working and the new one issues a fresh session.
+  const pwChange = await fetch(`${base}/api/webui-password`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ password: 's3cret-newpw' }),
+  });
+  assert.equal(pwChange.status, 200);
+  const persistedConfig = fs.readFileSync(testConfig, 'utf8');
+  assert.match(persistedConfig, /\$scrypt\$/);
+  assert.equal(persistedConfig.includes('s3cret-newpw'), false);
+  const staleLogin = await fetch(`${base}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: 'admin123' }),
+  });
+  assert.equal(staleLogin.status, 401);
+  const freshLogin = await fetch(`${base}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: 's3cret-newpw' }),
+  });
+  assert.equal(freshLogin.status, 200);
+  const freshCookie = String(freshLogin.headers.get('set-cookie') || '').split(';')[0];
+  assert.match(freshCookie, /fr_session=/);
+  const freshState = await fetch(`${base}/api/state`, { headers: { Cookie: freshCookie } }).then((res) =>
+    res.json(),
+  );
+  assert.equal(freshState.webui.defaultPassword, false);
+
   const logout = await fetch(`${base}/api/logout`, {
     method: 'POST',
-    headers: { Cookie: sessionCookie },
+    headers: { Cookie: freshCookie },
   });
   assert.equal(logout.status, 200);
-  const afterLogout = await fetch(`${base}/api/state`, { headers: { Cookie: sessionCookie } });
+  const afterLogout = await fetch(`${base}/api/state`, { headers: { Cookie: freshCookie } });
   assert.equal(afterLogout.status, 401);
 
   console.log(

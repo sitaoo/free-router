@@ -12,6 +12,7 @@ import {
   loadConfigFile,
   saveConfigFile,
 } from './config.mjs';
+import { hashPassword, isPasswordHash, verifyPassword } from './auth.mjs';
 import {
   createProviderRegistry,
   isChatModel,
@@ -165,10 +166,61 @@ const USAGE_DAY_FORMATTER = (() => {
 const uiConfig = config.webui || config.ui || {};
 const UI_ENABLED = uiConfig.enabled !== false;
 const UI_ENV_PATH = path.resolve(path.dirname(CONFIG_PATH), uiConfig.envFile || '.env');
-// Web UI single admin password (default "admin123"). Env override wins so a
-// locked-out operator can recover without editing the config file.
-const webuiPassword = () =>
-  String(process.env.FREE_ROUTER_WEBUI_PASSWORD || uiConfig.password || config.ui?.password || 'admin123');
+// Web UI single admin password (default "admin123"). Stored as a salted
+// scrypt hash; legacy plaintext values are upgraded on boot and on login.
+// Env override wins so a locked-out operator can recover without editing
+// the config file.
+const storedWebuiPassword = () => String(uiConfig.password || config.ui?.password || 'admin123');
+
+// Whether the effective password is still the default. Memoized per stored
+// value so the scrypt check runs at most once per password change.
+let defaultPwCache = { key: null, result: false };
+function isDefaultPassword() {
+  if (process.env.FREE_ROUTER_WEBUI_PASSWORD) {
+    return process.env.FREE_ROUTER_WEBUI_PASSWORD === 'admin123';
+  }
+  const stored = storedWebuiPassword();
+  if (stored === 'admin123') return true;
+  if (defaultPwCache.key === stored) return defaultPwCache.result;
+  const result = verifyPassword('admin123', stored);
+  defaultPwCache = { key: stored, result };
+  return result;
+}
+
+function setStoredWebuiPassword(value, { persist = true } = {}) {
+  config.webui ||= {};
+  config.webui.password = value;
+  if (config.ui && typeof config.ui === 'object') config.ui.password = value;
+  defaultPwCache.key = null;
+  if (!persist) return true;
+  try {
+    persistConfig();
+  } catch (error) {
+    log(`could not persist web UI password: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+  return true;
+}
+
+function checkWebuiPassword(input) {
+  const password = String(input || '');
+  if (!password) return false;
+  if (process.env.FREE_ROUTER_WEBUI_PASSWORD) {
+    return verifyPassword(password, process.env.FREE_ROUTER_WEBUI_PASSWORD);
+  }
+  return verifyPassword(password, storedWebuiPassword());
+}
+
+// One-time upgrade: replace a plaintext stored password with a salted hash.
+// Runs at boot and after successful legacy logins (operators hand-editing
+// the file between restarts converge on the next login either way).
+function upgradePasswordStorage(reason) {
+  if (process.env.FREE_ROUTER_WEBUI_PASSWORD) return;
+  const stored = storedWebuiPassword();
+  if (isPasswordHash(stored)) return;
+  setStoredWebuiPassword(hashPassword(stored));
+  log(`upgraded web UI password storage to salted scrypt hash (${reason})`);
+}
 // Login session TTL in hours (default 24, 0 = never expires).
 const sessionTtlHours = () => {
   const raw = Number(config.webui?.sessionTtlHours ?? 24);
@@ -205,8 +257,11 @@ function redactorEnv() {
     if (entry.key) merged[`FREE_ROUTER_GATEWAY_${index}_TOKEN`] = entry.key;
     index += 1;
   }
-  const admin = webuiPassword();
+  const admin = storedWebuiPassword();
   if (admin) merged.FREE_ROUTER_WEBUI_PASSWORD = admin;
+  if (process.env.FREE_ROUTER_WEBUI_PASSWORD) {
+    merged.FREE_ROUTER_WEBUI_PASSWORD = process.env.FREE_ROUTER_WEBUI_PASSWORD;
+  }
   return merged;
 }
 
@@ -325,6 +380,7 @@ function migrateEnvFileOnce() {
 }
 
 migrateEnvFileOnce();
+upgradePasswordStorage('boot');
 
 // Gateway (downstream) API keys: named client credentials for LAN access.
 // Auth is required once at least one key exists (unless explicitly disabled).
@@ -2229,14 +2285,9 @@ async function handleWebuiPassword(req, res) {
     });
   }
   config.webui ||= {};
-  config.webui.password = password;
-  if (config.ui && typeof config.ui === 'object') config.ui.password = password;
-  try {
-    persistConfig();
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+  if (!setStoredWebuiPassword(hashPassword(password))) {
     return sendJson(res, 500, {
-      error: { message: `could not write config file: ${reason}`, type: 'config_write_failed' },
+      error: { message: 'could not write config file', type: 'config_write_failed' },
     });
   }
   webuiSessions.clear();
@@ -2751,9 +2802,10 @@ async function handleLogin(req, res) {
     return sendJson(res, 400, { error: { message: String(error), type: 'invalid_request_error' } });
   }
   const password = typeof body.password === 'string' ? body.password : '';
-  if (!password || password !== webuiPassword()) {
+  if (!checkWebuiPassword(password)) {
     return sendJson(res, 401, { error: { message: 'invalid password', type: 'unauthorized' } });
   }
+  upgradePasswordStorage('login');
   const token = crypto.randomBytes(32).toString('hex');
   pruneWebuiSessions();
   const ttlHours = sessionTtlHours();
@@ -2843,7 +2895,7 @@ async function handler(req, res) {
           })),
         },
         webui: {
-          defaultPassword: webuiPassword() === 'admin123',
+          defaultPassword: isDefaultPassword(),
           sessionTtlHours: sessionTtlHours(),
           sessionExpiresAt: (() => {
             const expiresAt = webuiSessions.get(webuiSessionToken(req));
@@ -2994,7 +3046,7 @@ server.listen(PORT, HOST, async () => {
   } else {
     log('warning: gateway auth is disabled; anyone on the network can call /v1');
   }
-  if (webuiPassword() === 'admin123') log('warning: web UI still uses the default password "admin123"');
+  if (isDefaultPassword()) log('warning: web UI still uses the default password "admin123"');
   for (const provider of PROVIDERS.values()) {
     if (!registry.hasUsableKey(provider)) log(`warning: ${provider.keyEnv} is missing`);
     else if (provider.apiKeys.length > 1) log(`${provider.name}: ${provider.apiKeys.length} keys configured`);
