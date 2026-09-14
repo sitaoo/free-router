@@ -54,7 +54,7 @@ const PORT = Number(process.env.FREE_ROUTER_PORT || config.port || 8787);
 const DEFAULT_ROUTE = config.discovery?.route || 'free-best';
 
 function usage() {
-  console.log(`Usage: ./models.sh [options]
+  console.log(`Usage: ./script/models.sh [options]
 
 Show free-router models in priority order (same ranking as route \`free-best\`).
 

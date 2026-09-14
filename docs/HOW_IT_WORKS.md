@@ -77,7 +77,7 @@ directory owner and refuse to stay root.
 ```bash
 git clone https://github.com/www222fff/free-router.git
 cd free-router
-docker compose up -d
+docker compose -f docker/compose.yaml up -d
 # open http://127.0.0.1:8787/, log in, add keys under Providers
 ```
 
@@ -90,21 +90,24 @@ into the image. Discovery state and usage history persist in the same
 `./data` volume across rebuilds.
 
 ```bash
-docker compose ps
-docker compose logs -f
-docker compose down
+docker compose -f docker/compose.yaml ps
+docker compose -f docker/compose.yaml logs -f
+docker compose -f docker/compose.yaml down
 ```
 
 To pick up code changes, rebuild and recreate:
 
 ```bash
-docker compose up -d --build
+docker compose -f docker/compose.yaml up -d --build
 ```
 
-The compose file mounts one volume, `./data:/srv/free-router/data` — the
-only writable directory. Everything else in the image is read-only code and
-defaults. On a fresh checkout, create the files Docker needs before the
-first `up` (an absent mount source would otherwise become a directory):
+The compose file mounts one volume, `../data:/srv/free-router/data` (relative
+to `docker/`) — the only writable directory. Everything else in the image is
+read-only code and defaults. Local `docker compose up` also auto-loads
+`docker/compose.override.yaml` (live read-only code mount for development);
+production skips it with `docker compose -f docker/compose.yaml up -d`. On a
+fresh checkout, create the files Docker needs before the first `up` (an
+absent mount source would otherwise become a directory):
 
 ```bash
 mkdir -p data && touch data/.env
@@ -118,7 +121,8 @@ app/cli/        list-models command
 app/config/     tracked defaults (config.json; .env.example stays at root)
 test/           smoke tests (`npm test` from the repo root)
 data/           the only writable dir (overlay, state, .env, logs)
-script/         start/stop/models/migrate helpers
+script/         start/stop/models/migrate helpers, systemd unit
+docker/         Dockerfile, compose.yaml (prod base), compose.override.yaml (dev)
 docs/           this documentation, plus one folder per language
 ```
 
@@ -204,7 +208,7 @@ write path is therefore constrained:
 ## LAN access
 
 1. Bind wider: `FREE_ROUTER_HOST=0.0.0.0` and publish the port
-   (`8787:8787` in `docker-compose.yml`, plus any host firewall rule).
+   (`8787:8787` in `docker/compose.yaml`, plus any host firewall rule).
 2. In the web UI, create a gateway API key (Access tab) and change the admin
    password (Settings tab). The status tab links directly to both until done.
 3. Call `/v1/*` with `Authorization: Bearer <key>`; open the UI from any LAN
@@ -628,7 +632,7 @@ else, edit `WorkingDirectory` and `ExecStart` before enabling it.
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp free-router.service ~/.config/systemd/user/
+cp script/free-router.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now free-router
 journalctl --user -u free-router -f

@@ -23,7 +23,7 @@ cd free-router
 ./script/start.sh
 ```
 
-`./script/stop.sh` 停止。Docker：`docker compose up -d`。打开
+`./script/stop.sh` 停止。Docker：`docker compose -f docker/compose.yaml up -d`。打开
 <http://127.0.0.1:8787/> 登录（默认密码 `admin123`）、填 Key、看用量。
 界面有状态、访问、渠道、路由、配额、设置几个标签页，几乎所有配置都能
 在里面改，并跟随浏览器语言（内置 12 种语言）。
@@ -45,7 +45,7 @@ cd free-router
 ## 局域网访问
 
 设置 `FREE_ROUTER_HOST=0.0.0.0`（Docker 默认已是），并在
-`docker-compose.yml` 里放开端口。然后，先做这两件事再暴露：
+`docker/compose.yaml` 里放开端口。然后，先做这两件事再暴露：
 
 1. 在 Web UI（访问 tab）创建一个网关 API Key——有了 Key 之后，`/v1/*`
    要求 `Authorization: Bearer <key>`。
@@ -76,7 +76,8 @@ app/cli/        list-models 命令
 app/config/     tracked 默认值（config.json）
 test/           冒烟测试
 data/           唯一可写目录（overlay、state、.env、日志）
-script/         start/stop/models/migrate 脚本
+script/         start/stop/models/migrate 脚本，systemd unit
+docker/         Dockerfile、compose.yaml（生产基准）、compose.override.yaml（开发）
 docs/           本文档，每种语言一个目录
 ```
 

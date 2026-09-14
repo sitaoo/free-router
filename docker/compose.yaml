@@ -1,6 +1,9 @@
+name: free-router
 services:
   free-router:
-    build: .
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: free-router
     restart: unless-stopped
     environment:
@@ -11,7 +14,8 @@ services:
     volumes:
       # The only writable dir: overlay config, discovery state, .env, logs.
       # Everything else in the image is read-only code and defaults.
-      - ./data:/srv/free-router/data
+      # (Paths are relative to this file's directory.)
+      - ../data:/srv/free-router/data
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s

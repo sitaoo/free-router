@@ -1,0 +1,9 @@
+# Development conveniences. Auto-loaded by `docker compose up` when this
+# file sits next to compose.yaml; production skips it:
+#   docker compose -f docker/compose.yaml up -d
+services:
+  free-router:
+    volumes:
+      # Live code (read-only); /srv/free-router/data stays writable
+      # via the base file's more specific mount.
+      - ..:/srv/free-router:ro

@@ -23,7 +23,7 @@ cd free-router
 ./script/start.sh
 ```
 
-Stop with `./script/stop.sh`. Docker: `docker compose up -d`. Open
+Stop with `./script/stop.sh`. Docker: `docker compose -f docker/compose.yaml up -d`. Open
 <http://127.0.0.1:8787/> to log in (default password `admin123`), set keys
 and watch usage. The interface has tabs for status, access keys, providers,
 routes, quotas, and settings — almost everything is configurable there, and
@@ -46,7 +46,7 @@ just a name and a base URL. See [How it works](docs/HOW_IT_WORKS.md).
 ## LAN access
 
 Set `FREE_ROUTER_HOST=0.0.0.0` (already the Docker default) and open the port
-in `docker-compose.yml`. Then, before exposing anything:
+in `docker/compose.yaml`. Then, before exposing anything:
 
 1. Create a gateway API key in the web UI (Access tab) — `/v1/*` requires
    `Authorization: Bearer <key>` once a key exists.
@@ -78,7 +78,8 @@ app/cli/        list-models command
 app/config/     tracked defaults (config.json)
 test/           smoke tests
 data/           the only writable dir (overlay, state, .env, logs)
-script/         start/stop/models/migrate helpers
+script/         start/stop/models/migrate helpers, systemd unit
+docker/         Dockerfile, compose.yaml (prod base), compose.override.yaml (dev)
 docs/           this documentation, plus one folder per language
 ```
 

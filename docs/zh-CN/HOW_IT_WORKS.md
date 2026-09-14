@@ -78,7 +78,7 @@ root 启动，它们会 re-exec 到目录属主身份，拒绝保持 root。
 ```bash
 git clone https://github.com/www222fff/free-router.git
 cd free-router
-docker compose up -d
+docker compose -f docker/compose.yaml up -d
 # 打开 http://127.0.0.1:8787/ 登录，去渠道 tab 加 Key
 ```
 
@@ -89,18 +89,18 @@ compose 的 `environment:` 或挂载的 `data/.env`（服务端自己读），�
 会 bake 进镜像。发现状态和用量历史跟着同一个 `./data` volume 跨重建保留。
 
 ```bash
-docker compose ps
-docker compose logs -f
-docker compose down
+docker compose -f docker/compose.yaml ps
+docker compose -f docker/compose.yaml logs -f
+docker compose -f docker/compose.yaml down
 ```
 
 要让代码改动生效，重建再重建容器：
 
 ```bash
-docker compose up -d --build
+docker compose -f docker/compose.yaml up -d --build
 ```
 
-compose 只挂一个 volume，`./data:/srv/free-router/data`——它是唯一的
+compose 只挂一个 volume，`../data:/srv/free-router/data`（相对 `docker/` 目录）——它是唯一的
 可写目录，镜像里其余都是只读代码和默认值。全新 checkout 先把 Docker
 要的文件建出来再第一次 `up`（挂载源不存在会被建成目录）：
 
@@ -116,7 +116,8 @@ app/cli/        list-models 命令
 app/config/     tracked 默认值（config.json；.env.example 留根目录）
 test/           冒烟测试（仓库根跑 `npm test`）
 data/           唯一可写目录（overlay、state、.env、日志）
-script/         start/stop/models/migrate 脚本
+script/         start/stop/models/migrate 脚本，systemd unit
+docker/         Dockerfile、compose.yaml（生产基准）、compose.override.yaml（开发）
 docs/           本文档，每种语言一个目录
 ```
 
@@ -193,7 +194,7 @@ npm run models -- --json
 ## 局域网访问
 
 1. 放宽绑定：`FREE_ROUTER_HOST=0.0.0.0` 并发布端口
-   （`docker-compose.yml` 里 `8787:8787`），宿主机防火墙也要放行。
+   （`docker/compose.yaml` 里 `8787:8787`），宿主机防火墙也要放行。
 2. 去 Web UI 建一个网关 API Key（访问 tab），改掉管理密码（设置 tab）。
    状态页在做完之前会直接链过去。
 3. `/v1/*` 带 `Authorization: Bearer <key>` 调；局域网任意浏览器打开 UI
@@ -567,7 +568,7 @@ unit 默认仓库在 `~/free-router`，clone 到别处先改 `WorkingDirectory`
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp free-router.service ~/.config/systemd/user/
+cp script/free-router.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now free-router
 journalctl --user -u free-router -f
