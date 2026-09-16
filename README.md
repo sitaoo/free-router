@@ -22,10 +22,10 @@ then:
 git clone https://github.com/www222fff/free-router.git
 cd free-router
 cp .env.example .env
-./start.sh
+./script/start.sh
 ```
 
-Stop with `./stop.sh`. Docker: `docker compose up -d`. Open
+Stop with `./script/stop.sh`. Docker: `docker compose -f docker/compose.yaml up -d`. Open
 <http://127.0.0.1:8787/> to log in (default password `admin123`), set keys
 and watch usage. The interface has tabs for status, access keys, providers,
 routes, quotas, and settings — almost everything is configurable there, and
@@ -48,7 +48,7 @@ just a name and a base URL. See [How it works](docs/HOW_IT_WORKS.md).
 ## LAN access
 
 Set `FREE_ROUTER_HOST=0.0.0.0` (already the Docker default) and open the port
-in `docker-compose.yml`. Then, before exposing anything:
+in `docker/compose.yaml`. Then, before exposing anything:
 
 1. Create a gateway API key in the web UI (Access tab) — `/v1/*` requires
    `Authorization: Bearer <key>` once a key exists.
@@ -72,8 +72,8 @@ merge per key, arrays are replaced). Provider keys also work straight from
 the environment, so `.env` remains a valid key store that never needs a UI.
 
 ```bash
-./models.sh          # current free-best order
-./models.sh --usage  # today's quota
+./script/models.sh          # current free-best order
+./script/models.sh --usage  # today's quota
 ```
 
 ## Star History

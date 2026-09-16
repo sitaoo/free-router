@@ -1,8 +1,11 @@
 .env
 .env.local
 # Operator overlay: everything changed via WebUI/.env migration lands here.
-# The tracked config.json stays pristine (defaults only).
+# The tracked app/config/config.json stays pristine (defaults only).
 config.local.json
+app/config/config.local.json
+# Future writable dir (see #11; server still uses the repo root).
+data/
 router.log
 router.pid
 discovered-free-models.json

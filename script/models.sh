@@ -20,6 +20,6 @@ load_env() {
 }
 
 load_env "${HOME}/.hermes/.env"
-load_env "$DIR/.env"
+load_env "$(dirname "$DIR")/.env"
 
-exec node "$DIR/list-models.mjs" "$@"
+exec node "$(dirname "$DIR")/app/cli/list-models.mjs" "$@"

@@ -4,9 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildLiveConfig, defaultConfigPath, loadConfigFile, loadOverlayFile } from './config.mjs';
+import { buildLiveConfig, defaultConfigPath, loadConfigFile, loadOverlayFile, resolveConfigPaths } from '../config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const APP_DIR = path.resolve(HERE, '..');
+const REPO_ROOT = path.resolve(HERE, '..', '..');
 
 function loadEnvFile(file) {
   if (!fs.existsSync(file)) return;
@@ -25,17 +27,17 @@ function loadEnvFile(file) {
   }
 }
 
-for (const file of [path.join(HERE, '.env'), path.join(os.homedir(), '.hermes', '.env')]) {
+for (const file of [path.join(REPO_ROOT, '.env'), path.join(APP_DIR, '.env'), path.join(os.homedir(), '.hermes', '.env')]) {
   loadEnvFile(file);
 }
 
-const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || defaultConfigPath(HERE);
+const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || defaultConfigPath(APP_DIR);
 // Same layered view as the server: tracked defaults + operator overlay.
 function loadConfigLite(configPath) {
   if (!fs.existsSync(configPath)) return {};
   try {
     const base = loadConfigFile(configPath).config;
-    const overlayPath = path.join(path.dirname(configPath), 'config.local.json');
+    const { overlayPath } = resolveConfigPaths(APP_DIR, process.env.FREE_ROUTER_CONFIG);
     const { overlay } = loadOverlayFile(overlayPath);
     return buildLiveConfig(base, overlay);
   } catch {
@@ -50,7 +52,7 @@ const PORT = Number(process.env.FREE_ROUTER_PORT || config.port || 8787);
 const DEFAULT_ROUTE = config.discovery?.route || 'free-best';
 
 function usage() {
-  console.log(`Usage: ./models.sh [options]
+  console.log(`Usage: ./script/models.sh [options]
 
 Show free-router models in priority order (same ranking as route \`free-best\`).
 
@@ -257,7 +259,7 @@ async function main() {
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     console.error(`free-router is not reachable at http://${HOST}:${PORT} (${reason})`);
-    console.error('start it with: ./start.sh');
+    console.error('start it with: ./script/start.sh');
     process.exit(1);
   }
 

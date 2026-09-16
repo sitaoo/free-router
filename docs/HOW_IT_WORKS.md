@@ -53,10 +53,10 @@ git clone https://github.com/www222fff/free-router.git
 cd free-router
 cp .env.example .env
 # edit .env and set the keys you have
-./start.sh
+./script/start.sh
 ```
 
-The gateway listens on `127.0.0.1:8787` by default. Stop it with `./stop.sh`.
+The gateway listens on `127.0.0.1:8787` by default. Stop it with `./script/stop.sh`.
 Run these scripts as a normal user. If started as root, they re-exec as the
 directory owner and refuse to stay root.
 
@@ -67,7 +67,7 @@ git clone https://github.com/www222fff/free-router.git
 cd free-router
 cp .env.example .env
 # edit .env and set the keys you have
-docker compose up -d
+docker compose -f docker/compose.yaml up -d
 ```
 
 The gateway is reachable at `http://127.0.0.1:8787/v1` by default; set
@@ -79,35 +79,35 @@ it lives inside the container and is reset on rebuild (the gateway
 re-discovers free models on the weekly schedule).
 
 ```bash
-docker compose ps
-docker compose logs -f
-docker compose down
+docker compose -f docker/compose.yaml ps
+docker compose -f docker/compose.yaml logs -f
+docker compose -f docker/compose.yaml down
 ```
 
 To pick up code changes, rebuild and recreate:
 
 ```bash
-docker compose up -d --build
+docker compose -f docker/compose.yaml up -d --build
 ```
 
 Foreground:
 
 ```bash
-node server.mjs
+node app/server.mjs
 ```
 
 List the current `free-best` priority (same order the gateway will try models):
 
 ```bash
-./models.sh
-./models.sh --ready-only
+./script/models.sh
+./script/models.sh --ready-only
 npm run models -- --json
 ```
 
 See where requests actually landed, and how much of today's quota is left:
 
 ```bash
-./models.sh --usage
+./script/models.sh --usage
 ```
 
 ## Web interface
@@ -146,7 +146,7 @@ names are accepted. A plain `curl` call sends neither header and still works.
 
 ### Why the key endpoints need care
 
-Since `start.sh` sources the env file with `set -a`, being able to write an
+Since `script/start.sh` sources the env file with `set -a`, being able to write an
 arbitrary variable there would mean code execution on the next start. The
 write path is therefore constrained:
 
@@ -165,7 +165,7 @@ write path is therefore constrained:
 ## LAN access
 
 1. Bind wider: `FREE_ROUTER_HOST=0.0.0.0` and publish the port
-   (`8787:8787` in `docker-compose.yml`, plus any host firewall rule).
+   (`8787:8787` in `docker/compose.yaml`, plus any host firewall rule).
 2. In the web UI, create a gateway API key (Access tab) and change the admin
    password (Settings tab). The status tab links directly to both until done.
 3. Call `/v1/*` with `Authorization: Bearer <key>`; open the UI from any LAN
@@ -195,7 +195,7 @@ that key, and the next key is tried before moving to the next model.
 On first boot, keys found in `.env` are imported into `config.local.json`
 once (named `migrated-N`) and removed from `.env`, with a dismissible notice
 in the UI. A personal `FREE_ROUTER_API_KEY` in `.env` additionally becomes a
-named gateway key (it stays in `.env` too, since `models.sh` needs it).
+named gateway key (it stays in `.env` too, since `script/models.sh` needs it).
 
 ## Layered configuration
 
@@ -411,7 +411,7 @@ success rate shifts its score by up to `evaluation.usageWeight` points: 100%
 success adds the full weight, 80% is neutral, 60% or worse subtracts the full
 weight. Pinned models are exempt. When one model is offered by several
 providers, the group is ranked by its best provider, so one bad provider does
-not sink the model. `./models.sh` shows the current shift in the `rank+-`
+not sink the model. `./script/models.sh` shows the current shift in the `rank+-`
 column, and `/health` reports `baseScore` and `scoreAdjustment` per entry.
 
 ### Asking a provider what is free
@@ -550,8 +550,8 @@ state file, are written back at most once every 1.5 seconds, and are pruned to
 `usage.retentionDays`.
 
 ```bash
-./models.sh            # priority list with today / 7d / fail columns
-./models.sh --usage    # per-day and per-model history
+./script/models.sh            # priority list with today / 7d / fail columns
+./script/models.sh --usage    # per-day and per-model history
 ```
 
 ```json
@@ -588,13 +588,13 @@ else, edit `WorkingDirectory` and `ExecStart` before enabling it.
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp free-router.service ~/.config/systemd/user/
+cp script/free-router.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now free-router
 journalctl --user -u free-router -f
 ```
 
-`./start.sh` also works without systemd.
+`./script/start.sh` also works without systemd.
 
 ## Routing behavior
 

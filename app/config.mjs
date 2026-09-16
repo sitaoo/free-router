@@ -319,7 +319,7 @@ export function stringifyToml(config) {
 }
 
 export function defaultConfigPath(here) {
-  return path.join(here, 'config.json');
+  return path.join(here, 'config', 'config.json');
 }
 
 // The user layer. config.json (tracked) holds defaults; this file
@@ -398,8 +398,12 @@ export function runOverlayMigrations(overlay) {
 }
 
 export function resolveConfigPaths(here, customPath) {
-  const basePath = customPath || path.join(here, 'config.json');
-  return { basePath, overlayPath: path.join(path.dirname(basePath), OVERLAY_FILENAME) };
+  const basePath = customPath || path.join(here, 'config', 'config.json');
+  // Custom path (tests) keeps the overlay next to it for isolation; the
+  // default layout keeps operator state at the repo root (sibling of app/),
+  // so tracked app/config/ never receives runtime writes.
+  const overlayDir = customPath ? path.dirname(basePath) : path.resolve(here, '..');
+  return { basePath, overlayPath: path.join(overlayDir, OVERLAY_FILENAME) };
 }
 
 // Reads the overlay file; missing or corrupt files behave as an empty

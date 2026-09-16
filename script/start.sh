@@ -2,6 +2,7 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(dirname "$DIR")"
 
 if [ "$(id -u)" -eq 0 ]; then
   owner="$(stat -c '%U' "$DIR")"
@@ -16,7 +17,7 @@ if [ "$(id -u)" -eq 0 ]; then
   exec runuser -u "$owner" -- "$DIR/start.sh" "$@"
 fi
 
-PID_FILE="$DIR/router.pid"
+PID_FILE="$REPO/router.pid"
 
 if [ -s "$PID_FILE" ]; then
   PID="$(cat "$PID_FILE")"
@@ -37,9 +38,9 @@ load_env() {
 }
 
 load_env "${HOME}/.hermes/.env"
-load_env "$DIR/.env"
+load_env "$REPO/.env"
 
-nohup node "$DIR/server.mjs" >>"$DIR/router.log" 2>&1 &
+nohup node "$REPO/app/server.mjs" >>"$REPO/router.log" 2>&1 &
 PID=$!
 echo "$PID" >"$PID_FILE"
 
@@ -52,5 +53,5 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.5
 done
 
-echo "router failed to become healthy; run: node server.mjs" >&2
+echo "router failed to become healthy; run: node app/server.mjs" >&2
 exit 1

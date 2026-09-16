@@ -40,7 +40,8 @@ import {
 import { displayPath, maskSecret, renderPage, updateEnvFile, validateSecret } from './ui.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const VERSION = JSON.parse(fs.readFileSync(path.join(HERE, 'package.json'), 'utf8')).version;
+const REPO_ROOT = path.resolve(HERE, '..');
+const VERSION = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).version;
 
 function loadEnvFile(file) {
   if (!fs.existsSync(file)) return;
@@ -60,6 +61,7 @@ function loadEnvFile(file) {
 }
 
 const envCandidates = [
+  path.join(REPO_ROOT, '.env'),
   path.join(HERE, '.env'),
   path.join(os.homedir(), '.hermes', '.env'),
 ];
@@ -168,8 +170,12 @@ const DISCOVERY_INTERVAL_MS = Number(discoveryConfig.intervalMs || 7 * 24 * 60 *
 const DISCOVERY_ROUTE = String(discoveryConfig.route || 'free-best');
 // How long a "not free" verdict stands before the model is worth asking again.
 const VERDICT_RETRY_MS = Number(discoveryConfig.verdictRetryMs || DISCOVERY_INTERVAL_MS);
+// Runtime state stays at the repo root (sibling of app/) unless a custom
+// config path is given (tests), in which case it stays next to that file
+// for isolation.
+const RUNTIME_DIR = process.env.FREE_ROUTER_CONFIG ? path.dirname(CONFIG_PATH) : REPO_ROOT;
 const DISCOVERY_STATE_PATH = path.resolve(
-  path.dirname(CONFIG_PATH),
+  RUNTIME_DIR,
   discoveryConfig.stateFile || 'discovered-free-models.json',
 );
 function compilePatterns(patterns, label) {
@@ -230,7 +236,7 @@ const USAGE_DAY_FORMATTER = (() => {
 })();
 const uiConfig = config.webui || config.ui || {};
 const UI_ENABLED = uiConfig.enabled !== false;
-const UI_ENV_PATH = path.resolve(path.dirname(CONFIG_PATH), uiConfig.envFile || '.env');
+const UI_ENV_PATH = path.resolve(RUNTIME_DIR, uiConfig.envFile || '.env');
 // Web UI single admin password (default "admin123"). Stored as a salted
 // scrypt hash; legacy plaintext values are upgraded on boot and on login.
 // Env override wins so a locked-out operator can recover without editing

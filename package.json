@@ -5,10 +5,10 @@
   "type": "module",
   "description": "OpenAI-compatible local gateway that ranks free models across pluggable providers",
   "scripts": {
-    "start": "node server.mjs",
-    "models": "node list-models.mjs",
-    "check": "node --check auth.mjs && node --check config.mjs && node --check i18n.mjs && node --check providers.mjs && node --check proxy.mjs && node --check quota.mjs && node --check redact.mjs && node --check thought-signature.mjs && node --check server.mjs && node --check ui.mjs && node --check list-models.mjs && node --check test-smoke.mjs",
-    "test": "node test-smoke.mjs"
+    "start": "node app/server.mjs",
+    "models": "node app/cli/list-models.mjs",
+    "check": "node --check app/auth.mjs && node --check app/config.mjs && node --check app/i18n.mjs && node --check app/providers.mjs && node --check app/proxy.mjs && node --check app/quota.mjs && node --check app/redact.mjs && node --check app/thought-signature.mjs && node --check app/server.mjs && node --check app/ui.mjs && node --check app/cli/list-models.mjs && node --check test/test-smoke.mjs",
+    "test": "node test/test-smoke.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -52,10 +52,10 @@ git clone https://github.com/www222fff/free-router.git
 cd free-router
 cp .env.example .env
 # 编辑 .env，填上你有的 Key
-./start.sh
+./script/start.sh
 ```
 
-网关默认监听 `127.0.0.1:8787`。`./stop.sh` 停止。请用普通用户跑这两个
+网关默认监听 `127.0.0.1:8787`。`./script/stop.sh` 停止。请用普通用户跑这两个
 脚本；如果以 root 启动，它们会 re-exec 到目录属主身份，拒绝保持 root。
 
 ## Docker 运行
@@ -65,7 +65,7 @@ git clone https://github.com/www222fff/free-router.git
 cd free-router
 cp .env.example .env
 # 编辑 .env，填上你有的 Key
-docker compose up -d
+docker compose -f docker/compose.yaml up -d
 ```
 
 网关默认在 `http://127.0.0.1:8787/v1` 可达，和非 Docker 一样；设置
@@ -75,35 +75,35 @@ docker compose up -d
 里，重建就重置（网关按每周计划重新发现免费模型）。
 
 ```bash
-docker compose ps
-docker compose logs -f
-docker compose down
+docker compose -f docker/compose.yaml ps
+docker compose -f docker/compose.yaml logs -f
+docker compose -f docker/compose.yaml down
 ```
 
 要让代码改动生效，重建再重建容器：
 
 ```bash
-docker compose up -d --build
+docker compose -f docker/compose.yaml up -d --build
 ```
 
 前台运行：
 
 ```bash
-node server.mjs
+node app/server.mjs
 ```
 
 看当前 `free-best` 优先级（就是网关尝试模型的顺序）：
 
 ```bash
-./models.sh
-./models.sh --ready-only
+./script/models.sh
+./script/models.sh --ready-only
 npm run models -- --json
 ```
 
 看请求实际落到哪、今日配额还剩多少：
 
 ```bash
-./models.sh --usage
+./script/models.sh --usage
 ```
 
 ## Web 界面
@@ -139,7 +139,7 @@ npm run models -- --json
 
 ### 写 Key 接口为什么要小心
 
-`start.sh` 用 `set -a` source env 文件，能往里面写任意变量就等于下次
+`script/start.sh` 用 `set -a` source env 文件，能往里面写任意变量就等于下次
 启动时代码执行。所以写入路径是受限的：
 
 - Provider Key 按 **provider 名**寻址，绝不按原始变量名。服务端从合并
@@ -153,7 +153,7 @@ npm run models -- --json
 ## 局域网访问
 
 1. 放宽绑定：`FREE_ROUTER_HOST=0.0.0.0` 并发布端口
-   （`docker-compose.yml` 里 `8787:8787`），宿主机防火墙也要放行。
+   （`docker/compose.yaml` 里 `8787:8787`），宿主机防火墙也要放行。
 2. 去 Web UI 建一个网关 API Key（访问 tab），改掉管理密码（设置 tab）。
    状态页在做完之前会直接链过去。
 3. `/v1/*` 带 `Authorization: Bearer <key>` 调；局域网任意浏览器打开 UI
@@ -180,7 +180,7 @@ npm run models -- --json
 首次启动时，`.env` 里的 Key 会一次性导入 `config.local.json`（命名为
 `migrated-N`）并从 `.env` 里删掉，UI 里有条可关闭的横幅提示迁了几个。
 `.env` 里的个人 `FREE_ROUTER_API_KEY` 会额外变成一个命名网关 Key（它
-留在 `.env` 里不动，因为 `models.sh` 还要用它）。
+留在 `.env` 里不动，因为 `script/models.sh` 还要用它）。
 
 ## 配置分层
 
@@ -375,7 +375,7 @@ TokenRouter 的 `/models` 没有 `pricing` 字段，免费收费混在一起，�
 `evaluation.usageMinRequests` 次尝试后，成功率按
 `evaluation.usageWeight` 上下调分：100% 加满，80% 不动，60% 及以下扣
 满。置顶模型豁免。同一模型多家提供时按最好的一家排名，一家拉胯不连累
-模型。`./models.sh` 的 `rank+-` 列看当前偏移，`/health` 里每条有
+模型。`./script/models.sh` 的 `rank+-` 列看当前偏移，`/health` 里每条有
 `baseScore` 和 `scoreAdjustment`。
 
 ### 问渠道什么免费
@@ -493,8 +493,8 @@ serve 了、谁快摸到免费日 cap。计数器和发现状态住同一个
 `usage.retentionDays` 裁剪。
 
 ```bash
-./models.sh            # 优先级表，带 today / 7d / fail 列
-./models.sh --usage    # 按天、按模型的历史
+./script/models.sh            # 优先级表，带 today / 7d / fail 列
+./script/models.sh --usage    # 按天、按模型的历史
 ```
 
 ```json
@@ -527,13 +527,13 @@ unit 默认仓库在 `~/free-router`，clone 到别处先改 `WorkingDirectory`
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp free-router.service ~/.config/systemd/user/
+cp script/free-router.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now free-router
 journalctl --user -u free-router -f
 ```
 
-不用 systemd 就 `./start.sh`。
+不用 systemd 就 `./script/start.sh`。
 
 ## 路由行为
 

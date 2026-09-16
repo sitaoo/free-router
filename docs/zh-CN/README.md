@@ -22,10 +22,10 @@ Node.js 20+。把 `.env.example` 复制为 `.env`，填至少一个 provider 的
 git clone https://github.com/www222fff/free-router.git
 cd free-router
 cp .env.example .env
-./start.sh
+./script/start.sh
 ```
 
-`./stop.sh` 停止。Docker：`docker compose up -d`。打开
+`./script/stop.sh` 停止。Docker：`docker compose -f docker/compose.yaml up -d`。打开
 <http://127.0.0.1:8787/> 登录（默认密码 `admin123`）、填 Key、看用量。
 界面有状态、访问、渠道、路由、配额、设置几个标签页，几乎所有配置都能
 在里面改，并跟随浏览器语言（内置 12 种语言）。
@@ -47,7 +47,7 @@ cp .env.example .env
 ## 局域网访问
 
 设置 `FREE_ROUTER_HOST=0.0.0.0`（Docker 默认已是），并在
-`docker-compose.yml` 里放开端口。然后，先做这两件事再暴露：
+`docker/compose.yaml` 里放开端口。然后，先做这两件事再暴露：
 
 1. 在 Web UI（访问 tab）创建一个网关 API Key——有了 Key 之后，`/v1/*`
    要求 `Authorization: Bearer <key>`。
@@ -70,8 +70,8 @@ curl -s http://<lan-ip>:8787/v1/chat/completions \
 直接走环境变量，`.env` 永远是一个免 UI 的 Key 存储。
 
 ```bash
-./models.sh          # 当前 free-best 排序
-./models.sh --usage  # 今日配额
+./script/models.sh          # 当前 free-best 排序
+./script/models.sh --usage  # 今日配额
 ```
 
 ## Star History
