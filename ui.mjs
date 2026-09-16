@@ -435,7 +435,7 @@ select {
         </div>
         <div class="row">
           <label class="check"><input type="checkbox" id="np-catalog" checked> <span data-i18n="np_catalog">catalog (/models)</span></label>
-          <label class="check"><input type="checkbox" id="np-pricing" checked> <span data-i18n="np_pricing">publishes prices</span></label>
+          <label class="check"><input type="checkbox" id="np-pricing"> <span data-i18n="np_pricing">publishes prices</span></label>
           <button class="primary" id="np-create" data-i18n="np_create">Add provider</button>
         </div>
       </div>
