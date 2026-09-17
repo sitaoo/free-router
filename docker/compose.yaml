@@ -13,7 +13,9 @@ services:
     # run -e ...` still wins for one-off overrides. NOTE: a fresh container
     # binds 127.0.0.1 until data/.env or the UI sets a host.
     ports:
-      - "127.0.0.1:8787:8787"
+      # Published on all host interfaces; the server inside still binds what
+      # data/.env (first boot) or the overlay says (127.0.0.1 by default).
+      - "8787:8787"
     volumes:
       # The only writable dir: overlay config, discovery state, .env, logs.
       # Everything else in the image is read-only code and defaults.
