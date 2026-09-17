@@ -31,6 +31,7 @@ import {
 import { installUpstreamProxy } from './proxy.mjs';
 import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
 import { createSecretRedactor } from './redact.mjs';
+import { describeLanAccess } from './net.mjs';
 import { isCredentialFault, qualityTotals } from './ranking.mjs';
 import {
   createStreamSignatureExtractor,
@@ -3028,7 +3029,7 @@ async function handler(req, res) {
         configFormat: CONFIG_FORMAT,
         overlayFile: displayPath(OVERLAY_PATH),
         route: DISCOVERY_ROUTE,
-        server: { host: config.host, port: config.port, runningHost: HOST, runningPort: PORT },
+        server: { host: config.host, port: config.port, runningHost: HOST, runningPort: PORT, lan: describeLanAccess() },
         gateway: {
           requireAuth: gatewayAuthRequired(),
           keys: gatewayKeys().map((entry) => ({

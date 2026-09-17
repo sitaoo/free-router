@@ -504,12 +504,12 @@ select {
       </div>
       <div class="sec-body">
         <div class="row">
-          <label><span data-i18n="srv_host">Host</span> <input id="srv-host" class="mono" style="max-width:200px"></label>
+          <label class="check"><input type="checkbox" id="srv-lan"> <span data-i18n="srv_lan">Allow LAN access</span></label>
           <label><span data-i18n="srv_port">Port</span> <input id="srv-port" class="mono" style="max-width:100px"></label>
           <button id="srv-save" data-i18n="srv_save">Save</button>
           <button id="srv-restart" data-i18n="restart_btn">Restart</button>
         </div>
-        <p class="note" data-i18n="srv_note">Bind <span class="mono">0.0.0.0</span> to allow LAN access. Keep the admin password set. Host and port changes need a restart — use the Restart button.</p>
+        <p class="note" id="srv-lan-addrs"></p>
       </div>
     </section>
     <section>
@@ -1026,18 +1026,49 @@ function renderGateway() {
     : '';
 }
 
-function renderServer() {
-  el('server-blurb').textContent =
-    'Config: ' + state.configFile + ' (' + state.configFormat + '). Running on ' + state.server.runningHost + ':' + state.server.runningPort + '.';
-  el('srv-host').value = state.server.host || '';
-  el('srv-port').value = state.server.port || '';
+function isLanOpen(host) {
+  const value = String(host || '').trim().toLowerCase();
+  if (!value) return false;
+  return value !== '127.0.0.1' && value !== 'localhost' && value !== '::1';
+}
+
+function renderLanAddrs(lanOn) {
+  const slot = el('srv-lan-addrs');
+  slot.textContent = '';
+  const port = state.server.runningPort || state.server.port || '';
+  const lan = state.server.lan || { addresses: [], hostname: '', inDocker: false };
+  const line = (text, cls) => {
+    const p = document.createElement('div');
+    if (cls) p.className = cls;
+    p.textContent = text;
+    slot.appendChild(p);
+  };
+  if (!lanOn) {
+    line(t('srv_lan_off') + ' http://127.0.0.1:' + port + ' http://localhost:' + port);
+    return;
+  }
+  const addrs = [...lan.addresses, '127.0.0.1', 'localhost']
+    .map((addr) => 'http://' + addr + ':' + port)
+    .join(' ');
+  line(t('srv_lan_on') + ' ' + addrs + (lan.hostname ? ' (hostname: ' + lan.hostname + ')' : ''));
+  if (lan.inDocker) line(t('srv_lan_docker'));
+  if (!state.gateway || !(state.gateway.keys || []).length) line(t('srv_lan_nokey'), 'warn');
 }
 
 function renderServer() {
   el('server-blurb').textContent =
     'Config: ' + state.configFile + ' (' + state.configFormat + '). Running on ' + state.server.runningHost + ':' + state.server.runningPort + '.';
-  el('srv-host').value = state.server.host || '';
+  el('srv-lan').checked = isLanOpen(state.server.host);
   el('srv-port').value = state.server.port || '';
+  renderLanAddrs(el('srv-lan').checked);
+}
+
+function renderServer() {
+  el('server-blurb').textContent =
+    'Config: ' + state.configFile + ' (' + state.configFormat + '). Running on ' + state.server.runningHost + ':' + state.server.runningPort + '.';
+  el('srv-lan').checked = isLanOpen(state.server.host);
+  el('srv-port').value = state.server.port || '';
+  renderLanAddrs(el('srv-lan').checked);
 }
 
 let activeTab = 'status';
@@ -1511,7 +1542,7 @@ function bindOnce() {
     try {
       const result = await api('api/server', {
         method: 'POST',
-        body: JSON.stringify({ host: el('srv-host').value.trim(), port: Number(el('srv-port').value) }),
+        body: JSON.stringify({ host: el('srv-lan').checked ? '0.0.0.0' : '127.0.0.1', port: Number(el('srv-port').value) }),
       });
       toast(t('srv_saved', { notes: (result.notes || []).join(' ') }), 'good');
       await load();
