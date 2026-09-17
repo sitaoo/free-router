@@ -6,7 +6,6 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT_DIR="$REPO/script"
-PORT="${FREE_ROUTER_PORT:-8787}"
 
 usage() {
   cat <<EOF
@@ -25,6 +24,10 @@ EOF
 }
 
 cmd_status() {
+  # shellcheck disable=SC1091
+  . "$REPO/script/probe-port.sh"
+  local port
+  port="$(probe_port)" || port=8787
   local pid="" pid_file=""
   if [ -s "$REPO/data/router.pid" ]; then
     pid_file="$REPO/data/router.pid"
@@ -35,11 +38,11 @@ cmd_status() {
     pid="$(cat "$pid_file")"
   fi
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null \
-    && curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
-    echo "free-router is running (pid $pid, port $PORT)"
+    && curl -fsS "http://127.0.0.1:${port}/health" >/dev/null 2>&1; then
+    echo "free-router is running (pid $pid, port $port)"
     return 0
   fi
-  echo "free-router is not running (port $PORT)"
+  echo "free-router is not running (port $port)"
   return 1
 }
 

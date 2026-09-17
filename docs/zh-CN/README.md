@@ -21,7 +21,7 @@ Node.js 20+。把 `.env.example` 复制为 `.env`，填至少一个 provider 的
 ```bash
 git clone https://github.com/www222fff/free-router.git
 cd free-router
-cp .env.example .env
+mkdir -p data && cp .env.example data/.env
 ./script/start.sh
 ```
 
@@ -46,7 +46,8 @@ cp .env.example .env
 
 ## 局域网访问
 
-设置 `FREE_ROUTER_HOST=0.0.0.0`（Docker 默认已是），并在
+首次启动前在 `data/.env` 里设置 `FREE_ROUTER_HOST=0.0.0.0`（会被迁移进
+`data/config.local.json`，之后覆盖层说了算，所以 UI 里再改一定生效），并在
 `docker/compose.yaml` 里放开端口。然后，先做这两件事再暴露：
 
 1. 在 Web UI（访问 tab）创建一个网关 API Key——有了 Key 之后，`/v1/*`
@@ -64,10 +65,12 @@ curl -s http://<lan-ip>:8787/v1/chat/completions \
 
 ## 配置分层
 
-`config.json` 只放默认值，保持可合并。你的所有改动——Web UI 里改的、
-首次启动从 `.env` 导入的——都写进 gitignored 的 `config.local.json`，
-启动时覆盖默认值（对象按 key 合并，数组整体替换）。Provider Key 也可以
-直接走环境变量，`.env` 永远是一个免 UI 的 Key 存储。
+`app/config/config.json` 只放默认值，保持可合并。你的所有改动——Web UI
+里改的、首次启动从 `.env` 播种的——都写进 gitignored 的
+`data/config.local.json`，启动时覆盖默认值（对象按 key 合并，数组整体
+替换）。`.env` 文件只在首次启动（还没有覆盖层时）读取播种，之后彻底
+忽略，所以 UI 里改 host/端口/密码一定生效；显式进程环境变量永远最高。
+Provider Key 也可以直接走环境变量，Key 可以完全不落文件。
 
 ```bash
 ./script/models.sh          # 当前 free-best 排序

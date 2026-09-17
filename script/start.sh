@@ -45,22 +45,10 @@ if FOUND_PID_FILE="$(find_pid_file)"; then
 fi
 
 # Probe port resolution (no .env sourcing here: stale file values must not
-# leak into the server environment and veto overlay settings). Order:
-# explicit env wins, then overlay (data/ or legacy root), then tracked base.
-probe_port() {
-  if [ -n "${FREE_ROUTER_PORT:-}" ]; then printf '%s' "$FREE_ROUTER_PORT"; return 0; fi
-  FR_REPO="$REPO" node --input-type=module -e '
-    import fs from "node:fs";
-    import path from "node:path";
-    const repo = process.env.FR_REPO;
-    const read = (f) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return {}; } };
-    const overlay = read(path.join(repo, "data", "config.local.json"));
-    if (!("port" in overlay)) Object.assign(overlay, read(path.join(repo, "config.local.json")));
-    const base = read(path.join(repo, "app", "config", "config.json"));
-    const port = Number(overlay.port ?? base.port ?? 8787);
-    process.stdout.write(String(Number.isFinite(port) && port > 0 ? port : 8787));
-  '
-}
+# leak into the server environment and veto overlay settings). See
+# probe-port.sh for the precedence.
+# shellcheck disable=SC1091
+. "$DIR/probe-port.sh"
 
 PROBE_PORT="$(probe_port)" || PROBE_PORT=8787
 

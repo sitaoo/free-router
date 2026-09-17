@@ -21,7 +21,7 @@ Provider Key 放在 `config.local.json`（gitignored，永不入库）或环境�
 并填值：
 
 ```bash
-cp .env.example .env
+mkdir -p data && cp .env.example data/.env
 ```
 
 | 变量 | 是否必需 | 获取位置 |
@@ -50,8 +50,8 @@ app 标题/referer。
 ```bash
 git clone https://github.com/www222fff/free-router.git
 cd free-router
-cp .env.example .env
-# 编辑 .env，填上你有的 Key
+mkdir -p data && cp .env.example data/.env
+# 编辑 data/.env，填上你有的 Key
 ./script/start.sh
 ```
 
@@ -63,16 +63,17 @@ cp .env.example .env
 ```bash
 git clone https://github.com/www222fff/free-router.git
 cd free-router
-cp .env.example .env
-# 编辑 .env，填上你有的 Key
+mkdir -p data && cp .env.example data/.env
+# 编辑 data/.env，填上你有的 Key（局域网再加 FREE_ROUTER_HOST=0.0.0.0）
 docker compose -f docker/compose.yaml up -d
 ```
 
-网关默认在 `http://127.0.0.1:8787/v1` 可达，和非 Docker 一样；设置
-`FREE_ROUTER_HOST=0.0.0.0`（Docker 默认已是）并发布端口即允许局域网
-访问——但先建网关 API Key、改管理密码（下面局域网一节）。Key 运行时从
-`.env` 注入，永远不会 bake 进镜像。每周发现的状态是临时的：住在容器
-里，重建就重置（网关按每周计划重新发现免费模型）。
+网关默认在 `http://127.0.0.1:8787/v1` 可达，和非 Docker 一样；首次启动前
+在 `data/.env` 里设置 `FREE_ROUTER_HOST=0.0.0.0` 并发布端口即允许局域网
+访问——但先建网关 API Key、改管理密码（下面局域网一节）。首启 `.env`
+种子会迁入 `data/config.local.json`，之后 `.env` 文件彻底忽略，UI 改的
+一定生效。Key 永远不会 bake 进镜像。发现状态跟着 `./data` volume 跨
+重建保留。
 
 ```bash
 docker compose -f docker/compose.yaml ps
@@ -179,15 +180,18 @@ npm run models -- --json
 
 首次启动时，`.env` 里的 Key 会一次性导入 `config.local.json`（命名为
 `migrated-N`）并从 `.env` 里删掉，UI 里有条可关闭的横幅提示迁了几个。
-`.env` 里的个人 `FREE_ROUTER_API_KEY` 会额外变成一个命名网关 Key（它
-留在 `.env` 里不动，因为 `script/models.sh` 还要用它）。
+有覆盖层之后 `.env` 文件彻底忽略（显式进程环境变量除外）。`.env` 里的
+个人 `FREE_ROUTER_API_KEY` 会额外变成一个命名网关 Key（`script/models.sh`
+现在优先读环境变量，其次读覆盖层里的网关 Key，所以 `.env` 删了也能用）。
 
 ## 配置分层
 
-`config.json` 只放默认值、和上游保持一致可合并；操作员的一切改动都写
-gitignored 的 `config.local.json`，服务端启动时深度合并（对象按 key
-递归，数组和标量以覆盖层为准），运行中**只写覆盖层文件**，base 文件
-永不落盘。
+`app/config/config.json` 只放默认值、和上游保持一致可合并；操作员的一切
+改动都写 gitignored 的 `data/config.local.json`，服务端启动时深度合并
+（对象按 key 递归，数组和标量以覆盖层为准），运行中**只写覆盖层文件**，
+base 文件永不落盘。所有运行时状态（覆盖层、发现状态、`.env` 种子、日志）
+都在 `data/` 下；老版本根目录的遗留文件启动时自动搬过去，日志在
+`data/logs/`。
 
 几个推论，提前说清楚：
 
@@ -196,9 +200,11 @@ gitignored 的 `config.local.json`，服务端启动时深度合并（对象按 
   上游加回来也不会复活你删掉的东西。
 - 以后的结构性新增走加法式 schema 迁移（只补缺的骨架键，用户的值
   一个不动），盖着 `_schemaVersion` 戳。
-- 完整优先级（从高到低）：进程环境变量 → `config.local.json` →
-  `config.json` → 代码内置。`FREE_ROUTER_CONFIG` 换的是 base 文件，
-  覆盖层永远是它旁边的 `config.local.json`。
+- 完整优先级（从高到低）：显式进程环境变量 →
+  `data/config.local.json`（UI 写入和首启播种）→ `.env` 文件（仅首启，
+  有覆盖层后彻底忽略）→ `app/config/config.json` → 代码内置。
+  `FREE_ROUTER_CONFIG` 换 base 文件，`FREE_ROUTER_DATA_DIR` 换数据目录；
+  测试把两个都指到临时目录以保持隔离。
 
 ## 对接任意 OpenAI 兼容客户端
 

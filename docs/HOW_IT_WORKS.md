@@ -22,7 +22,7 @@ and scalars come from the overlay when present). Copy the example file,
 uncomment the keys you have, and fill them in:
 
 ```bash
-cp .env.example .env
+mkdir -p data && cp .env.example data/.env
 ```
 
 | Variable | Required | Where to get it |
@@ -51,8 +51,8 @@ URLs, and the OpenRouter app title/referer.
 ```bash
 git clone https://github.com/www222fff/free-router.git
 cd free-router
-cp .env.example .env
-# edit .env and set the keys you have
+mkdir -p data && cp .env.example data/.env
+# edit data/.env and set the keys you have
 ./script/start.sh
 ```
 
@@ -65,18 +65,19 @@ directory owner and refuse to stay root.
 ```bash
 git clone https://github.com/www222fff/free-router.git
 cd free-router
-cp .env.example .env
-# edit .env and set the keys you have
+mkdir -p data && cp .env.example data/.env
+# edit data/.env and set the keys you have (add FREE_ROUTER_HOST=0.0.0.0 for LAN)
 docker compose -f docker/compose.yaml up -d
 ```
 
 The gateway is reachable at `http://127.0.0.1:8787/v1` by default; set
-`FREE_ROUTER_HOST=0.0.0.0` (already the Docker default) and publish the port
-to allow LAN access — but create a gateway API key and change the admin
-password first (see LAN access below). Keys are injected at runtime from
-`.env` and never baked into the image. Weekly-discovery state is ephemeral:
-it lives inside the container and is reset on rebuild (the gateway
-re-discovers free models on the weekly schedule).
+`FREE_ROUTER_HOST=0.0.0.0` in `data/.env` before the first boot and publish
+the port to allow LAN access — but create a gateway API key and change the
+admin password first (see LAN access below). On first boot the `.env` seed is
+migrated into `data/config.local.json` and `.env` files are ignored
+afterwards, so later UI edits always stick. Keys are never baked into the
+image. Discovery state lives in `data/` and persists across rebuilds via the
+mounted volume.
 
 ```bash
 docker compose -f docker/compose.yaml ps
@@ -194,17 +195,23 @@ that key, and the next key is tried before moving to the next model.
 
 On first boot, keys found in `.env` are imported into `config.local.json`
 once (named `migrated-N`) and removed from `.env`, with a dismissible notice
-in the UI. A personal `FREE_ROUTER_API_KEY` in `.env` additionally becomes a
-named gateway key (it stays in `.env` too, since `script/models.sh` needs it).
+in the UI. Once an overlay exists, `.env` files are ignored entirely
+(explicit process environment still wins). A personal `FREE_ROUTER_API_KEY`
+in `.env` additionally becomes a named gateway key (`script/models.sh`
+prefers the environment variable, then the overlay gateway key, so it keeps
+working with no `.env` at all).
 
 ## Layered configuration
 
-`config.json` holds defaults and stays merge-clean (byte-identical to
-upstream where possible). Everything the operator changes — via the web UI
-or the first-boot `.env` import — is written to the gitignored
-`config.local.json`, which the server deep-merges over defaults at startup
-(objects merge per key, arrays and scalars are replaced). The base file is
-never written at runtime.
+`app/config/config.json` holds defaults and stays merge-clean (byte-identical
+to upstream where possible). Everything the operator changes — via the web UI
+or the first-boot `.env` seed — is written to the gitignored
+`data/config.local.json`, which the server deep-merges over defaults at
+startup (objects merge per key, arrays and scalars are replaced). The base
+file is never written at runtime. All operator state (overlay, discovery
+state, `.env` seed, logs) lives under `data/`; a boot-time upgrade moves
+legacy root files (`config.local.json`, `discovered-free-models.json`, `.env`)
+there automatically, and logs live in `data/logs/`.
 
 Consequences worth knowing:
 
@@ -214,9 +221,12 @@ Consequences worth knowing:
   you deleted stays deleted after upgrades.
 - Structural additions ship as additive-only schema migrations (new skeleton
   keys, never touching your values), stamped with `_schemaVersion`.
-- Full precedence, highest first: process environment → `config.local.json`
-  → `config.json` → code defaults. `FREE_ROUTER_CONFIG` swaps the base file;
-  the overlay is always `config.local.json` next to it.
+- Full precedence, highest first: explicit process environment →
+  `data/config.local.json` (UI writes and first-boot seeds) → `.env` files
+  (first boot only; ignored once an overlay exists) → `app/config/config.json`
+  → code defaults. `FREE_ROUTER_CONFIG` swaps the base file,
+  `FREE_ROUTER_DATA_DIR` swaps the data dir; tests point both at a temp dir
+  so they stay isolated.
 
 ## Use with any OpenAI-compatible client
 
