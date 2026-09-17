@@ -7,8 +7,8 @@
   "scripts": {
     "start": "node app/server.mjs",
     "models": "node app/cli/list-models.mjs",
-    "check": "node --check app/auth.mjs && node --check app/config.mjs && node --check app/i18n.mjs && node --check app/providers.mjs && node --check app/proxy.mjs && node --check app/quota.mjs && node --check app/redact.mjs && node --check app/thought-signature.mjs && node --check app/server.mjs && node --check app/ui.mjs && node --check app/cli/list-models.mjs && node --check test/test-smoke.mjs",
-    "test": "node test/test-smoke.mjs"
+    "check": "node --check app/auth.mjs && node --check app/config.mjs && node --check app/i18n.mjs && node --check app/providers.mjs && node --check app/proxy.mjs && node --check app/quota.mjs && node --check app/ranking.mjs && node --check app/redact.mjs && node --check app/thought-signature.mjs && node --check app/server.mjs && node --check app/ui.mjs && node --check app/cli/list-models.mjs && node --check test/test-ranking.mjs && node --check test/test-smoke.mjs",
+    "test": "node test/test-ranking.mjs && node test/test-smoke.mjs"
   },
   "engines": {
     "node": ">=20"

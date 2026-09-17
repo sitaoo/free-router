@@ -1488,12 +1488,12 @@ try {
   const routeByKey = new Map(
     usageHealth.routes['test-route'].map((entry) => [`${entry.provider}:${entry.id}`, entry]),
   );
-  // extra:extra-1 served 1 of 2 attempts, so reliability drags its score down
-  // by the full clamped weight.
+  // extra:extra-1 served 1 of 2 attempts, but the miss was a rateLimit
+  // (capacity, not model quality), so the quality score stays put.
   const extraEntry = routeByKey.get('extra:extra-1');
   assert.equal(extraEntry.baseScore, 82);
-  assert.equal(extraEntry.scoreAdjustment, -12);
-  assert.equal(extraEntry.score, 70);
+  assert.equal(extraEntry.scoreAdjustment, 0);
+  assert.equal(extraEntry.score, 82);
   // Pinned models are exempt from reliability adjustment.
   assert.equal(routeByKey.get('bai:glm-5.3-flash').scoreAdjustment, 0);
   // A group is ranked by its best provider, so the sibling's clean record keeps
