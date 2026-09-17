@@ -4,7 +4,15 @@
 // faults must never be scored as model quality.
 import assert from 'node:assert/strict';
 
-import { QUALITY_FAIL_KINDS, isCredentialFault, qualityTotals } from '../app/ranking.mjs';
+import {
+  CAPACITY_FAIL_KINDS,
+  QUALITY_FAIL_KINDS,
+  UNATTRIBUTED_FAIL_KINDS,
+  USAGE_KINDS,
+  classifyFailure,
+  isCredentialFault,
+  qualityTotals,
+} from '../app/ranking.mjs';
 
 // Capacity failures (rate limit / timeout / aborted client) describe the
 // serving conditions, not the model. They must not move the quality score.
@@ -49,5 +57,41 @@ assert.equal(isCredentialFault(401), true);
 assert.equal(isCredentialFault(429), false);
 assert.equal(isCredentialFault(500), false);
 assert.equal(isCredentialFault(undefined), false);
+
+// Failure classification: every known kind lands in exactly one bucket,
+// so a new status can never silently pollute the quality score again
+// (the 401-in-'other' bug that motivated this).
+{
+  const bucketed = new Set([
+    ...QUALITY_FAIL_KINDS,
+    ...CAPACITY_FAIL_KINDS,
+    ...UNATTRIBUTED_FAIL_KINDS,
+  ]);
+  for (const kind of USAGE_KINDS) {
+    if (kind === 'ok') continue;
+    assert.ok(bucketed.has(kind), `${kind} is not bucketed`);
+  }
+  assert.equal(
+    QUALITY_FAIL_KINDS.size + CAPACITY_FAIL_KINDS.size + UNATTRIBUTED_FAIL_KINDS.size,
+    bucketed.size,
+    'buckets must not overlap',
+  );
+}
+
+// Existing mapping is preserved.
+assert.equal(classifyFailure(0, 'boom', true), 'timeout');
+assert.equal(classifyFailure(429, '', false), 'rateLimit');
+assert.equal(classifyFailure(404, '', false), 'notFound');
+assert.equal(classifyFailure(403, '', false), 'forbidden');
+assert.equal(classifyFailure(500, '', false), 'serverError');
+assert.equal(classifyFailure(200, 'empty response', false), 'empty');
+assert.equal(classifyFailure(200, 'all good', false), '');
+// Payment and overload get their own kinds instead of hiding in 'other'.
+assert.equal(classifyFailure(402, '', false), 'payment');
+assert.equal(classifyFailure(529, '', false), 'overloaded');
+assert.equal(classifyFailure(503, 'server overloaded, retry later', false), 'overloaded');
+assert.equal(classifyFailure(503, 'internal error', false), 'serverError');
+// New kinds never score as quality.
+assert.deepEqual(qualityTotals({ ok: 5, payment: 3, overloaded: 2 }), { ok: 5, fail: 0 });
 
 console.log('ranking unit tests passed');

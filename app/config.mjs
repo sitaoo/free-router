@@ -635,6 +635,8 @@ export function defaultConfigObject() {
       empty: 300000,
       notFound: 3600000,
       forbidden: 3600000,
+      payment: 3600000,
+      overloaded: 15000,
     },
     routes: {
       'free-best': [

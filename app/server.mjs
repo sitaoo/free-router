@@ -32,7 +32,7 @@ import { installUpstreamProxy } from './proxy.mjs';
 import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
 import { createSecretRedactor } from './redact.mjs';
 import { describeLanAccess, lanGuard, loginLockout, recordLoginFailure } from './net.mjs';
-import { isCredentialFault, qualityTotals } from './ranking.mjs';
+import { USAGE_KINDS, classifyFailure, isCredentialFault, qualityTotals } from './ranking.mjs';
 import {
   createStreamSignatureExtractor,
   createThoughtSignatureCache,
@@ -223,17 +223,8 @@ const usageConfig = config.usage || {};
 const USAGE_RETENTION_DAYS = Math.max(1, Number(usageConfig.retentionDays || 7));
 const USAGE_TIMEZONE = String(usageConfig.timezone || '');
 const USAGE_DAILY_LIMITS = usageConfig.dailyLimits || {};
-const USAGE_KINDS = [
-  'ok',
-  'rateLimit',
-  'timeout',
-  'serverError',
-  'empty',
-  'notFound',
-  'forbidden',
-  'aborted',
-  'other',
-];
+// Kind vocabulary lives in app/ranking.mjs (single source of truth, shared
+// with the bucket contract enforced by unit tests).
 // A rejected request never reaches the model, so it does not burn daily quota.
 const USAGE_NON_CONSUMING = new Set(['rateLimit', 'notFound', 'forbidden']);
 const USAGE_DAY_FORMATTER = (() => {
@@ -1655,16 +1646,6 @@ function usefulDelta(payload) {
   if (typeof delta.content === 'string' && delta.content.length) return true;
   if (Array.isArray(delta.content) && delta.content.length) return true;
   return false;
-}
-
-function classifyFailure(status, message, timedOut = false) {
-  if (timedOut) return 'timeout';
-  if (status === 429) return 'rateLimit';
-  if (status === 404) return 'notFound';
-  if (status === 403) return 'forbidden';
-  if (status >= 500) return 'serverError';
-  if (/empty|reasoning only|no useful/i.test(message)) return 'empty';
-  return '';
 }
 
 // Gemini's OpenAI-compatible layer returns errors wrapped in a single-element
