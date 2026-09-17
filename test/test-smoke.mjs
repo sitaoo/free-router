@@ -1043,6 +1043,12 @@ try {
   assert.equal(mockNewEvaluation.benchmarkScore, 65);
   assert.equal(mockNewEvaluation.metadataScore, 12);
   assert.equal(mockNewEvaluation.latencyScore, 6);
+  // mock-a keeps its configured anchor (90) plus the capped capability
+  // portrait from its catalog entry (tools + structured + text = 12 -> +8).
+  const mockAEntry = health.routes['test-route'].find(
+    (entry) => `${entry.provider}:${entry.id}` === 'openrouter:mock-a',
+  );
+  assert.equal(mockAEntry.baseScore, 98);
   assert.equal(mockNewEvaluation.score, 83);
   assert.equal(health.defaultProvider, 'openrouter');
   assert.equal(health.discovery.provider, 'openrouter');

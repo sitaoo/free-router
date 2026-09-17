@@ -11,6 +11,8 @@ import {
   USAGE_KINDS,
   classifyFailure,
   isCredentialFault,
+  metadataBonus,
+  metadataScore,
   qualityTotals,
 } from '../app/ranking.mjs';
 
@@ -93,5 +95,44 @@ assert.equal(classifyFailure(503, 'server overloaded, retry later', false), 'ove
 assert.equal(classifyFailure(503, 'internal error', false), 'serverError');
 // New kinds never score as quality.
 assert.deepEqual(qualityTotals({ ok: 5, payment: 3, overloaded: 2 }), { ok: 5, fail: 0 });
+
+// Capability portrait (moved verbatim from server.mjs; behavior pinned).
+assert.equal(metadataScore(null), 2);
+assert.equal(metadataScore({}), 2);
+assert.equal(
+  metadataScore({
+    supported_parameters: ['tools', 'response_format'],
+    context_length: 131072,
+    architecture: { input_modalities: ['text'] },
+    created: 1000000000,
+  }),
+  17,
+);
+assert.equal(
+  metadataScore({
+    supported_parameters: ['structured_outputs'],
+    context_length: 1048576,
+    architecture: { input_modalities: ['image'] },
+    created: Math.floor(Date.now() / 1000) - 100,
+  }),
+  12,
+);
+
+// Configured-position scores blend in a capped capability-portrait bonus,
+// so a strong model placed low is not stuck behind a weak model placed high.
+// The +2 text-modality floor means "no information" and earns no bonus.
+assert.equal(metadataBonus(null), 0);
+assert.equal(metadataBonus(undefined), 0);
+assert.equal(metadataBonus({}), 0);
+assert.equal(
+  metadataBonus({
+    supported_parameters: ['tools', 'response_format'],
+    context_length: 131072,
+    architecture: { input_modalities: ['text'] },
+    created: 1000000000,
+  }),
+  8,
+);
+assert.equal(metadataBonus({ supported_parameters: ['tools'] }), 8);
 
 console.log('ranking unit tests passed');

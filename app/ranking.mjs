@@ -64,3 +64,34 @@ export function qualityTotals(counts) {
   }
   return { ok, fail };
 }
+
+// Capability portrait from catalog metadata: tool support, structured
+// output, context length (log2 scale), text modality, and recency.
+// (Moved verbatim from server.mjs; discovered models already earn this
+// inside their evaluation score.)
+export function metadataScore(model) {
+  const supported = new Set(model?.supported_parameters || []);
+  const contextLength = Number(model?.context_length || 0);
+  const createdMs = Number(model?.created || 0) * 1000;
+  let score = 0;
+  if (supported.has('tools')) score += 6;
+  if (supported.has('response_format') || supported.has('structured_outputs')) score += 4;
+  score += Math.min(6, Math.max(0, Math.log2(Math.max(4096, contextLength) / 4096)));
+  if ((model?.architecture?.input_modalities || ['text']).includes('text')) score += 2;
+  if (createdMs && Date.now() - createdMs <= 180 * 24 * 60 * 60 * 1000) score += 2;
+  return Math.round(score * 10) / 10;
+}
+
+// Capped portrait bonus blended into configured-position scores, so a
+// strong model placed low is not stuck behind a weak model placed high.
+// The +2 text-modality floor means "no information" and earns nothing;
+// discovered models skip this because their evaluation already includes
+// the full portrait.
+export const METADATA_BONUS_CAP = 8;
+
+export function metadataBonus(metadata) {
+  if (metadata == null) return 0;
+  const portrait = metadataScore(metadata);
+  if (!(portrait > 2)) return 0;
+  return Math.min(METADATA_BONUS_CAP, portrait);
+}

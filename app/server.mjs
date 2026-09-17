@@ -32,7 +32,7 @@ import { installUpstreamProxy } from './proxy.mjs';
 import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
 import { createSecretRedactor } from './redact.mjs';
 import { describeLanAccess, lanGuard, loginLockout, recordLoginFailure } from './net.mjs';
-import { USAGE_KINDS, classifyFailure, isCredentialFault, qualityTotals } from './ranking.mjs';
+import { USAGE_KINDS, classifyFailure, isCredentialFault, metadataBonus, metadataScore, qualityTotals } from './ranking.mjs';
 import {
   createStreamSignatureExtractor,
   createThoughtSignatureCache,
@@ -568,6 +568,14 @@ function candidateMetadata(candidate) {
   return registry.metadata(candidate);
 }
 
+// Capability portrait for a ranked key: null when the provider is unknown,
+// so callers award no bonus instead of guessing.
+function metadataForKey(key) {
+  const parsed = registry.parsePrefixed(key);
+  if (!parsed) return null;
+  return candidateMetadata(parsed);
+}
+
 // A negative verdict is worth acting on but not worth trusting forever: a
 // provider blip would otherwise retire a model permanently with no way back.
 // Positive verdicts need no expiry, since ordinary traffic revisits them and a
@@ -942,9 +950,13 @@ function baseModelScore(key, configured, configuredIndex) {
   const slug = keySlug(key);
   const modelId = key.includes(':') ? key.slice(key.indexOf(':') + 1) : key;
   if (PINNED_MODELS.has(key) || PINNED_MODELS.has(modelId)) return Number.POSITIVE_INFINITY;
-  if (configured.has(key)) return configuredScore(key, configuredIndex.get(key));
+  if (configured.has(key)) {
+    return configuredScore(key, configuredIndex.get(key)) + metadataBonus(metadataForKey(key));
+  }
   for (const [configuredKey, index] of configuredIndex) {
-    if (keySlug(configuredKey) === slug) return configuredScore(configuredKey, index);
+    if (keySlug(configuredKey) === slug) {
+      return configuredScore(configuredKey, index) + metadataBonus(metadataForKey(key));
+    }
   }
   const explicit = explicitScore(key);
   if (explicit !== null) return explicit;
@@ -997,7 +1009,8 @@ function groupRank(group, configuredSet, configuredIndex) {
   const base = pinned
     ? Number.POSITIVE_INFINITY
     : configuredIdx !== Number.POSITIVE_INFINITY
-      ? configuredScore(configuredKey, configuredIdx)
+      ? configuredScore(configuredKey, configuredIdx) +
+        metadataBonus(group.members.length ? candidateMetadata(group.members[0].candidate) : null)
       : explicit !== null
         ? explicit
         : evalScore;
@@ -1129,19 +1142,6 @@ function parseEvaluationAnswers(text) {
   } catch {
     return null;
   }
-}
-
-function metadataScore(model) {
-  const supported = new Set(model?.supported_parameters || []);
-  const contextLength = Number(model?.context_length || 0);
-  const createdMs = Number(model?.created || 0) * 1000;
-  let score = 0;
-  if (supported.has('tools')) score += 6;
-  if (supported.has('response_format') || supported.has('structured_outputs')) score += 4;
-  score += Math.min(6, Math.max(0, Math.log2(Math.max(4096, contextLength) / 4096)));
-  if ((model?.architecture?.input_modalities || ['text']).includes('text')) score += 2;
-  if (createdMs && Date.now() - createdMs <= 180 * 24 * 60 * 60 * 1000) score += 2;
-  return Math.round(score * 10) / 10;
 }
 
 async function evaluateModel(target) {
