@@ -10,9 +10,17 @@ if [ "$(id -u)" -eq 0 ]; then
   fi
 fi
 
-PID_FILE="$(dirname "$DIR")/router.pid"
+REPO="$(dirname "$DIR")"
+DATA_DIR="$REPO/data"
 
-if [ ! -s "$PID_FILE" ]; then
+# New home first, repo-root legacy second.
+find_pid_file() {
+  if [ -s "$DATA_DIR/router.pid" ]; then echo "$DATA_DIR/router.pid"; return 0; fi
+  if [ -s "$REPO/router.pid" ]; then echo "$REPO/router.pid"; return 0; fi
+  return 1
+}
+
+if ! PID_FILE="$(find_pid_file)"; then
   echo "free-router is not running"
   exit 0
 fi
@@ -25,5 +33,5 @@ if kill -0 "$PID" 2>/dev/null; then
     sleep 0.2
   done
 fi
-rm -f "$PID_FILE"
+rm -f "$DATA_DIR/router.pid" "$REPO/router.pid"
 echo "free-router stopped"

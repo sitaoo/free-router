@@ -4,11 +4,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildLiveConfig, defaultConfigPath, loadConfigFile, loadOverlayFile, resolveConfigPaths } from '../config.mjs';
+import { buildLiveConfig, loadConfigFile, loadOverlayFile, resolveLayout } from '../config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP_DIR = path.resolve(HERE, '..');
-const REPO_ROOT = path.resolve(HERE, '..', '..');
+const CLI_LAYOUT = resolveLayout({
+  appDir: APP_DIR,
+  configPath: process.env.FREE_ROUTER_CONFIG || '',
+  dataDir: process.env.FREE_ROUTER_DATA_DIR || '',
+});
 
 function loadEnvFile(file) {
   if (!fs.existsSync(file)) return;
@@ -27,25 +31,42 @@ function loadEnvFile(file) {
   }
 }
 
-for (const file of [path.join(REPO_ROOT, '.env'), path.join(APP_DIR, '.env'), path.join(os.homedir(), '.hermes', '.env')]) {
-  loadEnvFile(file);
+// Seed inbox only: once an overlay exists, .env files are ignored so UI
+// edits always take effect. Explicit process env still wins everywhere.
+if (!fs.existsSync(CLI_LAYOUT.overlayPath)) {
+  for (const file of [...CLI_LAYOUT.envFiles, path.join(os.homedir(), '.hermes', '.env')]) {
+    loadEnvFile(file);
+  }
 }
 
-const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || defaultConfigPath(APP_DIR);
+const CONFIG_PATH = CLI_LAYOUT.basePath;
 // Same layered view as the server: tracked defaults + operator overlay.
 function loadConfigLite(configPath) {
   if (!fs.existsSync(configPath)) return {};
   try {
     const base = loadConfigFile(configPath).config;
-    const { overlayPath } = resolveConfigPaths(APP_DIR, process.env.FREE_ROUTER_CONFIG);
-    const { overlay } = loadOverlayFile(overlayPath);
+    const { overlay } = loadOverlayFile(CLI_LAYOUT.overlayPath);
     return buildLiveConfig(base, overlay);
   } catch {
     return {};
   }
 }
 const config = loadConfigLite(CONFIG_PATH);
-const GATEWAY_KEY = process.env.FREE_ROUTER_API_KEY || '';
+// Gateway key for the local /health call: explicit env first, then the
+// migrated overlay key (models.sh must work with no .env present).
+function firstOverlayGatewayKey() {
+  try {
+    const { overlay } = loadOverlayFile(CLI_LAYOUT.overlayPath);
+    if (Array.isArray(overlay?.gateway?.keys)) {
+      const hit = overlay.gateway.keys.find((entry) => entry && entry.key);
+      if (hit) return String(hit.key);
+    }
+  } catch {
+    // No overlay yet; fall through to no key.
+  }
+  return '';
+}
+const GATEWAY_KEY = process.env.FREE_ROUTER_API_KEY || firstOverlayGatewayKey();
 const authHeaders = GATEWAY_KEY ? { Authorization: `Bearer ${GATEWAY_KEY}` } : {};
 const HOST = process.env.FREE_ROUTER_HOST || config.host || '127.0.0.1';
 const PORT = Number(process.env.FREE_ROUTER_PORT || config.port || 8787);

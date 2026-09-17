@@ -25,9 +25,14 @@ EOF
 }
 
 cmd_status() {
-  local pid=""
-  if [ -s "$REPO/router.pid" ]; then
-    pid="$(cat "$REPO/router.pid")"
+  local pid="" pid_file=""
+  if [ -s "$REPO/data/router.pid" ]; then
+    pid_file="$REPO/data/router.pid"
+  elif [ -s "$REPO/router.pid" ]; then
+    pid_file="$REPO/router.pid"
+  fi
+  if [ -n "$pid_file" ]; then
+    pid="$(cat "$pid_file")"
   fi
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null \
     && curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
