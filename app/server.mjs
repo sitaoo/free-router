@@ -31,7 +31,7 @@ import {
 import { installUpstreamProxy } from './proxy.mjs';
 import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
 import { createSecretRedactor } from './redact.mjs';
-import { describeLanAccess } from './net.mjs';
+import { describeLanAccess, lanGuard, loginLockout, recordLoginFailure } from './net.mjs';
 import { isCredentialFault, qualityTotals } from './ranking.mjs';
 import {
   createStreamSignatureExtractor,
@@ -323,6 +323,16 @@ const sessionTtlHours = () => {
   return Number.isFinite(raw) && raw >= 0 ? raw : 24;
 };
 const webuiSessions = new Map();
+// Failed web UI logins per client IP: 5 strikes lock the IP for 5 minutes
+// (see app/net.mjs). Success clears the record; expired locks prune lazily.
+const loginFailures = new Map();
+function pruneLoginFailures(now = Date.now()) {
+  for (const [ip, state] of loginFailures) {
+    if (!state?.fails && (!state?.lockedUntil || state.lockedUntil <= now)) {
+      loginFailures.delete(ip);
+    }
+  }
+}
 function webuiSessionToken(req) {
   const cookie = String(req.headers.cookie || '');
   const match = cookie.match(/(?:^|;\s*)fr_session=([^;]+)/);
@@ -2945,9 +2955,21 @@ async function handleLogin(req, res) {
     return sendJson(res, 400, { error: { message: String(error), type: 'invalid_request_error' } });
   }
   const password = typeof body.password === 'string' ? body.password : '';
+  const clientIp = req.socket?.remoteAddress || 'unknown';
+  pruneLoginFailures();
+  const lock = loginLockout(loginFailures.get(clientIp));
+  if (lock.locked) {
+    log(`blocked web UI login brute force from ${clientIp}`);
+    return sendJson(res, 429, { error: { message: 'too many failed attempts', type: 'rate_limited' } }, {
+      'Retry-After': String(Math.ceil((lock.retryAfterMs || 0) / 1000)),
+    });
+  }
   if (!checkWebuiPassword(password)) {
+    loginFailures.set(clientIp, recordLoginFailure(loginFailures.get(clientIp)));
+    log(`failed web UI login from ${clientIp}`);
     return sendJson(res, 401, { error: { message: 'invalid password', type: 'unauthorized' } });
   }
+  loginFailures.delete(clientIp);
   upgradePasswordStorage('login');
   const token = crypto.randomBytes(32).toString('hex');
   pruneWebuiSessions();
@@ -3184,6 +3206,19 @@ const server = http.createServer((req, res) => {
 server.requestTimeout = 0;
 server.headersTimeout = 65000;
 server.keepAliveTimeout = 5000;
+
+// A non-loopback bind without gateway keys or with the default password
+// would start open to the LAN: refuse instead of warning into the void.
+const guardReasons = lanGuard({
+  host: HOST,
+  keyCount: gatewayKeys().length,
+  isDefaultPassword: isDefaultPassword(),
+});
+if (guardReasons.length) {
+  console.error(`refusing to start on ${HOST}: ${guardReasons.join('; ')}`);
+  console.error('Create a gateway key and change the admin password first, or bind 127.0.0.1.');
+  process.exit(1);
+}
 
 server.listen(PORT, HOST, async () => {
   log(`Free Router ${VERSION} listening on http://${HOST}:${PORT}/v1 (config: ${displayPath(CONFIG_PATH)}, ${CONFIG_FORMAT})`);

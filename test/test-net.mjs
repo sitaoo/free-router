@@ -3,7 +3,7 @@
 // deduplicated, with hostname and container-view flag passed through.
 import assert from 'node:assert/strict';
 
-import { describeLanAccess, isLanOpen } from '../app/net.mjs';
+import { describeLanAccess, isLanOpen, lanGuard, loginLockout, recordLoginFailure } from '../app/net.mjs';
 
 const fakeInterfaces = {
   lo: [
@@ -53,5 +53,31 @@ assert.equal(isLanOpen('localhost'), false);
 assert.equal(isLanOpen('::1'), false);
 assert.equal(isLanOpen(''), false);
 assert.equal(isLanOpen(undefined), false);
+
+// Boot guard: loopback binds always pass; a LAN bind needs gateway keys
+// and a non-default password, with one reason per missing piece.
+assert.deepEqual(lanGuard({ host: '127.0.0.1', keyCount: 0, isDefaultPassword: true }), []);
+assert.deepEqual(lanGuard({ host: 'localhost', keyCount: 0, isDefaultPassword: true }), []);
+assert.deepEqual(lanGuard({ host: '0.0.0.0', keyCount: 1, isDefaultPassword: false }), []);
+assert.deepEqual(lanGuard({ host: '192.168.1.10', keyCount: 2, isDefaultPassword: false }), []);
+assert.equal(lanGuard({ host: '0.0.0.0', keyCount: 0, isDefaultPassword: false }).length, 1);
+assert.equal(lanGuard({ host: '0.0.0.0', keyCount: 1, isDefaultPassword: true }).length, 1);
+assert.equal(lanGuard({ host: '0.0.0.0', keyCount: 0, isDefaultPassword: true }).length, 2);
+
+// Login brute-force: 5 failures lock the IP for 5 minutes; success clears.
+{
+  const NOW = 1_000_000;
+  assert.deepEqual(loginLockout(undefined, NOW), { locked: false });
+  let state;
+  for (let i = 0; i < 4; i += 1) {
+    state = recordLoginFailure(state, NOW);
+    assert.deepEqual(loginLockout(state, NOW), { locked: false });
+  }
+  state = recordLoginFailure(state, NOW);
+  const locked = loginLockout(state, NOW);
+  assert.equal(locked.locked, true);
+  assert.equal(locked.retryAfterMs, 5 * 60 * 1000);
+  assert.deepEqual(loginLockout(state, NOW + 5 * 60 * 1000 + 1), { locked: false });
+}
 
 console.log('net unit tests passed');
