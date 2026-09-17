@@ -6,86 +6,60 @@
   <img src="docs/og.png" alt="Free Router architecture: any OpenAI client to a local gateway to pluggable providers" width="100%">
 </p>
 
-Local OpenAI-compatible gateway.
-Point any client at `http://127.0.0.1:8787/v1` and use `free-best`.
-It ranks currently free models across **any OpenAI-compatible provider you configure**.
-It fails over when one is rate-limited, down, or empty.
-A missing key just drops that provider.
+Turn scattered **free-tier models** into one **inexhaustible OpenAI endpoint**.
+Point any client at it and call `free-best`: when a model is rate-limited, down, or out of quota, the next one takes over automatically.
+
+- **Zero dependencies**: pure Node standard library. No `npm install`, no supply-chain baggage.
+- **Works out of the box**: generates its own default config on first boot. Open the browser and configure.
+- **Key freedom**: multiple keys per provider rotate automatically. A `401` retires only the bad one.
+- **Transparent quotas**: free allowances tracked per day. Exhausted models step aside and return tomorrow.
+- **LAN ready**: one switch plus gateway auth. Phones, tablets, and other machines at home can use it.
+- **Speaks your language**: 12 UI languages, following the browser automatically.
 
 Site: [www222fff.github.io/free-router](https://www222fff.github.io/free-router/)
 
-## Run (Web UI first)
-
-Node.js 20+.
-Clone, start, and do everything else in the web UI:
+## 60-second start
 
 ```bash
 git clone https://github.com/www222fff/free-router.git
 cd free-router
-./ctl.sh start
+./ctl.sh start          # Node 20+ only, nothing else needed
 ```
 
 Open <http://127.0.0.1:8787/> and log in (default password `admin123`).
-From here, no config files needed:
-
-- **Providers tab** — paste your keys.
-- Multiple keys per provider rotate automatically; a `401` retires only that key.
-- **Access tab** — create gateway API keys for `/v1/*` clients.
-- **Routes tab** — order the models each route tries.
-- **Quotas tab** — daily limits and usage history.
-- **Settings tab** — server, discovery, tuning, and the **Allow LAN access** switch.
-
-The interface follows your browser language (12 languages included).
-`./ctl.sh stop` stops it, `./ctl.sh restart` restarts it, `./ctl.sh status` checks it.
-See [How it works](docs/HOW_IT_WORKS.md).
-
-## LAN access
-
-Settings → **Allow LAN access**.
-It lists every reachable address (`{lan-ip}`, `127.0.0.1`, `localhost`, `{hostname}`).
-Before exposing anything, do these two things first:
-
-1. Create a gateway API key in the web UI (Access tab).
-Once a key exists, `/v1/*` requires `Authorization: Bearer <key>`.
-2. Change the admin password (Settings tab).
-
-Call it like any OpenAI endpoint, plus the key:
+Paste at least one key on the **Providers** tab, then:
 
 ```bash
-curl -s http://<lan-ip>:8787/v1/chat/completions \
+curl http://127.0.0.1:8787/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer sk-fr-...' \
   -d '{"model": "free-best", "messages": [{"role": "user", "content": "hi"}]}'
 ```
 
-## Project layout
+That is it.
+Route order, quotas, LAN access, gateway keys — the rest is all point-and-click in the UI.
+`./ctl.sh stop` stops it, `./ctl.sh status` checks it.
 
-```text
-app/            code (server, providers, UI, config module)
-app/cli/        list-models command
-app/config/     tracked defaults (config.json)
-test/           unit + smoke tests (`npm test` from the repo root)
-data/           the only writable dir (overlay, state, .env seed, logs)
-script/         start/stop/models helpers, systemd unit
-docker/         Dockerfile, compose.yaml (prod base), compose.override.yaml (dev)
-ctl.sh          front door: start/stop/restart/service/docker/status
-```
+## What it does behind the scenes
 
-## Configuration layers
+- **Discovers every two days**: scans provider catalogs. New free models pass a capability exam before joining the ranking.
+- **Ranks live on every request**: config order sets the baseline. Real success rates, cooldowns, and daily limits weigh in. Pinned models always go first.
+- **Bad keys do not implicate anyone**: a `401` retires only the current key. Rate limits only cool down the current key. The model record stays clean.
+- **Settings never get lost**: factory defaults and your changes live in separate files. `git pull` can never clobber them.
+- **Runs anywhere**: foreground, `systemd`, Docker containers. Everything writable lives in the single `data/` directory.
 
-`app/config/config.json` holds defaults and stays merge-clean.
-Everything you change in the web UI is written to the gitignored `data/config.local.json`.
-It wins over defaults at startup (objects merge per key, arrays are replaced).
-Full precedence, highest first: explicit process environment → `data/config.local.json` → first-boot `.env` seed → `app/config/config.json`.
-
-## Daily commands
+## Going further
 
 ```bash
-./script/models.sh          # current free-best order
-./script/models.sh --usage  # today's quota
+./script/models.sh          # live free-best ranking
+./script/models.sh --usage  # who burned how much quota
+./ctl.sh docker --dev       # Docker dev mode (live code mount)
 ```
 
-## Key reference
+- LAN: Settings → **Allow LAN access**. It lists the exact addresses. Create a gateway key and change the password first.
+- New provider: name plus base URL in the web UI, or a block in `app/config/config.json`.
+- Design and config layers: [How it works](docs/HOW_IT_WORKS.md).
+
+## Where to get keys
 
 | Variable | Where |
 | --- | --- |
@@ -94,15 +68,12 @@ Full precedence, highest first: explicit process environment → `data/config.lo
 | `TOKENROUTER_API_KEY` | TokenRouter |
 | `BAI_API_KEY` | [chat.b.ai](https://chat.b.ai) |
 
-More than one key per provider? `OPENROUTER_API_KEYS` (or `OPENROUTER_API_KEY_KEYS`), comma-separated.
-Or add named keys in the web UI; requests rotate across them automatically.
-More providers: add one in the web UI with just a name and a base URL, or add a block in `app/config/config.json`.
+Naming rule: `FOO_API_KEY` plus `FOO_BASE_URL`. Any OpenAI-compatible provider works. Multiple keys, comma-separated.
 
 ## `.env` (optional)
 
-The web UI is the primary way to configure; `.env` is a convenience seed.
-`mkdir -p data && cp .env.example data/.env` and fill in keys.
-Add `FREE_ROUTER_HOST=0.0.0.0` for LAN access.
-First-boot values migrate into `data/config.local.json`; afterwards `.env` files are ignored so UI edits always stick.
+The web UI is the primary way to configure. `.env` is a convenience seed.
+`mkdir -p data && cp .env.example data/.env` and fill it in.
+First-boot values migrate into `data/config.local.json`. Afterwards `.env` files are ignored so UI edits always stick.
 Explicit process environment still wins over everything.
 Provider keys also work straight from the environment, so keys can live outside any file entirely.
