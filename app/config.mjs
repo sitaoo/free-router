@@ -542,6 +542,9 @@ export function defaultConfigObject() {
     redactSecrets: true,
     socksFirstHosts: ['generativelanguage.googleapis.com'],
     defaultProvider: 'openrouter',
+    // Epsilon-greedy exploration: percent of requests detoured to an
+    // underexplored model so cold models can earn traffic. 0 disables.
+    routing: { explorePercent: 5 },
     providers: {
       gemini: {
         catalog: true,

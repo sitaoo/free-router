@@ -862,6 +862,9 @@ fs.writeFileSync(
     attemptTimeoutMs: 5000,
     catalogRefreshMs: 1000,
     defaultProvider: 'openrouter',
+    // Exploration would reorder requests nondeterministically; unit tests
+    // in test-ranking.mjs cover the picker, live sampling stays manual.
+    routing: { explorePercent: 0 },
     providers: {
       openrouter: {
         catalog: true,

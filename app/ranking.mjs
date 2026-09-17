@@ -82,6 +82,21 @@ export function metadataScore(model) {
   return Math.round(score * 10) / 10;
 }
 
+// Epsilon-greedy exploration: with probability percent, the first model in
+// ranked order with fewer than minAttempts jumps the queue, so cold models
+// can earn the traffic that quality adjustments require. Callers pass
+// Math.random(); tests inject the roll. Pinned models are excluded by the
+// caller (they always stay first).
+export function pickExplorationTarget(rankedKeys, attemptsByKey, percent, roll, minAttempts) {
+  const pct = Number(percent) || 0;
+  if (!(pct > 0) || !(Number(roll) < pct / 100)) return null;
+  const floor = Number(minAttempts) || 0;
+  for (const key of rankedKeys || []) {
+    if ((attemptsByKey?.get(key) || 0) < floor) return key;
+  }
+  return null;
+}
+
 // Capped portrait bonus blended into configured-position scores, so a
 // strong model placed low is not stuck behind a weak model placed high.
 // The +2 text-modality floor means "no information" and earns nothing;

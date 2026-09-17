@@ -13,6 +13,7 @@ import {
   isCredentialFault,
   metadataBonus,
   metadataScore,
+  pickExplorationTarget,
   qualityTotals,
 } from '../app/ranking.mjs';
 
@@ -134,5 +135,16 @@ assert.equal(
   8,
 );
 assert.equal(metadataBonus({ supported_parameters: ['tools'] }), 8);
+
+// Exploration: with probability percent, the first underexplored model
+// (fewer than minAttempts) jumps the queue so cold models can earn traffic.
+// Deterministic roll injection keeps this unit-testable; callers pass Math.random.
+assert.equal(pickExplorationTarget(['a', 'b'], new Map([['a', 30], ['b', 30]]), 5, 0.01, 20), null);
+assert.equal(pickExplorationTarget(['a', 'b'], new Map([['a', 30], ['b', 3]]), 0, 0.0, 20), null);
+assert.equal(pickExplorationTarget(['a', 'b'], new Map([['a', 30], ['b', 3]]), 5, 0.99, 20), null);
+assert.equal(pickExplorationTarget(['a', 'b'], new Map([['a', 30], ['b', 3]]), 5, 0.01, 20), 'b');
+assert.equal(pickExplorationTarget(['a', 'b'], new Map(), 5, 0.01, 20), 'a');
+assert.equal(pickExplorationTarget([], new Map(), 5, 0.01, 20), null);
+assert.equal(pickExplorationTarget(['a'], new Map([['a', 0]]), 100, 0.5, 0), null);
 
 console.log('ranking unit tests passed');

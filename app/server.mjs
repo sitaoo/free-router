@@ -32,7 +32,7 @@ import { installUpstreamProxy } from './proxy.mjs';
 import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
 import { createSecretRedactor } from './redact.mjs';
 import { describeLanAccess, lanGuard, loginLockout, recordLoginFailure } from './net.mjs';
-import { USAGE_KINDS, classifyFailure, isCredentialFault, metadataBonus, metadataScore, qualityTotals } from './ranking.mjs';
+import { USAGE_KINDS, classifyFailure, isCredentialFault, metadataBonus, metadataScore, pickExplorationTarget, qualityTotals } from './ranking.mjs';
 import {
   createStreamSignatureExtractor,
   createThoughtSignatureCache,
@@ -566,6 +566,11 @@ function keySlug(key) {
 
 function candidateMetadata(candidate) {
   return registry.metadata(candidate);
+}
+
+function isPinnedKey(key) {
+  const modelId = key.includes(':') ? key.slice(key.indexOf(':') + 1) : key;
+  return PINNED_MODELS.has(key) || PINNED_MODELS.has(modelId);
 }
 
 // Capability portrait for a ranked key: null when the provider is unknown,
@@ -1987,6 +1992,39 @@ async function handleChat(req, res) {
   res.on('close', () => {
     if (!res.writableEnded) clientController.abort();
   });
+
+  // Epsilon-greedy exploration: occasionally route to an underexplored model
+  // so cold models can earn the traffic that quality adjustments require.
+  // Pinned models always stay first; the sampled detour is logged.
+  {
+    const explorePercent = Number(config.routing?.explorePercent ?? 5);
+    const windowAttempts = new Map();
+    for (const day of usageDays()) {
+      const perDay = usageByDay[day] || {};
+      for (const [key, counts] of Object.entries(perDay)) {
+        windowAttempts.set(key, (windowAttempts.get(key) || 0) + usageTotals(counts).total);
+      }
+    }
+    const orderedKeys = candidates
+      .map((candidate) => candidateKey(candidate))
+      .filter((key) => !isPinnedKey(key));
+    const exploreKey = pickExplorationTarget(
+      orderedKeys,
+      windowAttempts,
+      explorePercent,
+      Math.random(),
+      RANK_USAGE_MIN_REQUESTS,
+    );
+    if (exploreKey) {
+      const idx = candidates.findIndex((candidate) => candidateKey(candidate) === exploreKey);
+      if (idx > 0) {
+        const [target] = candidates.splice(idx, 1);
+        const firstOpen = candidates.findIndex((candidate) => !isPinnedKey(candidateKey(candidate)));
+        candidates.splice(firstOpen < 0 ? candidates.length : firstOpen, 0, target);
+        log(`exploring ${exploreKey} (sampling underexplored model)`);
+      }
+    }
+  }
 
   for (const candidate of candidates) {
     if (clientController.signal.aborted) return;
