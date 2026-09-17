@@ -29,6 +29,7 @@ import {
 import { installUpstreamProxy } from './proxy.mjs';
 import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
 import { createSecretRedactor } from './redact.mjs';
+import { isCredentialFault, qualityTotals } from './ranking.mjs';
 import {
   createStreamSignatureExtractor,
   createThoughtSignatureCache,
@@ -888,11 +889,13 @@ function configuredScore(id, configuredIndex) {
 
 // Observed reliability nudges a model up or down once it has served enough
 // traffic to be more trustworthy than a single one-shot evaluation.
+// Only quality failures count: capacity signals (rateLimit/timeout) and
+// routing faults (notFound/forbidden) describe conditions, not the model.
 function usageAdjustment(key) {
   if (!RANK_USAGE_WEIGHT) return 0;
   const counts = {};
   for (const day of usageDays()) mergeUsage(counts, usageByDay[day]?.[key]);
-  const totals = usageTotals(counts);
+  const totals = qualityTotals(counts);
   const attempts = totals.ok + totals.fail;
   if (attempts < RANK_USAGE_MIN_REQUESTS) return 0;
   const successRate = totals.ok / attempts;
@@ -1141,7 +1144,9 @@ async function evaluateModel(target) {
   }
   const result = await attemptJson(candidate, evaluationBody);
   const latencyMs = Date.now() - startedAt;
-  recordUsage(candidate, result.ok ? 'ok' : result.kind || 'other');
+  if (!isCredentialFault(result.status)) {
+    recordUsage(candidate, result.ok ? 'ok' : result.kind || 'other');
+  }
   if (!result.ok) {
     // The refusal is the useful part when probing: it says whether the model is
     // offered for free at all, which no catalog on a price-free provider does.
@@ -1996,10 +2001,14 @@ async function handleChat(req, res) {
         return;
       }
 
-      recordUsage(
-        candidate,
-        clientController.signal.aborted ? 'aborted' : result.kind || 'other',
-      );
+      // A 401 is a credential fault, never a model fault: retire the key
+      // below without letting it pollute the model's quality record.
+      if (!isCredentialFault(result.status)) {
+        recordUsage(
+          candidate,
+          clientController.signal.aborted ? 'aborted' : result.kind || 'other',
+        );
+      }
       failures.push({
         provider: candidate.provider,
         model: candidate.model,
