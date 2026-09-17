@@ -6,16 +6,17 @@ services:
       dockerfile: docker/Dockerfile
     container_name: free-router
     restart: unless-stopped
-    env_file:
-      - ../.env
-    environment:
-      - FREE_ROUTER_HOST=0.0.0.0
-      - FREE_ROUTER_PORT=8787
+    # No env_file / environment: all settings come from data/.env (first
+    # boot seed only, e.g. FREE_ROUTER_HOST=0.0.0.0 for LAN), config.local.json
+    # in data/ (operator writes, authoritative afterwards), and
+    # app/config/config.json (tracked defaults). Explicit `docker compose
+    # run -e ...` still wins for one-off overrides. NOTE: a fresh container
+    # binds 127.0.0.1 until data/.env or the UI sets a host.
     ports:
       - "127.0.0.1:8787:8787"
     volumes:
-      # Reserved for the data/ layout (see #11); the server still keeps
-      # runtime state at the repo root, so this starts out empty.
+      # The only writable dir: overlay config, discovery state, .env, logs.
+      # Everything else in the image is read-only code and defaults.
       - ../data:/srv/free-router/data
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]

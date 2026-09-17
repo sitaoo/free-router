@@ -8,13 +8,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   buildLiveConfig,
-  defaultConfigPath,
   ensureConfigFile,
+  ensureDir,
+  firstBootSeeds,
   isPlainObject,
   loadConfigFile,
   loadOverlayFile,
+  migrateLegacyStateFiles,
   OVERLAY_FILENAME,
-  resolveConfigPaths,
+  resolveLayout,
   runOverlayMigrations,
   saveOverlayFile,
 } from './config.mjs';
@@ -41,7 +43,12 @@ import {
 import { displayPath, maskSecret, renderPage, updateEnvFile, validateSecret } from './ui.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(HERE, '..');
+const LAYOUT = resolveLayout({
+  appDir: HERE,
+  configPath: process.env.FREE_ROUTER_CONFIG || '',
+  dataDir: process.env.FREE_ROUTER_DATA_DIR || '',
+});
+const REPO_ROOT = LAYOUT.repoDir;
 const VERSION = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).version;
 
 function loadEnvFile(file) {
@@ -61,17 +68,31 @@ function loadEnvFile(file) {
   }
 }
 
-const envCandidates = [
-  path.join(REPO_ROOT, '.env'),
-  path.join(HERE, '.env'),
-  path.join(os.homedir(), '.hermes', '.env'),
-];
-for (const file of envCandidates) {
-  if (file) loadEnvFile(file);
+ensureDir(LAYOUT.dataDir);
+// Legacy upgrade only for the default layout: a custom config/data dir
+// means the operator manages placement explicitly (and tests must never
+// touch the real repo root).
+if (!process.env.FREE_ROUTER_CONFIG && !process.env.FREE_ROUTER_DATA_DIR) {
+  for (const name of migrateLegacyStateFiles({ repoDir: LAYOUT.repoDir, dataDir: LAYOUT.dataDir })) {
+    log(`moved legacy ${name} to ${displayPath(LAYOUT.dataDir)}/`);
+  }
 }
 
-const CONFIG_PATH = process.env.FREE_ROUTER_CONFIG || defaultConfigPath(HERE);
-const { overlayPath: OVERLAY_PATH } = resolveConfigPaths(HERE, process.env.FREE_ROUTER_CONFIG);
+const envCandidates = [...LAYOUT.envFiles, path.join(os.homedir(), '.hermes', '.env')];
+// .env files are a first-boot seed inbox only: once an overlay exists, file
+// content is ignored so UI edits (host/port/password) always take effect.
+// Explicit process environment still wins everywhere.
+const overlayExists = fs.existsSync(LAYOUT.overlayPath);
+if (!overlayExists) {
+  for (const file of envCandidates) {
+    if (file) loadEnvFile(file);
+  }
+} else {
+  log(`overlay exists; skipping .env files (${displayPath(LAYOUT.dataDir)}/.env is seed-only)`);
+}
+
+const CONFIG_PATH = LAYOUT.basePath;
+const OVERLAY_PATH = LAYOUT.overlayPath;
 try {
   // Docker creates a directory for a volume-mounted file that does not exist
   // on the host yet; replace it with a real default config instead of
@@ -171,14 +192,7 @@ const DISCOVERY_INTERVAL_MS = Number(discoveryConfig.intervalMs || 7 * 24 * 60 *
 const DISCOVERY_ROUTE = String(discoveryConfig.route || 'free-best');
 // How long a "not free" verdict stands before the model is worth asking again.
 const VERDICT_RETRY_MS = Number(discoveryConfig.verdictRetryMs || DISCOVERY_INTERVAL_MS);
-// Runtime state stays at the repo root (sibling of app/) unless a custom
-// config path is given (tests), in which case it stays next to that file
-// for isolation.
-const RUNTIME_DIR = process.env.FREE_ROUTER_CONFIG ? path.dirname(CONFIG_PATH) : REPO_ROOT;
-const DISCOVERY_STATE_PATH = path.resolve(
-  RUNTIME_DIR,
-  discoveryConfig.stateFile || 'discovered-free-models.json',
-);
+const DISCOVERY_STATE_PATH = LAYOUT.statePath(discoveryConfig.stateFile);
 function compilePatterns(patterns, label) {
   const compiled = [];
   for (const pattern of patterns || []) {
@@ -237,7 +251,16 @@ const USAGE_DAY_FORMATTER = (() => {
 })();
 const uiConfig = config.webui || config.ui || {};
 const UI_ENABLED = uiConfig.enabled !== false;
-const UI_ENV_PATH = path.resolve(RUNTIME_DIR, uiConfig.envFile || '.env');
+// First existing seed file wins (data/.env, then the repo-root legacy);
+// fresh installs write back to data/.env.
+const UI_ENV_PATH =
+  LAYOUT.envFiles.find((file) => {
+    try {
+      return fs.existsSync(file);
+    } catch {
+      return false;
+    }
+  }) || path.resolve(LAYOUT.dataDir, uiConfig.envFile || '.env');
 // Web UI single admin password (default "admin123"). Stored as a salted
 // scrypt hash; legacy plaintext values are upgraded on boot and on login.
 // Env override wins so a locked-out operator can recover without editing
@@ -439,6 +462,15 @@ function migrateEnvFileOnce() {
       for (const name of Object.keys(clearVars)) delete process.env[name];
       for (const provider of PROVIDERS.values()) registry.refreshKeysFromEnv(provider.name);
     }
+  }
+  // First boot only (guarded by migratedFromEnv above): file-provided
+  // host/port/password move into the overlay once, so later UI edits win
+  // and the ignore-.env-after-first-boot rule has something to stand on.
+  const seeds = firstBootSeeds(fileVars, overlay);
+  if (seeds.host !== undefined) setOverlayValue(['host'], seeds.host);
+  if (seeds.port !== undefined) setOverlayValue(['port'], seeds.port);
+  if (seeds.password !== undefined) {
+    setStoredWebuiPassword(hashPassword(seeds.password), { persist: false });
   }
   setOverlayValue(['migratedFromEnv'], summary);
   try {

@@ -10,16 +10,7 @@ if [ "$(id -u)" -eq 0 ]; then
   fi
 fi
 
-load_env() {
-  local file="$1"
-  [ -f "$file" ] || return 0
-  set -a
-  # shellcheck disable=SC1090
-  source "$file"
-  set +a
-}
-
-load_env "${HOME}/.hermes/.env"
-load_env "$(dirname "$DIR")/.env"
-
+# NOTE: no .env sourcing here on purpose. list-models.mjs loads seed files
+# itself on first boot and ignores them once an overlay exists, so sourcing
+# here would let stale file values veto overlay settings in its environment.
 exec node "$(dirname "$DIR")/app/cli/list-models.mjs" "$@"

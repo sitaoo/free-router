@@ -3,6 +3,9 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$DIR")"
+DATA_DIR="$REPO/data"
+LOG_DIR="$DATA_DIR/logs"
+mkdir -p "$LOG_DIR"
 
 if [ "$(id -u)" -eq 0 ]; then
   owner="$(stat -c '%U' "$DIR")"
@@ -17,37 +20,46 @@ if [ "$(id -u)" -eq 0 ]; then
   exec runuser -u "$owner" -- "$DIR/start.sh" "$@"
 fi
 
-PID_FILE="$REPO/router.pid"
+PID_FILE="$DATA_DIR/router.pid"
 
-if [ -s "$PID_FILE" ]; then
-  PID="$(cat "$PID_FILE")"
+# Legacy upgrade: root router.log moves into data/logs once (pid files are
+# resolved read-only below; the new pid is always written to data/).
+if [ -f "$REPO/router.log" ] && [ ! -f "$LOG_DIR/router.log" ]; then
+  mv "$REPO/router.log" "$LOG_DIR/router.log"
+fi
+
+# New home first, repo-root legacy second.
+find_pid_file() {
+  if [ -s "$DATA_DIR/router.pid" ]; then echo "$DATA_DIR/router.pid"; return 0; fi
+  if [ -s "$REPO/router.pid" ]; then echo "$REPO/router.pid"; return 0; fi
+  return 1
+}
+
+if FOUND_PID_FILE="$(find_pid_file)"; then
+  PID="$(cat "$FOUND_PID_FILE")"
   if kill -0 "$PID" 2>/dev/null; then
     echo "free-router already running (pid $PID)"
     exit 0
   fi
-  rm -f "$PID_FILE"
+  rm -f "$DATA_DIR/router.pid" "$REPO/router.pid"
 fi
 
-load_env() {
-  local file="$1"
-  [ -f "$file" ] || return 0
-  set -a
-  # shellcheck disable=SC1090
-  source "$file"
-  set +a
-}
+# Probe port resolution (no .env sourcing here: stale file values must not
+# leak into the server environment and veto overlay settings). See
+# probe-port.sh for the precedence.
+# shellcheck disable=SC1091
+. "$DIR/probe-port.sh"
 
-load_env "${HOME}/.hermes/.env"
-load_env "$REPO/.env"
+PROBE_PORT="$(probe_port)" || PROBE_PORT=8787
 
-nohup node "$REPO/app/server.mjs" >>"$REPO/router.log" 2>&1 &
+nohup node "$REPO/app/server.mjs" >>"$LOG_DIR/router.log" 2>&1 &
 PID=$!
 echo "$PID" >"$PID_FILE"
 
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  if curl -fsS "http://127.0.0.1:${FREE_ROUTER_PORT:-8787}/health" >/dev/null; then
+  if curl -fsS "http://127.0.0.1:${PROBE_PORT}/health" >/dev/null; then
     echo "free-router started (pid $PID, user $(id -un))"
-    echo "endpoint: http://127.0.0.1:${FREE_ROUTER_PORT:-8787}/v1"
+    echo "endpoint: http://127.0.0.1:${PROBE_PORT}/v1"
     exit 0
   fi
   sleep 0.5

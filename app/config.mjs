@@ -319,7 +319,7 @@ export function stringifyToml(config) {
 }
 
 export function defaultConfigPath(here) {
-  return path.join(here, 'config', 'config.json');
+  return resolveLayout({ appDir: here }).basePath;
 }
 
 // The user layer. config.json (tracked) holds defaults; this file
@@ -398,12 +398,91 @@ export function runOverlayMigrations(overlay) {
 }
 
 export function resolveConfigPaths(here, customPath) {
-  const basePath = customPath || path.join(here, 'config', 'config.json');
-  // Custom path (tests) keeps the overlay next to it for isolation; the
-  // default layout keeps operator state at the repo root (sibling of app/),
-  // so tracked app/config/ never receives runtime writes.
-  const overlayDir = customPath ? path.dirname(basePath) : path.resolve(here, '..');
-  return { basePath, overlayPath: path.join(overlayDir, OVERLAY_FILENAME) };
+  const layout = resolveLayout({ appDir: here, configPath: customPath || '' });
+  return { basePath: layout.basePath, overlayPath: layout.overlayPath };
+}
+
+// Single place that knows the project layout (see #11): the tracked base
+// lives under app/, all operator state lives under data/. resolveConfigPaths
+// above delegates to this so every caller shares one definition.
+export function resolveLayout({ appDir, configPath = '', dataDir = '' } = {}) {
+  const repoDir = path.dirname(appDir);
+  const basePath = configPath || path.join(appDir, 'config', 'config.json');
+  // A custom base (tests) keeps its data next to it for isolation unless a
+  // data dir is given explicitly.
+  const resolvedDataDir =
+    dataDir || (configPath ? path.dirname(configPath) : path.join(repoDir, 'data'));
+  // The repo-root legacy fallback exists only for the default layout: any
+  // customization means the operator manages placement explicitly (and a
+  // test must never resolve files outside its own dir).
+  const isDefaultLayout = !configPath && !dataDir;
+  const envFiles = isDefaultLayout
+    ? [path.join(resolvedDataDir, '.env'), path.join(repoDir, '.env')]
+    : [path.join(resolvedDataDir, '.env')];
+  return {
+    appDir,
+    repoDir,
+    basePath,
+    dataDir: resolvedDataDir,
+    overlayPath: path.join(resolvedDataDir, OVERLAY_FILENAME),
+    statePath: (stateFile) =>
+      path.join(resolvedDataDir, path.basename(stateFile || 'discovered-free-models.json')),
+    envFiles,
+  };
+}
+
+// One-time upgrade for pre-data/ checkouts: move well-known root state
+// files into data/ when the data counterpart is absent. Never overwrites,
+// never deletes: leftovers stay for the operator to clean up. Returns the
+// moved file names for logging. (A custom discovery stateFile keeps its own
+// name; only the default is moved here.)
+const LEGACY_STATE_FILES = ['config.local.json', 'discovered-free-models.json', '.env'];
+
+export function migrateLegacyStateFiles({ repoDir, dataDir } = {}) {
+  const moved = [];
+  for (const name of LEGACY_STATE_FILES) {
+    try {
+      const from = path.join(repoDir, name);
+      const to = path.join(dataDir, name);
+      if (!fs.existsSync(from) || fs.existsSync(to)) continue;
+      fs.renameSync(from, to);
+      moved.push(name);
+    } catch {
+      // Best effort; the server logs what moved and operators handle the rest.
+    }
+  }
+  return moved;
+}
+// move into the overlay once, so later UI edits (and the ignore-.env-after-
+// first-boot rule) have something authoritative to win. Returns only the keys
+// that should be written; an absent key means skip.
+// First-boot seeds for UI-editable scalars: file-provided host/port/password
+// move into the overlay once, so later UI edits (and the ignore-.env-after-
+// first-boot rule) have something authoritative to win. Returns only the keys
+// that should be written; an absent key means skip.
+export function firstBootSeeds(fileVars, overlay) {
+  const seeds = {};
+  const current = overlay && typeof overlay === 'object' ? overlay : {};
+  const host = String(fileVars?.get('FREE_ROUTER_HOST') || '').trim();
+  if (host && current.host === undefined) seeds.host = host;
+  const portRaw = String(fileVars?.get('FREE_ROUTER_PORT') || '').trim();
+  const port = Number(portRaw);
+  if (portRaw && Number.isFinite(port) && port > 0 && current.port === undefined) {
+    seeds.port = port;
+  }
+  const password = String(fileVars?.get('FREE_ROUTER_WEBUI_PASSWORD') || '');
+  const overlayPassword =
+    current.webui && typeof current.webui === 'object' ? current.webui.password : undefined;
+  if (password && overlayPassword === undefined) seeds.password = password;
+  return seeds;
+}
+
+export function ensureDir(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch {
+    // Save paths below create parents too; this is best effort.
+  }
 }
 
 // Reads the overlay file; missing or corrupt files behave as an empty
