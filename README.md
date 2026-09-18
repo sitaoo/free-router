@@ -1,4 +1,4 @@
-# Free Router
+# Free Router Plus
 
 > English | [中文](docs/zh-CN/README.md)
 
@@ -6,8 +6,7 @@
   <img src="docs/og.png" alt="Free Router architecture: any OpenAI client to a local gateway to pluggable providers" width="100%">
 </p>
 
-Turn scattered **free-tier models** into one **inexhaustible OpenAI endpoint**.
-Point any client at it and call `free-best`: when a model is rate-limited, down, or out of quota, the next one takes over automatically.
+Turn scattered **free-tier models** into one **inexhaustible OpenAI endpoint**. Point any client at it and call `free-best`: when a model is rate-limited, down, or out of quota, the next one takes over automatically.
 
 - **Zero dependencies**: pure Node standard library. No `npm install`, no supply-chain baggage.
 - **Works out of the box**: generates its own default config on first boot. Open the browser and configure.
@@ -16,18 +15,25 @@ Point any client at it and call `free-best`: when a model is rate-limited, down,
 - **LAN ready**: one switch plus gateway auth. Phones, tablets, and other machines at home can use it.
 - **Speaks your language**: 12 UI languages, following the browser automatically.
 
-Site: [www222fff.github.io/free-router](https://www222fff.github.io/free-router/)
+## Contents
+
+- [60-second start](#60-second-start)
+- [What it does behind the scenes](#what-it-does-behind-the-scenes)
+- [Going further](#going-further)
+- [Where to get keys](#where-to-get-keys)
+- [`.env` (optional)](#env-optional)
+- [Development](#development)
+- [Upstream and fork](#upstream-and-fork)
 
 ## 60-second start
 
 ```bash
-git clone https://github.com/www222fff/free-router.git
+git clone https://github.com/sitaoo/free-router.git
 cd free-router
 ./ctl.sh start          # Node 20+ only, nothing else needed
 ```
 
-Open <http://127.0.0.1:8787/> and log in (default password `admin123`).
-Paste at least one key on the **Providers** tab, then:
+Open <http://127.0.0.1:8787/> and log in (default password `admin123`). Paste at least one key on the **Providers** tab, then:
 
 ```bash
 curl http://127.0.0.1:8787/v1/chat/completions \
@@ -35,9 +41,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
   -d '{"model": "free-best", "messages": [{"role": "user", "content": "hi"}]}'
 ```
 
-That is it.
-Route order, quotas, LAN access, gateway keys — the rest is all point-and-click in the UI.
-`./ctl.sh stop` stops it, `./ctl.sh status` checks it.
+That is it. Route order, quotas, LAN access, gateway keys — the rest is all point-and-click in the UI. `./ctl.sh stop` stops it, `./ctl.sh status` checks it.
 
 ## What it does behind the scenes
 
@@ -73,8 +77,17 @@ Naming rule: `FOO_API_KEY` plus `FOO_BASE_URL`. Any OpenAI-compatible provider w
 
 ## `.env` (optional)
 
-The web UI is the primary way to configure. `.env` is a convenience seed.
-`mkdir -p data && cp .env.example data/.env` and fill it in.
-First-boot values migrate into `data/config.local.json`. Afterwards `.env` files are ignored so UI edits always stick.
-Explicit process environment still wins over everything.
-Provider keys also work straight from the environment, so keys can live outside any file entirely.
+The web UI is the primary way to configure; `.env` is a convenience seed. `mkdir -p data && cp .env.example data/.env` and fill in keys. Add `FREE_ROUTER_HOST=0.0.0.0` for LAN access. First-boot values migrate into `data/config.local.json`. Afterwards `.env` files are ignored so UI edits always stick. Explicit process environment still wins over everything. Provider keys also work straight from the environment, so keys can live outside any file entirely.
+
+## Development
+
+```bash
+npm test    # unit + smoke tests
+npm run check  # syntax check every file
+```
+
+`main` mirrors upstream. `plus` is this edition's trunk. Feature branches are short-lived and fast-forwarded.
+
+## Upstream and fork
+
+Forked from [www222fff/free-router-proxy](https://github.com/www222fff/free-router-proxy) (upstream: code, issues, [docs site](https://www222fff.github.io/free-router/)). This fork (the `plus` edition) keeps LAN access and adds: structured `app/` layout, `data/`-only runtime state, `ctl.sh` front door, hardened auth, and a learned ranking pipeline. Upstream PRs (e.g. directory layout) are proposed back when they fit both directions.

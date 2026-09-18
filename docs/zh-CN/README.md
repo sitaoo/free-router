@@ -1,4 +1,4 @@
-# Free Router
+# Free Router Plus
 
 > [English](../../README.md) | 中文
 
@@ -6,8 +6,7 @@
   <img src="../og.png" alt="Free Router 架构：任意 OpenAI 客户端 → 本地网关 → 可插拔 providers" width="100%">
 </p>
 
-把散落在各家的**免费大模型**，拼成一个**用不完、打不挂**的 OpenAI 接口。
-任意客户端指向它，只调 `free-best`：模型限流、宕机、额度烧完，它自动换下一个顶上。
+把散落在各家的**免费大模型**，拼成一个**用不完、打不挂**的 OpenAI 接口。任意客户端指向它，只调 `free-best`：模型限流、宕机、额度烧完，它自动换下一个顶上。
 
 - **零依赖**：纯 Node 标准库，没有 `npm install`，没有供应链包袱。
 - **开箱即用**：首次启动自己生成默认配置，打开浏览器就能配。
@@ -16,16 +15,25 @@
 - **局域网就绪**：一键开关 + 网关鉴权，手机、平板、家里其他机器都能用。
 - **讲你的语言**：12 种界面语言，跟随浏览器自动切换。
 
+## 目录
+
+- [60 秒上手](#60-秒上手)
+- [它在背后做什么](#它在背后做什么)
+- [进阶](#进阶)
+- [Key 去哪领](#key-去哪领)
+- [`.env`（可选）](#env可选)
+- [开发](#开发)
+- [上游与 fork](#上游与-fork)
+
 ## 60 秒上手
 
 ```bash
-git clone https://github.com/www222fff/free-router.git
+git clone https://github.com/sitaoo/free-router.git
 cd free-router
 ./ctl.sh start          # 只要 Node 20+，无其他依赖
 ```
 
-打开 <http://127.0.0.1:8787/>，默认密码 `admin123` 登录。
-去**渠道**页粘贴至少一个 Key，然后：
+打开 <http://127.0.0.1:8787/>，默认密码 `admin123` 登录。去**渠道**页粘贴至少一个 Key，然后：
 
 ```bash
 curl http://127.0.0.1:8787/v1/chat/completions \
@@ -33,14 +41,12 @@ curl http://127.0.0.1:8787/v1/chat/completions \
   -d '{"model": "free-best", "messages": [{"role": "user", "content": "hi"}]}'
 ```
 
-通了。
-路由排序、配额、局域网、网关 Key，剩下的全在 UI 里点。
-`./ctl.sh stop` 停止，`./ctl.sh status` 看状态。
+通了。路由排序、配额、局域网、网关 Key，剩下的全在 UI 里点。`./ctl.sh stop` 停止，`./ctl.sh status` 看状态。
 
 ## 它在背后做什么
 
 - **每两天自动发现**：扫描各渠道目录，新出现的免费模型先做一套能力实测，够格才进榜。
-- **每次请求现场排名**：配置顺序定起跑线，真实成功率、冷静期、日限额实时加权， pinned 模型永远先上。
+- **每次请求现场排名**：配置顺序定起跑线，真实成功率、冷静期、日限额实时加权，pinned 模型永远先上。
 - **0-100 打分尺度**：画像加成、稀缺让路、实时延迟微调排序，百分之几的流量探冷模型。详见[打分尺度与实时信号](HOW_IT_WORKS.md#打分尺度与实时信号)。
 - **坏 Key 不连坐**：401 只退役当前 Key，限流只冷却当前 Key，从不给模型记黑账。
 - **配置丢不了**：出厂默认和你的改动分文件存放，`git pull` 永远冲不掉设置。
@@ -71,6 +77,17 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 ## `.env`（可选）
 
-UI 是正道，`.env` 只给两种人准备：首启播种和无 UI 的机器。
-`mkdir -p data && cp .env.example data/.env`，填好首启自动迁入配置，之后不再看它。
-显式环境变量永远最高，Key 也可以完全不落文件。
+Web UI 是主要配置方式，`.env` 只是便利种子。`mkdir -p data && cp .env.example data/.env`，填上 Key。局域网再加 `FREE_ROUTER_HOST=0.0.0.0`。首启内容会被迁移进 `data/config.local.json`，之后 `.env` 彻底忽略，UI 改的一定生效。显式进程环境变量永远最高。Provider Key 也可以直接走环境变量，Key 可以完全不落文件。
+
+## 开发
+
+```bash
+npm test       # 单元 + 冒烟测试
+npm run check  # 全文件语法检查
+```
+
+`main` 镜像上游，`plus` 是本版主干。功能分支短命，用完快进合入即删。
+
+## 上游与 fork
+
+Fork 自 [www222fff/free-router-proxy](https://github.com/www222fff/free-router-proxy)（上游：代码、issue、[文档站](https://www222fff.github.io/free-router/)）。本 fork（`plus` 版）保留局域网访问，并新增：结构化 `app/` 布局、`data/` 唯一运行时目录、`ctl.sh` 总入口、加固过的鉴权、会学习的排序管线。适合双边的上游 PR（如目录结构）会再提回去。
