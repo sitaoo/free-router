@@ -307,6 +307,22 @@ select {
 .switch input:checked + .slider { background: var(--accent); }
 .switch input:checked + .slider:before { transform: translateX(20px); }
 
+/* Settings rows: one setting per row, title + description on the left,
+   control on the right, full width. Rows in one group separated by a
+   light divider; groups are already card-separated with titles outside. */
+.setrow { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; padding: 12px 0; }
+.setrow + .setrow { border-top: 1px solid var(--line-soft); }
+.setrow:first-child { padding-top: 4px; }
+.setrow:last-child { padding-bottom: 4px; }
+.setrow .set-text { flex: 1; min-width: 0; }
+.setrow .set-title { font-size: 13.5px; font-weight: 600; }
+.setrow .set-desc { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.setrow .set-ctl { flex: none; display: flex; gap: 8px; align-items: center; }
+.setrow .set-ctl .switch { margin-top: 0; }
+.setrow input.mono { text-align: right; }
+.setrow-full { padding: 12px 0; }
+.setrow-full + .setrow-full { border-top: 1px solid var(--line-soft); }
+
 /* One-time migration notice. */
 .banner {
   border: 1px solid var(--warn); background: var(--warn-soft); color: var(--text);
@@ -423,23 +439,6 @@ select {
         <div id="providers"></div>
       </div>
     </section>
-    <section>
-      <div class="sec-head"><h2 data-i18n="add_provider">Add provider</h2><p data-i18n="add_provider_blurb">Any OpenAI-compatible endpoint. After adding, paste its key above.</p></div>
-      <div class="sec-body">
-        <div class="row">
-          <input id="np-name" data-i18n-ph="np_name_ph" placeholder="name: groq" style="max-width:150px">
-          <input id="np-baseurl" class="mono" data-i18n-ph="np_url_ph" placeholder="https://api.groq.com/openai/v1" style="flex:1;min-width:220px">
-        </div>
-        <div class="row">
-          <input id="np-freemodels" class="mono" data-i18n-ph="np_fm_ph" placeholder="free models, comma separated (for APIs without prices)" style="flex:1;min-width:220px">
-        </div>
-        <div class="row">
-          <label class="check"><input type="checkbox" id="np-catalog" checked> <span data-i18n="np_catalog">catalog (/models)</span></label>
-          <label class="check"><input type="checkbox" id="np-pricing"> <span data-i18n="np_pricing">publishes prices</span></label>
-          <button class="primary" id="np-create" data-i18n="np_create">Add provider</button>
-        </div>
-      </div>
-    </section>
   </div>
 
   <div data-pane="routes" hidden>
@@ -477,13 +476,35 @@ select {
     <section>
       <div class="sec-head"><h2 data-i18n="disc_title">Discovery</h2><p data-i18n="disc_blurb">Automatic free-model discovery and ranking.</p></div>
       <div class="sec-body">
-        <div class="row">
-          <label class="check"><input type="checkbox" id="disc-enabled"> <span data-i18n="disc_enabled">discovery enabled</span></label>
-          <label class="check"><input type="checkbox" id="disc-eval"> <span data-i18n="disc_eval">model evaluation</span></label>
+        <div class="setrow">
+          <div class="set-text">
+            <div class="set-title" data-i18n="disc_enabled">Discovery enabled</div>
+            <div class="set-desc" data-i18n="disc_enabled_desc">Periodically scan catalogs for newly free models.</div>
+          </div>
+          <div class="set-ctl"><label class="switch"><input type="checkbox" id="disc-enabled"><span class="slider"></span></label></div>
+        </div>
+        <div class="setrow">
+          <div class="set-text">
+            <div class="set-title" data-i18n="disc_eval">Model evaluation</div>
+            <div class="set-desc" data-i18n="disc_eval_desc">Benchmark new models once before they join routes.</div>
+          </div>
+          <div class="set-ctl"><label class="switch"><input type="checkbox" id="disc-eval"><span class="slider"></span></label></div>
+        </div>
+        <div class="setrow">
+          <div class="set-text">
+            <div class="set-title" data-i18n="disc_provider">Provider</div>
+            <div class="set-desc" data-i18n="disc_provider_desc">Which catalog to discover from.</div>
+          </div>
+          <div class="set-ctl"><select id="disc-provider"></select></div>
+        </div>
+        <div class="setrow">
+          <div class="set-text">
+            <div class="set-title" data-i18n="disc_interval">Interval (hours)</div>
+            <div class="set-desc" data-i18n="disc_interval_desc">How often discovery runs.</div>
+          </div>
+          <div class="set-ctl"><input id="disc-interval" class="mono" style="max-width:90px"></div>
         </div>
         <div class="row">
-          <label><span data-i18n="disc_provider">Provider</span> <select id="disc-provider"></select></label>
-          <label><span data-i18n="disc_interval">Interval (hours)</span> <input id="disc-interval" class="mono" style="max-width:90px"></label>
           <button id="disc-save" data-i18n="disc_save">Save</button>
         </div>
         <p class="note" id="disc-note"></p>
@@ -503,32 +524,79 @@ select {
         <p id="server-blurb"></p>
       </div>
       <div class="sec-body">
+        <div class="setrow">
+          <div class="set-text">
+            <div class="set-title" data-i18n="srv_lan">Allow LAN access</div>
+            <div class="set-desc" id="srv-lan-addrs"></div>
+          </div>
+          <div class="set-ctl"><label class="switch"><input type="checkbox" id="srv-lan"><span class="slider"></span></label></div>
+        </div>
+        <div class="setrow">
+          <div class="set-text">
+            <div class="set-title" data-i18n="srv_port">Port</div>
+            <div class="set-desc" data-i18n="srv_port_desc">Takes effect after a restart.</div>
+          </div>
+          <div class="set-ctl"><input id="srv-port" class="mono" style="max-width:100px"></div>
+        </div>
         <div class="row">
-          <label class="check"><input type="checkbox" id="srv-lan"> <span data-i18n="srv_lan">Allow LAN access</span></label>
-          <label><span data-i18n="srv_port">Port</span> <input id="srv-port" class="mono" style="max-width:100px"></label>
           <button id="srv-save" data-i18n="srv_save">Save</button>
           <button id="srv-restart" data-i18n="restart_btn">Restart</button>
         </div>
-        <p class="note" id="srv-lan-addrs"></p>
       </div>
     </section>
     <section>
       <div class="sec-head"><h2 data-i18n="tuning_title">Tuning</h2><p data-i18n="tuning_blurb">Timeouts apply immediately; proxy and retention settings need a restart.</p></div>
       <div class="sec-body">
-        <div class="row">
-          <label><span data-i18n="tun_timeout">Attempt timeout (ms)</span> <input id="set-timeout" class="mono" style="max-width:120px"></label>
-          <label><span data-i18n="tun_refresh">Catalog refresh (ms)</span> <input id="set-refresh" class="mono" style="max-width:130px"></label>
-          <label class="check"><input type="checkbox" id="set-redact"> <span data-i18n="tun_redact">redact secrets</span></label>
+        <div class="setrow">
+          <div class="set-text">
+            <div class="set-title" data-i18n="tun_timeout">Attempt timeout (ms)</div>
+            <div class="set-desc" data-i18n="tun_timeout_desc">Per-request ceiling. Applies immediately.</div>
+          </div>
+          <div class="set-ctl"><input id="set-timeout" class="mono" style="max-width:120px"></div>
+        </div>
+        <div class="setrow">
+          <div class="set-text">
+            <div class="set-title" data-i18n="tun_refresh">Catalog refresh (ms)</div>
+            <div class="set-desc" data-i18n="tun_refresh_desc">How often provider catalogs refetch.</div>
+          </div>
+          <div class="set-ctl"><input id="set-refresh" class="mono" style="max-width:130px"></div>
+        </div>
+        <div class="setrow">
+          <div class="set-text">
+            <div class="set-title" data-i18n="tun_redact">Redact secrets</div>
+            <div class="set-desc" data-i18n="tun_redact_desc">Strip keys from logs and upstream payloads.</div>
+          </div>
+          <div class="set-ctl"><label class="switch"><input type="checkbox" id="set-redact"><span class="slider"></span></label></div>
+        </div>
+        <div class="setrow">
+          <div class="set-text">
+            <div class="set-title" data-i18n="tun_default">Default provider</div>
+            <div class="set-desc" data-i18n="tun_default_desc">Assumed provider for bare model ids in routes.</div>
+          </div>
+          <div class="set-ctl"><select id="set-default"></select></div>
+        </div>
+        <div class="setrow">
+          <div class="set-text">
+            <div class="set-title" data-i18n="tun_socks">Socks-first hosts</div>
+            <div class="set-desc" data-i18n="tun_socks_desc">Comma-separated hosts that prefer the SOCKS proxy.</div>
+          </div>
+          <div class="set-ctl"><input id="set-socks" class="mono" data-i18n-ph="tun_socks_ph" placeholder="socks-first hosts, comma separated" style="max-width:220px"></div>
+        </div>
+        <div class="setrow">
+          <div class="set-text">
+            <div class="set-title" data-i18n="tun_retention">Usage retention (days)</div>
+            <div class="set-desc" data-i18n="tun_retention_desc">How many days of usage history to keep.</div>
+          </div>
+          <div class="set-ctl"><input id="set-retention" class="mono" style="max-width:80px"></div>
+        </div>
+        <div class="setrow">
+          <div class="set-text">
+            <div class="set-title" data-i18n="tun_timezone">Timezone</div>
+            <div class="set-desc" data-i18n="tun_timezone_desc">Daily quota boundaries, e.g. America/Los_Angeles.</div>
+          </div>
+          <div class="set-ctl"><input id="set-timezone" class="mono" data-i18n-ph="tun_timezone_ph" placeholder="America/Los_Angeles" style="max-width:200px"></div>
         </div>
         <div class="row">
-          <label><span data-i18n="tun_default">Default provider</span> <select id="set-default"></select></label>
-        </div>
-        <div class="row">
-          <input id="set-socks" class="mono" data-i18n-ph="tun_socks_ph" placeholder="socks-first hosts, comma separated" style="flex:1;min-width:200px">
-        </div>
-        <div class="row">
-          <label><span data-i18n="tun_retention">Usage retention (days)</span> <input id="set-retention" class="mono" style="max-width:80px"></label>
-          <label><span data-i18n="tun_timezone">Timezone</span> <input id="set-timezone" class="mono" data-i18n-ph="tun_timezone_ph" placeholder="America/Los_Angeles" style="max-width:200px"></label>
           <button class="primary" id="set-save" data-i18n="tun_save">Save tuning</button>
         </div>
         <p class="note" id="set-note"></p>
@@ -540,16 +608,26 @@ select {
         <p data-i18n="admin_blurb">Web UI password (default <span class="mono">admin123</span>). Changing it logs out all sessions.</p>
       </div>
       <div class="sec-body">
-        <div class="row">
-          <input id="admin-pass" type="password" data-i18n-ph="admin_pass_ph" placeholder="New admin password" style="max-width:260px">
-          <button class="primary" id="admin-save" data-i18n="admin_save">Change password</button>
-          <button class="quiet" id="logout" data-i18n="logout">Log out</button>
+        <div class="setrow">
+          <div class="set-text">
+            <div class="set-title" data-i18n="admin_pass_t">Admin password</div>
+            <div class="set-desc" data-i18n="admin_pass_d">Changing it logs out all sessions.</div>
+          </div>
+          <div class="set-ctl">
+            <input id="admin-pass" type="password" data-i18n-ph="admin_pass_ph" placeholder="New admin password" style="max-width:200px">
+            <button class="primary" id="admin-save" data-i18n="admin_save">Change password</button>
+            <button class="quiet" id="logout" data-i18n="logout">Log out</button>
+          </div>
         </div>
-        <div class="row">
-          <label><span data-i18n="sess_ttl">Session expires after</span>
+        <div class="setrow">
+          <div class="set-text">
+            <div class="set-title" data-i18n="sess_ttl">Session expires after</div>
+            <div class="set-desc" data-i18n="sess_d">Login sessions expire after this long. 0 means never.</div>
+          </div>
+          <div class="set-ctl">
             <select id="sess-preset"></select>
-          </label>
-          <button id="sess-save" data-i18n="sess_save">Save session</button>
+            <button id="sess-save" data-i18n="sess_save">Save session</button>
+          </div>
         </div>
         <p class="note" id="sess-note"></p>
       </div>
@@ -724,233 +802,75 @@ function pill(text, kind) {
   return node;
 }
 
+function providerRowCounts(provider) {
+  const q = (v) => (v === null || v === undefined ? '?' : v);
+  return { models: q(provider.modelCount), free: q(provider.freeCount) };
+}
+
 function renderProviders() {
   const host = el('providers');
   host.textContent = '';
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'row';
+  const addShow = document.createElement('button');
+  addShow.className = 'primary';
+  addShow.textContent = t('prov_add_show');
+  const created = buildProviderForm();
+  const form = created.form;
+  form.hidden = true;
+  addShow.onclick = () => {
+    form.hidden = !form.hidden;
+    addShow.textContent = form.hidden ? t('prov_add_show') : t('prov_add_hide');
+  };
+  created.cancel.onclick = () => {
+    form.hidden = true;
+    addShow.textContent = t('prov_add_show');
+  };
+  toolbar.appendChild(addShow);
+  host.appendChild(toolbar);
+  host.appendChild(form);
+
+  const tbl = document.createElement('table');
+  const head = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  for (const key of ['pt_name', 'pt_url', 'pt_keys', 'pt_models', 'pt_free']) {
+    const th = document.createElement('th');
+    th.textContent = t(key);
+    headRow.appendChild(th);
+  }
+  headRow.appendChild(document.createElement('th'));
+  head.appendChild(headRow);
+  tbl.appendChild(head);
+  const body = document.createElement('tbody');
+  tbl.appendChild(body);
+  host.appendChild(tbl);
+
   for (const provider of state.providers) {
-    const row = document.createElement('div');
-    row.className = 'prov';
-
-    const name = document.createElement('div');
-    name.className = 'prov-name';
-    name.textContent = provider.name;
-    const env = document.createElement('span');
-    env.className = 'mono';
-    env.textContent = t('prov_counts', {
-      env: provider.keyEnv,
-      k: provider.keyCount || 0,
-      m: provider.modelCount === null || provider.modelCount === undefined ? '?' : provider.modelCount,
-      f: provider.freeCount === null || provider.freeCount === undefined ? '?' : provider.freeCount,
-    });
-    name.appendChild(env);
-
-    const fieldCell = document.createElement('div');
-    fieldCell.className = 'prov-field';
-
-    // Named multi-account keys (stored in the TOML/JSON config).
-    const fileKeys = (provider.keys || []).filter((entry) => entry.source === 'file');
-    for (const entry of fileKeys) {
-      const line = document.createElement('div');
-      line.className = 'keyrow';
-      const label = document.createElement('span');
-      label.textContent = entry.name + (entry.invalid ? ' ' + t('retired') : '');
-      const masked = document.createElement('span');
-      masked.className = 'mono';
-      masked.textContent = entry.maskedKey;
-      const del = document.createElement('button');
-      del.className = 'quiet';
-      del.textContent = t('del');
-      del.onclick = async () => {
-        if (!confirm(t('confirm_del_key', { k: entry.name, p: provider.name }))) return;
-        del.disabled = true;
-        try {
-          await api('api/keys', {
-            method: 'POST',
-            body: JSON.stringify({ provider: provider.name, name: entry.name, key: '' }),
-          });
-          toast(t('deleted_key', { n: entry.name }), 'good');
-          await load();
-        } catch (error) {
-          toast(String(error.message || error), 'err');
-          del.disabled = false;
-        }
-      };
-      line.appendChild(label);
-      line.appendChild(masked);
-      line.appendChild(del);
-      fieldCell.appendChild(line);
-    }
-
-    const addRow = document.createElement('div');
-    addRow.className = 'row';
-    const nameField = document.createElement('input');
-    nameField.placeholder = t('prov_label_ph');
-    nameField.style.maxWidth = '150px';
-    const keyField = document.createElement('input');
-    keyField.type = 'password';
-    keyField.autocomplete = 'off';
-    keyField.spellcheck = false;
-    keyField.placeholder = fileKeys.length ? t('prov_paste_more') : t('prov_paste_first', { env: provider.keyEnv });
-    keyField.style.flex = '1';
-    const add = document.createElement('button');
-    add.className = 'primary';
-    add.textContent = fileKeys.length ? t('prov_add') : t('prov_save');
-    add.onclick = async () => {
-      const value = keyField.value.trim();
-      const label = nameField.value.trim() || ('key-' + ((provider.keyCount || 0) + 1));
-      if (!value) { toast(t('prov_empty'), 'err'); return; }
-      add.disabled = true;
-      try {
-        await api('api/keys', {
-          method: 'POST',
-          body: JSON.stringify({ provider: provider.name, name: label, key: value }),
-        });
-        toast(t('prov_saved', { n: label, p: provider.name }), 'good');
-        await load();
-      } catch (error) {
-        toast(String(error.message || error), 'err');
-        add.disabled = false;
-      }
-    };
-    addRow.appendChild(nameField);
-    addRow.appendChild(keyField);
-    addRow.appendChild(add);
-    fieldCell.appendChild(addRow);
-
-    const hint = document.createElement('div');
-    hint.className = 'prov-hint';
-    const envKeys = (provider.keys || []).filter((entry) => entry.source === 'env');
-    if (!provider.configured) {
-      hint.textContent = t('prov_notset');
-    } else if (envKeys.length) {
-      hint.textContent = t('prov_env', { m: envKeys.map((entry) => entry.maskedKey).join(', ') });
-    } else {
-      hint.textContent = t('prov_rot', { n: provider.keyCount });
-    }
-    if (provider.catalogError && !provider.catalogModels) {
-      hint.appendChild(document.createTextNode('  '));
-      hint.appendChild(pill(t('catalog_down'), 'bad'));
-    }
-    fieldCell.appendChild(hint);
-
-    if (provider.unavailableModels && provider.unavailableModels.length) {
-      const gone = document.createElement('div');
-      gone.className = 'prov-hint';
-      gone.appendChild(pill(t('withdrawn'), 'warn'));
-      gone.appendChild(document.createTextNode(' ' + t('withdrawn_models') + ' '));
-      const ids = document.createElement('span');
-      ids.className = 'mono';
-      ids.textContent = provider.unavailableModels.join(', ');
-      gone.appendChild(ids);
-      fieldCell.appendChild(gone);
-    }
-
-    const adv = document.createElement('details');
-    const summary = document.createElement('summary');
-    summary.textContent = t('adv_title');
-    summary.style.cssText = 'cursor:pointer;font-size:12.5px;color:var(--muted);margin-top:8px';
-    adv.appendChild(summary);
-    const detail = state.editable.providers.find((entry) => entry.name === provider.name) || {};
-    const urlRow = document.createElement('div');
-    urlRow.className = 'row';
-    const urlField = document.createElement('input');
-    urlField.className = 'mono';
-    urlField.value = detail.baseUrl || '';
-    urlField.style.flex = '1';
-    urlField.placeholder = t('url_ph');
-    const urlSave = document.createElement('button');
-    urlSave.textContent = t('url_save');
-    urlSave.onclick = async () => {
-      urlSave.disabled = true;
-      try {
-        const result = await api('api/providers', {
-          method: 'POST',
-          body: JSON.stringify({ action: 'update', name: provider.name, baseUrl: urlField.value.trim() }),
-        });
-        toast(t('saved') + ((result.notes || []).length ? ' ' + result.notes.join(' ') : ''), 'good');
-        await load();
-      } catch (error) {
-        toast(String(error.message || error), 'err');
-        urlSave.disabled = false;
-      }
-    };
-    urlRow.appendChild(urlField);
-    urlRow.appendChild(urlSave);
-    adv.appendChild(urlRow);
-
-    const fmWrap = document.createElement('div');
-    fmWrap.style.marginTop = '8px';
-    const fmLabel = document.createElement('div');
-    fmLabel.className = 'prov-hint';
-    fmLabel.textContent = detail.pricing ? t('fm_priced') : t('fm_allow');
-    fmWrap.appendChild(fmLabel);
-    for (const model of detail.freeModels || []) {
-      const chip = document.createElement('span');
-      chip.className = 'chip';
-      const id = document.createElement('span');
-      id.className = 'mono';
-      id.textContent = model;
-      const rm = document.createElement('button');
-      rm.className = 'quiet';
-      rm.textContent = '×';
-      rm.title = t('rm_model_title', { m: model });
-      rm.onclick = async () => {
-        try {
-          await api('api/providers', {
-            method: 'POST',
-            body: JSON.stringify({
-              action: 'update',
-              name: provider.name,
-              freeModels: (detail.freeModels || []).filter((entry) => entry !== model),
-            }),
-          });
-          toast(t('removed_model', { m: model }), 'good');
-          await load();
-        } catch (error) {
-          toast(String(error.message || error), 'err');
-        }
-      };
-      chip.appendChild(id);
-      chip.appendChild(rm);
-      fmWrap.appendChild(chip);
-    }
-    const fmRow = document.createElement('div');
-    fmRow.className = 'row';
-    const fmField = document.createElement('input');
-    fmField.className = 'mono';
-    fmField.placeholder = t('fm_add_ph');
-    fmField.style.maxWidth = '240px';
-    const fmAdd = document.createElement('button');
-    fmAdd.textContent = t('fm_add');
-    fmAdd.onclick = async () => {
-      const value = fmField.value.trim();
-      if (!value) return;
-      try {
-        await api('api/providers', {
-          method: 'POST',
-          body: JSON.stringify({
-            action: 'update',
-            name: provider.name,
-            freeModels: [...(detail.freeModels || []), value],
-          }),
-        });
-        toast(t('added_model', { m: value }), 'good');
-        await load();
-      } catch (error) {
-        toast(String(error.message || error), 'err');
-      }
-    };
-    fmRow.appendChild(fmField);
-    fmRow.appendChild(fmAdd);
-    fmWrap.appendChild(fmRow);
-    adv.appendChild(fmWrap);
-
-    const delRow = document.createElement('div');
-    delRow.className = 'row';
-    const delProv = document.createElement('button');
-    delProv.className = 'quiet';
-    delProv.textContent = t('del_provider');
-    delProv.onclick = async () => {
+    const counts = providerRowCounts(provider);
+    const tr = document.createElement('tr');
+    const nameTd = document.createElement('td');
+    nameTd.textContent = provider.name;
+    const urlTd = document.createElement('td');
+    urlTd.className = 'mono';
+    urlTd.textContent = provider.baseUrl || '';
+    const keysTd = document.createElement('td');
+    keysTd.className = 'num';
+    keysTd.textContent = provider.keyCount || 0;
+    const modelsTd = document.createElement('td');
+    modelsTd.className = 'num';
+    modelsTd.textContent = counts.models;
+    const freeTd = document.createElement('td');
+    freeTd.className = 'num';
+    freeTd.textContent = counts.free;
+    const opsTd = document.createElement('td');
+    const manage = document.createElement('button');
+    manage.className = 'quiet';
+    manage.textContent = t('prov_manage');
+    const del = document.createElement('button');
+    del.className = 'quiet';
+    del.textContent = t('del');
+    del.onclick = async () => {
       if (!confirm(t('confirm_del_provider', { p: provider.name }))) return;
       try {
         const result = await api('api/providers', {
@@ -963,19 +883,327 @@ function renderProviders() {
         toast(String(error.message || error), 'err');
       }
     };
-    delRow.appendChild(delProv);
-    adv.appendChild(delRow);
-    fieldCell.appendChild(adv);
+    opsTd.appendChild(manage);
+    opsTd.appendChild(del);
+    tr.append(nameTd, urlTd, keysTd, modelsTd, freeTd, opsTd);
+    body.appendChild(tr);
 
-    const actions = document.createElement('div');
-    actions.className = 'prov-actions';
-
-    row.appendChild(name);
-    row.appendChild(fieldCell);
-    row.appendChild(actions);
-    host.appendChild(row);
+    const detailTr = document.createElement('tr');
+    const detailTd = document.createElement('td');
+    detailTd.colSpan = 6;
+    detailTd.appendChild(buildProviderDetail(provider));
+    detailTr.appendChild(detailTd);
+    detailTr.hidden = true;
+    body.appendChild(detailTr);
+    manage.onclick = () => { detailTr.hidden = !detailTr.hidden; };
   }
   el('keys-blurb').textContent = t('keys_blurb', { file: state.overlayFile, format: state.configFormat });
+}
+
+function buildProviderForm() {
+  const form = document.createElement('div');
+  const r1 = document.createElement('div');
+  r1.className = 'row';
+  const nameField = document.createElement('input');
+  nameField.id = 'np-name';
+  nameField.placeholder = t('np_name_ph');
+  nameField.style.maxWidth = '150px';
+  const urlField = document.createElement('input');
+  urlField.id = 'np-baseurl';
+  urlField.className = 'mono';
+  urlField.placeholder = t('np_url_ph');
+  urlField.style.flex = '1';
+  urlField.style.minWidth = '220px';
+  const keyField = document.createElement('input');
+  keyField.id = 'np-key';
+  keyField.type = 'password';
+  keyField.autocomplete = 'off';
+  keyField.spellcheck = false;
+  keyField.placeholder = t('np_key_ph');
+  keyField.style.flex = '1';
+  keyField.style.minWidth = '180px';
+  r1.append(nameField, urlField, keyField);
+  const r2 = document.createElement('div');
+  r2.className = 'row';
+  const modelsField = document.createElement('input');
+  modelsField.id = 'np-freemodels';
+  modelsField.className = 'mono';
+  modelsField.placeholder = t('np_fm_ph');
+  modelsField.style.flex = '1';
+  modelsField.style.minWidth = '220px';
+  r2.appendChild(modelsField);
+  const r3 = document.createElement('div');
+  r3.className = 'row';
+  const catalogLabel = document.createElement('label');
+  catalogLabel.className = 'switch';
+  const catalogBox = document.createElement('input');
+  catalogBox.type = 'checkbox';
+  catalogBox.id = 'np-catalog';
+  catalogBox.checked = true;
+  const catalogSlider = document.createElement('span');
+  catalogSlider.className = 'slider';
+  catalogLabel.append(catalogBox, catalogSlider);
+  const catalogText = document.createElement('span');
+  catalogText.textContent = t('np_catalog');
+  const pricingLabel = document.createElement('label');
+  pricingLabel.className = 'switch';
+  const pricingBox = document.createElement('input');
+  pricingBox.type = 'checkbox';
+  pricingBox.id = 'np-pricing';
+  const pricingSlider = document.createElement('span');
+  pricingSlider.className = 'slider';
+  pricingLabel.append(pricingBox, pricingSlider);
+  const pricingText = document.createElement('span');
+  pricingText.textContent = t('np_pricing');
+  const save = document.createElement('button');
+  save.className = 'primary';
+  save.id = 'np-create';
+  save.textContent = t('np_create');
+  const cancel = document.createElement('button');
+  cancel.className = 'quiet';
+  cancel.id = 'np-cancel';
+  cancel.textContent = t('prov_cancel');
+  r3.append(catalogLabel, catalogText, pricingLabel, pricingText, save, cancel);
+  const note = document.createElement('p');
+  note.className = 'note';
+  note.textContent = t('prov_auto_note');
+  form.append(r1, r2, r3, note);
+  save.onclick = async () => {
+    const name = nameField.value.trim().toLowerCase();
+    const baseUrl = urlField.value.trim();
+    if (!name || !baseUrl) { toast(t('np_need'), 'err'); return; }
+    save.disabled = true;
+    try {
+      await api('api/providers', {
+        method: 'POST',
+        body: JSON.stringify({
+          action: 'create',
+          name,
+          baseUrl,
+          catalog: catalogBox.checked,
+          pricing: pricingBox.checked,
+          freeModels: modelsField.value.split(',').map((s) => s.trim()).filter(Boolean),
+        }),
+      });
+      const key = keyField.value.trim();
+      if (key) {
+        await api('api/keys', {
+          method: 'POST',
+          body: JSON.stringify({ provider: name, name: 'key-1', key }),
+        });
+      }
+      toast(t('np_added', { n: name }), 'good');
+      await load();
+    } catch (error) {
+      toast(String(error.message || error), 'err');
+      save.disabled = false;
+    }
+  };
+  return { form, save, cancel };
+}
+
+function buildProviderDetail(provider) {
+  const fieldCell = document.createElement('div');
+  fieldCell.className = 'prov-field';
+
+  // Named multi-account keys (stored in the TOML/JSON config).
+  const fileKeys = (provider.keys || []).filter((entry) => entry.source === 'file');
+  for (const entry of fileKeys) {
+    const line = document.createElement('div');
+    line.className = 'keyrow';
+    const label = document.createElement('span');
+    label.textContent = entry.name + (entry.invalid ? ' ' + t('retired') : '');
+    const masked = document.createElement('span');
+    masked.className = 'mono';
+    masked.textContent = entry.maskedKey;
+    const del = document.createElement('button');
+    del.className = 'quiet';
+    del.textContent = t('del');
+    del.onclick = async () => {
+      if (!confirm(t('confirm_del_key', { k: entry.name, p: provider.name }))) return;
+      del.disabled = true;
+      try {
+        await api('api/keys', {
+          method: 'POST',
+          body: JSON.stringify({ provider: provider.name, name: entry.name, key: '' }),
+        });
+        toast(t('deleted_key', { n: entry.name }), 'good');
+        await load();
+      } catch (error) {
+        toast(String(error.message || error), 'err');
+        del.disabled = false;
+      }
+    };
+    line.appendChild(label);
+    line.appendChild(masked);
+    line.appendChild(del);
+    fieldCell.appendChild(line);
+  }
+
+  const addRow = document.createElement('div');
+  addRow.className = 'row';
+  const nameField = document.createElement('input');
+  nameField.placeholder = t('prov_label_ph');
+  nameField.style.maxWidth = '150px';
+  const keyField = document.createElement('input');
+  keyField.type = 'password';
+  keyField.autocomplete = 'off';
+  keyField.spellcheck = false;
+  keyField.placeholder = fileKeys.length ? t('prov_paste_more') : t('prov_paste_first', { env: provider.keyEnv });
+  keyField.style.flex = '1';
+  const add = document.createElement('button');
+  add.className = 'primary';
+  add.textContent = fileKeys.length ? t('prov_add') : t('prov_save');
+  add.onclick = async () => {
+    const value = keyField.value.trim();
+    const label = nameField.value.trim() || ('key-' + ((provider.keyCount || 0) + 1));
+    if (!value) { toast(t('prov_empty'), 'err'); return; }
+    add.disabled = true;
+    try {
+      await api('api/keys', {
+        method: 'POST',
+        body: JSON.stringify({ provider: provider.name, name: label, key: value }),
+      });
+      toast(t('prov_saved', { n: label, p: provider.name }), 'good');
+      await load();
+    } catch (error) {
+      toast(String(error.message || error), 'err');
+      add.disabled = false;
+    }
+  };
+  addRow.appendChild(nameField);
+  addRow.appendChild(keyField);
+  addRow.appendChild(add);
+  fieldCell.appendChild(addRow);
+
+  const hint = document.createElement('div');
+  hint.className = 'prov-hint';
+  const envKeys = (provider.keys || []).filter((entry) => entry.source === 'env');
+  if (!provider.configured) {
+    hint.textContent = t('prov_notset');
+  } else if (envKeys.length) {
+    hint.textContent = t('prov_env', { m: envKeys.map((entry) => entry.maskedKey).join(', ') });
+  } else {
+    hint.textContent = t('prov_rot', { n: provider.keyCount });
+  }
+  if (provider.catalogError && !provider.catalogModels) {
+    hint.appendChild(document.createTextNode('  '));
+    hint.appendChild(pill(t('catalog_down'), 'bad'));
+  }
+  fieldCell.appendChild(hint);
+
+  if (provider.unavailableModels && provider.unavailableModels.length) {
+    const gone = document.createElement('div');
+    gone.className = 'prov-hint';
+    gone.appendChild(pill(t('withdrawn'), 'warn'));
+    gone.appendChild(document.createTextNode(' ' + t('withdrawn_models') + ' '));
+    const ids = document.createElement('span');
+    ids.className = 'mono';
+    ids.textContent = provider.unavailableModels.join(', ');
+    gone.appendChild(ids);
+    fieldCell.appendChild(gone);
+  }
+
+  const adv = document.createElement('details');
+  const summary = document.createElement('summary');
+  summary.textContent = t('adv_title');
+  summary.style.cssText = 'cursor:pointer;font-size:12.5px;color:var(--muted);margin-top:8px';
+  adv.appendChild(summary);
+  const detail = state.editable.providers.find((entry) => entry.name === provider.name) || {};
+  const urlRow = document.createElement('div');
+  urlRow.className = 'row';
+  const urlField = document.createElement('input');
+  urlField.className = 'mono';
+  urlField.value = detail.baseUrl || '';
+  urlField.style.flex = '1';
+  urlField.placeholder = t('url_ph');
+  const urlSave = document.createElement('button');
+  urlSave.textContent = t('url_save');
+  urlSave.onclick = async () => {
+    urlSave.disabled = true;
+    try {
+      const result = await api('api/providers', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'update', name: provider.name, baseUrl: urlField.value.trim() }),
+      });
+      toast(t('saved') + ((result.notes || []).length ? ' ' + result.notes.join(' ') : ''), 'good');
+      await load();
+    } catch (error) {
+      toast(String(error.message || error), 'err');
+      urlSave.disabled = false;
+    }
+  };
+  urlRow.appendChild(urlField);
+  urlRow.appendChild(urlSave);
+  adv.appendChild(urlRow);
+
+  const fmWrap = document.createElement('div');
+  fmWrap.style.marginTop = '8px';
+  const fmLabel = document.createElement('div');
+  fmLabel.className = 'prov-hint';
+  fmLabel.textContent = detail.pricing ? t('fm_priced') : t('fm_allow');
+  fmWrap.appendChild(fmLabel);
+  for (const model of detail.freeModels || []) {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    const id = document.createElement('span');
+    id.className = 'mono';
+    id.textContent = model;
+    const rm = document.createElement('button');
+    rm.className = 'quiet';
+    rm.textContent = '×';
+    rm.title = t('rm_model_title', { m: model });
+    rm.onclick = async () => {
+      try {
+        await api('api/providers', {
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'update',
+            name: provider.name,
+            freeModels: (detail.freeModels || []).filter((entry) => entry !== model),
+          }),
+        });
+        toast(t('removed_model', { m: model }), 'good');
+        await load();
+      } catch (error) {
+        toast(String(error.message || error), 'err');
+      }
+    };
+    chip.appendChild(id);
+    chip.appendChild(rm);
+    fmWrap.appendChild(chip);
+  }
+  const fmRow = document.createElement('div');
+  fmRow.className = 'row';
+  const fmField = document.createElement('input');
+  fmField.className = 'mono';
+  fmField.placeholder = t('fm_add_ph');
+  fmField.style.maxWidth = '240px';
+  const fmAdd = document.createElement('button');
+  fmAdd.textContent = t('fm_add');
+  fmAdd.onclick = async () => {
+    const value = fmField.value.trim();
+    if (!value) return;
+    try {
+      await api('api/providers', {
+        method: 'POST',
+        body: JSON.stringify({
+          action: 'update',
+          name: provider.name,
+          freeModels: [...(detail.freeModels || []), value],
+        }),
+      });
+      toast(t('added_model', { m: value }), 'good');
+      await load();
+    } catch (error) {
+      toast(String(error.message || error), 'err');
+    }
+  };
+  fmRow.appendChild(fmField);
+  fmRow.appendChild(fmAdd);
+  fmWrap.appendChild(fmRow);
+  adv.appendChild(fmWrap);
+  return fieldCell;
 }
 
 function renderGateway() {
@@ -988,37 +1216,36 @@ function renderGateway() {
     p.style.margin = '0';
     p.textContent = t('gw_no_keys');
     host.appendChild(p);
-  }
-  for (const entry of keys) {
-    const line = document.createElement('div');
-    line.className = 'keyrow';
-    const label = document.createElement('span');
-    label.textContent = entry.name;
-    const masked = document.createElement('span');
-    masked.className = 'mono';
-    masked.textContent = entry.masked + (entry.createdAt ? ' · ' + entry.createdAt.slice(0, 10) : '');
-    const del = document.createElement('button');
-    del.className = 'quiet';
-    del.textContent = t('del');
-    del.onclick = async () => {
-      if (!confirm(t('gw_confirm_del', { n: entry.name }))) return;
-      del.disabled = true;
-      try {
-        await api('api/gateway-keys', {
-          method: 'POST',
-          body: JSON.stringify({ action: 'delete', name: entry.name }),
-        });
-        toast(t('gw_deleted', { n: entry.name }), 'good');
-        await load();
-      } catch (error) {
-        toast(String(error.message || error), 'err');
-        del.disabled = false;
-      }
-    };
-    line.appendChild(label);
-    line.appendChild(masked);
-    line.appendChild(del);
-    host.appendChild(line);
+  } else {
+    host.appendChild(table(
+      [{ label: t('gw_th_name') }, { label: t('gw_th_key') }, { label: t('gw_th_created') }, { label: '' }],
+      keys.map((entry) => {
+        const del = document.createElement('button');
+        del.className = 'quiet';
+        del.textContent = t('del');
+        del.onclick = async () => {
+          if (!confirm(t('gw_confirm_del', { n: entry.name }))) return;
+          del.disabled = true;
+          try {
+            await api('api/gateway-keys', {
+              method: 'POST',
+              body: JSON.stringify({ action: 'delete', name: entry.name }),
+            });
+            toast(t('gw_deleted', { n: entry.name }), 'good');
+            await load();
+          } catch (error) {
+            toast(String(error.message || error), 'err');
+            del.disabled = false;
+          }
+        };
+        return [
+          td(entry.name),
+          td(entry.masked, 'mono'),
+          td(entry.createdAt ? entry.createdAt.slice(0, 10) : '—'),
+          td(del),
+        ];
+      }),
+    ));
   }
   el('gw-require').checked = Boolean(state.gateway && state.gateway.requireAuth);
   el('gw-note').textContent = keys.length
@@ -1555,31 +1782,6 @@ function bindOnce() {
   el('login-pass').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') doLogin();
   });
-  el('np-create').onclick = async () => {
-    const name = el('np-name').value.trim().toLowerCase();
-    const baseUrl = el('np-baseurl').value.trim();
-    if (!name || !baseUrl) { toast(t('np_need'), 'err'); return; }
-    try {
-      await api('api/providers', {
-        method: 'POST',
-        body: JSON.stringify({
-          action: 'create',
-          name,
-          baseUrl,
-          catalog: el('np-catalog').checked,
-          pricing: el('np-pricing').checked,
-          freeModels: el('np-freemodels').value.split(',').map((s) => s.trim()).filter(Boolean),
-        }),
-      });
-      el('np-name').value = '';
-      el('np-baseurl').value = '';
-      el('np-freemodels').value = '';
-      toast(t('np_added', { n: name }), 'good');
-      await load();
-    } catch (error) {
-      toast(String(error.message || error), 'err');
-    }
-  };
   el('route-select').onchange = () => {
     draftRoute = el('route-select').value;
     draftEntries = [...(state.editable.routes[draftRoute] || [])];
