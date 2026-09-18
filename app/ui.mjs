@@ -968,7 +968,32 @@ function buildProviderForm() {
   modelsField.placeholder = t('np_fm_ph');
   modelsField.style.flex = '1';
   modelsField.style.minWidth = '220px';
-  r2.appendChild(modelsField);
+  const fetchBtn = document.createElement('button');
+  fetchBtn.id = 'np-fetch';
+  fetchBtn.textContent = t('prov_fetch');
+  fetchBtn.onclick = async () => {
+    const baseUrl = urlField.value.trim();
+    if (!baseUrl) { toast(t('np_need'), 'err'); return; }
+    fetchBtn.disabled = true;
+    try {
+      const result = await api('api/providers', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'fetch-models', baseUrl, key: keyField.value.trim() }),
+      });
+      renderModelList(
+        modelsBox,
+        (result.models || []).map((m) => m.id),
+        new Set((result.models || []).filter((m) => m.free).map((m) => m.id)),
+        Boolean(result.truncated),
+      );
+      if (!result.models.length) toast(t('prov_no_catalog'), 'err');
+    } catch (error) {
+      toast(String(error.message || error), 'err');
+    } finally {
+      fetchBtn.disabled = false;
+    }
+  };
+  r2.append(modelsField, fetchBtn);
   const r3 = document.createElement('div');
   r3.className = 'row';
   const catalogLabel = document.createElement('label');
@@ -1015,6 +1040,41 @@ function buildProviderForm() {
   note.className = 'note';
   note.textContent = t('prov_auto_note');
   form.append(r0, r1, modelsBox, r2, r3, r3b, r4, note);
+  function renderModelList(box, ids, freeSet, truncated) {
+    box.textContent = '';
+    if (!ids.length) {
+      const p = document.createElement('p');
+      p.className = 'note';
+      p.style.margin = '0';
+      p.textContent = t('prov_no_catalog');
+      box.appendChild(p);
+      return;
+    }
+    const title = document.createElement('div');
+    title.className = 'prov-hint';
+    title.textContent = t('prov_models_pick');
+    box.appendChild(title);
+    for (const id of ids) {
+      const label = document.createElement('label');
+      label.className = 'check';
+      const boxEl = document.createElement('input');
+      boxEl.type = 'checkbox';
+      boxEl.dataset.model = id;
+      if (freeSet.has(id)) boxEl.checked = true;
+      const text = document.createElement('span');
+      text.className = 'mono';
+      text.textContent = id + (freeSet.has(id) ? '' : ' ' + t('prov_paid_tag'));
+      label.append(boxEl, text);
+      box.appendChild(label);
+    }
+    if (truncated) {
+      const p = document.createElement('p');
+      p.className = 'note';
+      p.style.margin = '0';
+      p.textContent = t('prov_truncated');
+      box.appendChild(p);
+    }
+  }
   function renderModelChecks() {
     modelsBox.textContent = '';
     const preset = presetSelect.value;
@@ -1031,31 +1091,7 @@ function buildProviderForm() {
       modelsBox.appendChild(p);
       return;
     }
-    const free = new Set(sibling.catalogFreeIds || []);
-    const title = document.createElement('div');
-    title.className = 'prov-hint';
-    title.textContent = t('prov_models_pick');
-    modelsBox.appendChild(title);
-    for (const id of ids) {
-      const label = document.createElement('label');
-      label.className = 'check';
-      const box = document.createElement('input');
-      box.type = 'checkbox';
-      box.dataset.model = id;
-      if (free.has(id)) box.checked = true;
-      const text = document.createElement('span');
-      text.className = 'mono';
-      text.textContent = id + (free.has(id) ? '' : ' ' + t('prov_paid_tag'));
-      label.append(box, text);
-      modelsBox.appendChild(label);
-    }
-    if (sibling.catalogTruncated) {
-      const p = document.createElement('p');
-      p.className = 'note';
-      p.style.margin = '0';
-      p.textContent = t('prov_truncated');
-      modelsBox.appendChild(p);
-    }
+    renderModelList(modelsBox, ids, new Set(sibling.catalogFreeIds || []), Boolean(sibling.catalogTruncated));
   }
   function fillFromPreset() {
     const preset = presetSelect.value;

@@ -1784,6 +1784,25 @@ try {
     body: JSON.stringify({ action: 'delete', name: 'openrouter' }),
   });
   assert.equal(noDefDel.status, 400);
+  // fetch-models lists a not-yet-registered catalog with free flags from
+  // pricing (mock-b is priced, the rest are zero-cost).
+  const fetched = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ action: 'fetch-models', baseUrl: `http://127.0.0.1:${mockPort}/api/v1` }),
+  });
+  assert.equal(fetched.status, 200);
+  const fetchedBody = await fetched.json();
+  assert.ok(Array.isArray(fetchedBody.models) && fetchedBody.models.length > 0);
+  const byId = new Map(fetchedBody.models.map((m) => [m.id, m]));
+  assert.equal(byId.get('mock-a')?.free, true);
+  assert.equal(byId.get('mock-b')?.free, false);
+  const fetchBad = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ action: 'fetch-models', baseUrl: 'not-a-url' }),
+  });
+  assert.equal(fetchBad.status, 400);
 
   // Session TTL, free-model counts, env migration record, logout.
   const ttlBad = await fetch(`${base}/api/settings`, {

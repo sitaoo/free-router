@@ -2681,6 +2681,46 @@ async function handleProviders(req, res) {
   const action = String(body.action || '');
   const name = String(body.name || '').trim();
 
+  if (action === 'fetch-models') {
+    // List models from a not-yet-registered provider so the add form can
+    // offer checkboxes instead of manual typing. Free flags come straight
+    // from catalog pricing; anything else is for the user (or discovery)
+    // to decide.
+    const baseUrl = String(body.baseUrl || '').trim().replace(/\/+$/, '');
+    if (!validHttpUrl(baseUrl)) {
+      return sendJson(res, 400, { error: { message: 'baseUrl must be an http(s) URL', type: 'invalid_request_error' } });
+    }
+    const key = typeof body.key === 'string' ? body.key.trim() : '';
+    const catalogUrl = /\/models$/i.test(baseUrl) ? baseUrl : `${baseUrl}/models`;
+    let payload;
+    try {
+      const response = await fetch(catalogUrl, {
+        signal: AbortSignal.timeout(15000),
+        headers: {
+          Accept: 'application/json',
+          ...(key ? { Authorization: `Bearer ${key}` } : {}),
+        },
+      });
+      if (!response.ok) {
+        return sendJson(res, 502, { error: { message: `catalog HTTP ${response.status}`, type: 'upstream_error' } });
+      }
+      payload = await response.json();
+    } catch (error) {
+      return sendJson(res, 502, {
+        error: { message: `catalog fetch failed: ${error instanceof Error ? error.message : String(error)}`, type: 'upstream_error' },
+      });
+    }
+    const entries = Array.isArray(payload?.data) ? payload.data : [];
+    const models = [];
+    for (const entry of entries) {
+      const id = typeof entry?.id === 'string' ? entry.id.trim() : '';
+      if (!id || models.some((m) => m.id === id)) continue;
+      if (models.length >= 200) break;
+      models.push({ id, free: isZeroCost(entry) });
+    }
+    return sendJson(res, 200, { ok: true, models, truncated: entries.length > models.length });
+  }
+
   if (action === 'create') {
     if (!validProviderId(name)) {
       return sendJson(res, 400, { error: { message: 'name must match [a-z][a-z0-9_-]*', type: 'invalid_request_error' } });
