@@ -424,6 +424,35 @@ providers, the group is ranked by its best provider, so one bad provider does
 not sink the model. `./script/models.sh` shows the current shift in the `rank+-`
 column, and `/health` reports `baseScore` and `scoreAdjustment` per entry.
 
+### Scoring scale and live signals
+
+All base signals live on a documented 0-100 scale: config anchors (94 down
+to a 30 floor, plus a capped capability-portrait bonus so a strong model
+placed low is not stuck), evaluations (~0-91), hand-written
+`baselineScores` (clamped into range), and usage adjustments
+(±`usageWeight`). Pinned models sit above the scale at a finite 150 and skip
+traffic adjustments.
+
+Failures are classified before they touch scores: capacity signals
+(`rateLimit`, `timeout`, `overloaded`) drive cooldowns only; routing, billing
+and credential faults (`notFound`, `forbidden`, `payment`, bad-key `401`s)
+are recorded but never scored. Only quality failures (empty or broken
+responses, upstream errors) move the score.
+
+Two live signals refine the order on every request:
+
+- **Scarcity**: within 5 points, higher remaining daily quota wins, so
+  scarce-but-smart models are saved for when they matter. Unlimited models
+  sort first.
+- **Latency**: rolling mean response time adds +2 under 5s, 0 up to 30s, −2
+  above, once 5 samples exist. Small and capped by design.
+
+A few percent of requests (`routing.explorePercent`, default 5) detour to an
+underexplored model so cold models can earn traffic; pinned models never give
+up first place. External leaderboards feed in through
+`script/sync-scores.mjs`, which writes `baselineScores` (40-80 prior band)
+plus provenance — see `./script/sync-scores.mjs --help`.
+
 ### Asking a provider what is free
 
 A provider without prices in its catalog can still answer the question, just
@@ -494,8 +523,8 @@ Filtering applies both when building a route and during collection, so a new
 pattern takes effect on restart instead of after the next collection.
 `/health` lists the current matches under `discovery.excludedModels`.
 
-`evaluation.baselineScores` overrides a score outright, keyed by
-`provider:model` or by the bare model ID. It applies to discovered models as
+`evaluation.baselineScores` overrides a score outright (clamped to 0-100),
+keyed by `provider:model` or by the bare model ID. It applies to discovered models as
 well as configured ones, and takes precedence over the evaluation score, so it
 is the way to bury a model whose automatic score you do not trust.
 

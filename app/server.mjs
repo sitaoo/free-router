@@ -32,7 +32,7 @@ import { installUpstreamProxy } from './proxy.mjs';
 import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
 import { createSecretRedactor } from './redact.mjs';
 import { describeLanAccess, lanGuard, loginLockout, recordLoginFailure } from './net.mjs';
-import { PINNED_SCORE, USAGE_KINDS, classifyFailure, isCredentialFault, metadataBonus, metadataScore, normalizeScore, pickExplorationTarget, qualityTotals } from './ranking.mjs';
+import { PINNED_SCORE, USAGE_KINDS, classifyFailure, compareByScarcity, ewmaLatency, isCredentialFault, latencyAdjustment, metadataBonus, metadataScore, normalizeScore, pickExplorationTarget, qualityTotals } from './ranking.mjs';
 import {
   createStreamSignatureExtractor,
   createThoughtSignatureCache,
@@ -536,6 +536,9 @@ let discoveryUnavailableIds = [];
 let modelVerdicts = {};
 let lastSelection = null;
 let usageByDay = {};
+// Live latency portraits (EWMA mean + sample count per model key). Persisted
+// next to usage; pruned with it. Feeds the small capped latency term.
+let usageLatency = {};
 let stateSaveTimer = null;
 
 function log(message, detail = undefined) {
@@ -720,6 +723,15 @@ function pruneUsage() {
   for (const day of Object.keys(usageByDay)) {
     if (!keep.has(day)) delete usageByDay[day];
   }
+  // Latency portraits without usage in the window are stale: drop them so
+  // retired models stop influencing the ranking.
+  const seen = new Set();
+  for (const perDay of Object.values(usageByDay)) {
+    for (const key of Object.keys(perDay || {})) seen.add(key);
+  }
+  for (const key of Object.keys(usageLatency)) {
+    if (!seen.has(key)) delete usageLatency[key];
+  }
 }
 
 function recordUsage(candidate, kind) {
@@ -730,6 +742,25 @@ function recordUsage(candidate, kind) {
   counts[bucket] = (counts[bucket] || 0) + 1;
   pruneUsage();
   scheduleStateSave();
+}
+
+function recordLatency(candidate, latencyMs) {
+  const key = candidateKey(candidate);
+  const next = ewmaLatency(usageLatency[key], latencyMs);
+  if (next) usageLatency[key] = next;
+  scheduleStateSave();
+}
+
+function latencyAdjustmentFor(key) {
+  const entry = usageLatency[key];
+  if (!entry || typeof entry !== 'object') return 0;
+  return latencyAdjustment(entry.meanMs, entry.n);
+}
+
+// All live (traffic-driven) score adjustments in one place so ordering and
+// display can never diverge.
+function liveScoreAdjustment(key) {
+  return usageAdjustment(key) + latencyAdjustmentFor(key);
 }
 
 function dailyLimitFor(key) {
@@ -840,6 +871,18 @@ function loadDiscoveryState() {
   try {
     const state = JSON.parse(fs.readFileSync(DISCOVERY_STATE_PATH, 'utf8'));
     usageByDay = sanitizeUsage(state.usage);
+    usageLatency = {};
+    const storedLatency = state.latency;
+    if (storedLatency && typeof storedLatency === 'object') {
+      for (const [key, entry] of Object.entries(storedLatency)) {
+        if (!entry || typeof entry !== 'object') continue;
+        const meanMs = Number(entry.meanMs);
+        const n = Math.floor(Number(entry.n));
+        if (Number.isFinite(meanMs) && meanMs >= 0 && Number.isInteger(n) && n > 0) {
+          usageLatency[key] = { meanMs, n };
+        }
+      }
+    }
     pruneUsage();
     if (!discoveryEnabled) return;
     discoveredModelIds = Array.isArray(state.addedModels)
@@ -884,6 +927,7 @@ function saveDiscoveryState() {
     evaluations: modelEvaluations,
     lastSelection,
     usage: usageByDay,
+    latency: usageLatency,
   };
   const temporaryPath = `${DISCOVERY_STATE_PATH}.${process.pid}.tmp`;
   fs.writeFileSync(temporaryPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o644 });
@@ -974,7 +1018,7 @@ function rankedModelScore(key, configured, configuredIndex) {
   const base = baseModelScore(key, configured, configuredIndex);
   if (!Number.isFinite(base) || base < 0) return base;
   if (isPinnedKey(key)) return base;
-  return Math.round((base + usageAdjustment(key)) * 10) / 10;
+  return Math.round((base + liveScoreAdjustment(key)) * 10) / 10;
 }
 
 function scoreSourceFor(key, configured) {
@@ -1024,11 +1068,17 @@ function groupRank(group, configuredSet, configuredIndex) {
   let score = base;
   if (!pinned && Number.isFinite(base) && base >= 0) {
     const adjustments = group.members.map(({ candidate }) =>
-      usageAdjustment(candidateKey(candidate)),
+      liveScoreAdjustment(candidateKey(candidate)),
     );
     score = base + (adjustments.length ? Math.max(...adjustments) : 0);
   }
   return { pinned, score, tie: pinned ? pinIndex : group.firstIndex };
+}
+
+function groupScarcity(group) {
+  const first = group?.members?.[0]?.candidate;
+  if (!first) return null;
+  return usageForKey(candidateKey(first)).remainingToday;
 }
 
 function orderByModelThenProvider(candidates, configuredSet, configuredIndex) {
@@ -1050,6 +1100,15 @@ function orderByModelThenProvider(candidates, configuredSet, configuredIndex) {
     const b = groupRank(right, configuredSet, configuredIndex);
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
     if (a.pinned) return a.tie - b.tie;
+    // Within the tie band, higher remaining quota wins so scarce-but-smart
+    // models are saved for when they matter. Unlimited (null) wins.
+    const scarcity = compareByScarcity(
+      a.score,
+      b.score,
+      groupScarcity(left),
+      groupScarcity(right),
+    );
+    if (scarcity) return scarcity;
     return b.score - a.score || a.tie - b.tie;
   });
   const expanded = [];
@@ -2041,12 +2100,14 @@ async function handleChat(req, res) {
       if (slot && cooldownRemaining(candidate, slot) > 0) continue;
       const slotLabel = slot ? ` [${slot.name}]` : '';
       log(`trying ${candidateKey(candidate)}${slotLabel} for ${requestedModel}`);
+      const attemptStartedAt = Date.now();
       const result = body.stream
         ? await attemptStream(candidate, body, res, clientController.signal, slot)
         : await attemptJson(candidate, body, clientController.signal, slot);
 
       if (result.ok) {
         recordUsage(candidate, 'ok');
+        recordLatency(candidate, Date.now() - attemptStartedAt);
         rememberSelection({
           route: requestedModel,
           provider: candidate.provider,

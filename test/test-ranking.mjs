@@ -12,11 +12,15 @@ import {
   USAGE_KINDS,
   classifyFailure,
   isCredentialFault,
+  latencyAdjustment,
   metadataBonus,
   metadataScore,
   normalizeScore,
   pickExplorationTarget,
   qualityTotals,
+  scarcityRank,
+  compareByScarcity,
+  ewmaLatency,
 } from '../app/ranking.mjs';
 
 // Capacity failures (rate limit / timeout / aborted client) describe the
@@ -160,5 +164,29 @@ assert.equal(normalizeScore(82.46), 82.5);
 // usage adjustments never apply to it). Must exceed the max reachable
 // normal score: explicit 100 + usage weight 12.
 assert.ok(PINNED_SCORE > 100 + 12);
+
+// Scarcity tie-break: within the tie band, higher remaining quota wins;
+// unlimited (null) beats everything. Outside the band scores decide.
+assert.equal(scarcityRank(null), Infinity);
+assert.equal(scarcityRank(undefined), Infinity);
+assert.equal(scarcityRank(0), 0);
+assert.equal(scarcityRank(-3), 0);
+assert.equal(scarcityRank(7), 7);
+assert.equal(compareByScarcity(90, 83, 1, 99), 0);
+assert.equal(compareByScarcity(90, 88, 10, 3), -1);
+assert.equal(compareByScarcity(88, 90, 10, 3), -1);
+assert.equal(compareByScarcity(90, 90, 5, 5), 0);
+assert.equal(compareByScarcity(90, 90, null, 5), -1);
+assert.equal(compareByScarcity(90, 90, null, null), 0);
+
+// Live latency: small, capped, never overrides capability. Needs a minimum
+// sample count; EWMA keeps the mean fresh without storing every sample.
+assert.equal(latencyAdjustment(3000, 10), 2);
+assert.equal(latencyAdjustment(3000, 2), 0);
+assert.equal(latencyAdjustment(20000, 10), 0);
+assert.equal(latencyAdjustment(45000, 10), -2);
+assert.equal(latencyAdjustment(NaN, 10), 0);
+assert.deepEqual(ewmaLatency(undefined, 1000), { meanMs: 1000, n: 1 });
+assert.deepEqual(ewmaLatency({ meanMs: 1000, n: 1 }, 2000), { meanMs: 1200, n: 2 });
 
 console.log('ranking unit tests passed');

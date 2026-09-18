@@ -114,6 +114,51 @@ export function pickExplorationTarget(rankedKeys, attemptsByKey, percent, roll, 
   return null;
 }
 
+// Scarcity tie-break: within the tie band, higher remaining quota wins.
+// Unlimited (null) beats everything. Outside the band, scores decide and
+// this returns 0. Keeps scarce-but-smart models for when they matter.
+export const SCORE_TIE_BAND = 5;
+
+export function scarcityRank(remaining) {
+  if (remaining == null) return Infinity;
+  const value = Number(remaining);
+  return Number.isFinite(value) ? Math.max(0, value) : Infinity;
+}
+
+export function compareByScarcity(scoreA, scoreB, remainingA, remainingB, band = SCORE_TIE_BAND) {
+  if (Math.abs(Number(scoreA) - Number(scoreB)) > band) return 0;
+  const a = scarcityRank(remainingA);
+  const b = scarcityRank(remainingB);
+  if (a === b) return 0;
+  return a > b ? -1 : 1;
+}
+
+// Live latency: small, capped, never overrides capability. EWMA keeps the
+// mean fresh without storing every sample; a minimum sample count gates it.
+export const LATENCY_MIN_SAMPLES = 5;
+const LATENCY_EWMA_ALPHA = 0.2;
+
+export function latencyAdjustment(meanMs, n, minSamples = LATENCY_MIN_SAMPLES) {
+  const samples = Number(n) || 0;
+  const mean = Number(meanMs);
+  if (samples < minSamples || !Number.isFinite(mean)) return 0;
+  if (mean <= 5000) return 2;
+  if (mean <= 30000) return 0;
+  return -2;
+}
+
+export function ewmaLatency(previous, sampleMs, alpha = LATENCY_EWMA_ALPHA) {
+  const sample = Number(sampleMs);
+  if (!Number.isFinite(sample) || sample < 0) return previous;
+  if (!previous || !Number.isFinite(previous.meanMs) || !(previous.n > 0)) {
+    return { meanMs: sample, n: 1 };
+  }
+  return {
+    meanMs: Math.round((previous.meanMs + (sample - previous.meanMs) * alpha) * 10) / 10,
+    n: previous.n + 1,
+  };
+}
+
 // Capped portrait bonus blended into configured-position scores, so a
 // strong model placed low is not stuck behind a weak model placed high.
 // The +2 text-modality floor means "no information" and earns nothing;

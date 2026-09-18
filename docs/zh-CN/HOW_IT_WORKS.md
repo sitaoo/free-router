@@ -384,6 +384,28 @@ TokenRouter 的 `/models` 没有 `pricing` 字段，免费收费混在一起，�
 模型。`./script/models.sh` 的 `rank+-` 列看当前偏移，`/health` 里每条有
 `baseScore` 和 `scoreAdjustment`。
 
+### 打分尺度与实时信号
+
+所有基线信号都在 0-100 的明示尺度上：配置锚点（94 起，30 兜底，外加
+封顶的能力画像加成，排得靠后的强模型不会被埋没）、评测分（约 0-91）、
+手写 `baselineScores`（钳制进尺度）、用量浮动（±`usageWeight`）。置顶
+模型在尺度之上（有限值 150），不吃流量浮动。
+
+失败先分类再记分：容量信号（`rateLimit`、`timeout`、`overloaded`）只进
+冷却；路由、账单、凭证故障（`notFound`、`forbidden`、`payment`、坏 Key
+的 `401`）只记录不打分。只有质量失败（空回复、坏回复、上游错误）才动
+分。
+
+每次请求还有两个实时信号参与排序：
+
+- **稀缺**：5 分以内，剩余额度多的赢，聪明但稀缺的模型留到刀刃上用；不限额的排最前。
+- **延迟**：滚动平均响应 5 秒内 +2，30 秒内 0，以上 −2，攒够 5 个样本才生效，小而封顶。
+
+百分之几的请求（`routing.explorePercent`，默认 5）会绕去没跑过的模型，
+让冷模型有机会赚流量；置顶模型永远不让第一。外部榜单走
+`script/sync-scores.mjs` 写 `baselineScores`（40-80 先验带），带来源戳，
+详见 `./script/sync-scores.mjs --help`。
+
 ### 问渠道什么免费
 
 没价格的目录回答不了"哪个免费"，但可以直接问。`probeFreeTier: true`
@@ -442,7 +464,7 @@ provider 让等的 `retryDelay`。
 过滤建路由和收集时都生效，所以新 pattern 重启即生效，不用等下一轮收
 集。`/health` 在 `discovery.excludedModels` 里列当前命中。
 
-`evaluation.baselineScores` 直接覆盖分数，按 `provider:model` 或裸模型
+`evaluation.baselineScores` 直接覆盖分数（钳制在 0-100 内），按 `provider:model` 或裸模型
 ID 找。发现的和配置的都管，优先于评测分，适合埋掉那些自动打分虚高的
 模型。
 
