@@ -267,6 +267,13 @@ select {
   background: #fff; color: var(--text); font-size: 13px; max-width: 280px;
 }
 
+/* Base text-input geometry matches select (height + radius); without this,
+   inputs outside .row/.prov-field fall back to cramped browser defaults. */
+input {
+  padding: 9px 12px; border-radius: 8px; border: 1px solid #ccd2db;
+  background: #fff; color: var(--text); font-size: 13px;
+}
+
 .chip {
   display: inline-flex; gap: 8px; align-items: center;
   border: 1px solid var(--line); border-radius: 999px;
@@ -342,7 +349,7 @@ select {
     --warn: #e0a63c; --warn-soft: #3d2f14;
     --bad: #f26d79; --bad-soft: #431b20;
   }
-  .prov-field input, .row input, select { background: #14171c; border-color: #3a424d; color: var(--text); }
+  input, select { background: #14171c; border-color: #3a424d; color: var(--text); }
   button { background: #262c35; border-color: #3a424d; color: var(--text); }
   button:hover { background: #2f3641; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #0c1116; }
