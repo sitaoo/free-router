@@ -2257,17 +2257,32 @@ function uiProviderState() {
     const unavailable = catalogHealth[provider.name]?.unavailableModels || [];
     // Model totals next to the free-model availability: priced catalogs count
     // zero-cost chat models, allowlists count entries still offered upstream.
+    // The id lists below feed the add-provider preset picker (capped).
+    const CATALOG_ID_CAP = 200;
     let modelCount = null;
     let freeCount = null;
+    let catalogIds = [];
+    let catalogTruncated = false;
     if (provider.catalogHasPricing) {
       if (provider.catalog?.size) {
+        const chat = [...provider.catalog.values()].filter((m) => isChatModel(m));
         modelCount = provider.catalog.size;
-        freeCount = [...provider.catalog.values()].filter((m) => isZeroCost(m) && isChatModel(m)).length;
+        freeCount = chat.filter((m) => isZeroCost(m)).length;
+        catalogTruncated = chat.length > CATALOG_ID_CAP;
+        catalogIds = chat.slice(0, CATALOG_ID_CAP).map((m) => m.id);
       }
     } else {
       modelCount = provider.freeModels.size;
       freeCount = [...provider.freeModels].filter((id) => !unavailable.includes(id)).length;
+      const allowed = [...provider.freeModels];
+      catalogTruncated = allowed.length > CATALOG_ID_CAP;
+      catalogIds = allowed.slice(0, CATALOG_ID_CAP);
     }
+    const freeSet = new Set(
+      provider.catalogHasPricing && provider.catalog?.size
+        ? [...provider.catalog.values()].filter((m) => isZeroCost(m) && isChatModel(m)).map((m) => m.id)
+        : [...provider.freeModels],
+    );
     return {
       name: provider.name,
       keyEnv: provider.keyEnv,
@@ -2285,6 +2300,9 @@ function uiProviderState() {
       catalogModels: provider.usesCatalog ? provider.catalog.size : null,
       modelCount,
       freeCount,
+      catalogIds,
+      catalogFreeIds: catalogIds.filter((id) => freeSet.has(id)),
+      catalogTruncated,
       catalogError: catalogHealth[provider.name]?.catalogError || null,
       unavailableModels: unavailable,
     };

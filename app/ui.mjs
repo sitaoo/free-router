@@ -908,8 +908,35 @@ function renderProviders() {
   el('keys-blurb').textContent = t('keys_blurb', { file: state.overlayFile, format: state.configFormat });
 }
 
+// Static fallback for presets whose sibling provider is absent (deleted or
+// never configured). Live sibling data (URL, flags, catalog ids) wins
+// whenever present.
+const PROVIDER_PRESETS = {
+  gemini: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', catalog: true, pricing: false },
+  openrouter: { baseUrl: 'https://openrouter.ai/api/v1', catalog: true, pricing: true },
+  tokenrouter: { baseUrl: 'https://api.tokenrouter.com/v1', catalog: true, pricing: false },
+  bai: { baseUrl: 'https://api.b.ai/v1', catalog: false, pricing: false },
+};
+
 function buildProviderForm() {
   const form = document.createElement('div');
+  const r0 = document.createElement('div');
+  r0.className = 'row';
+  const presetLabel = document.createElement('span');
+  presetLabel.textContent = t('prov_preset');
+  const presetSelect = document.createElement('select');
+  presetSelect.id = 'np-preset';
+  const customOpt = document.createElement('option');
+  customOpt.value = '';
+  customOpt.textContent = t('prov_custom');
+  presetSelect.appendChild(customOpt);
+  for (const name of Object.keys(PROVIDER_PRESETS)) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    presetSelect.appendChild(opt);
+  }
+  r0.append(presetLabel, presetSelect);
   const r1 = document.createElement('div');
   r1.className = 'row';
   const nameField = document.createElement('input');
@@ -931,6 +958,8 @@ function buildProviderForm() {
   keyField.style.flex = '1';
   keyField.style.minWidth = '180px';
   r1.append(nameField, urlField, keyField);
+  const modelsBox = document.createElement('div');
+  modelsBox.id = 'np-models';
   const r2 = document.createElement('div');
   r2.className = 'row';
   const modelsField = document.createElement('input');
@@ -963,6 +992,16 @@ function buildProviderForm() {
   pricingLabel.append(pricingBox, pricingSlider);
   const pricingText = document.createElement('span');
   pricingText.textContent = t('np_pricing');
+  r3.append(catalogLabel, catalogText, pricingLabel, pricingText);
+  const r3b = document.createElement('div');
+  r3b.className = 'row';
+  const flagsNote = document.createElement('p');
+  flagsNote.className = 'note';
+  flagsNote.style.margin = '0';
+  flagsNote.textContent = t('prov_flags_note');
+  r3b.appendChild(flagsNote);
+  const r4 = document.createElement('div');
+  r4.className = 'row';
   const save = document.createElement('button');
   save.className = 'primary';
   save.id = 'np-create';
@@ -971,15 +1010,76 @@ function buildProviderForm() {
   cancel.className = 'quiet';
   cancel.id = 'np-cancel';
   cancel.textContent = t('prov_cancel');
-  r3.append(catalogLabel, catalogText, pricingLabel, pricingText, save, cancel);
+  r4.append(save, cancel);
   const note = document.createElement('p');
   note.className = 'note';
   note.textContent = t('prov_auto_note');
-  form.append(r1, r2, r3, note);
+  form.append(r0, r1, modelsBox, r2, r3, r3b, r4, note);
+  function renderModelChecks() {
+    modelsBox.textContent = '';
+    const preset = presetSelect.value;
+    if (!preset) return;
+    const sibling = (state.providers || []).find((entry) => entry.name === preset);
+    const ids = (sibling && Array.isArray(sibling.catalogIds) && sibling.catalogIds.length
+      ? sibling.catalogIds
+      : []);
+    if (!ids.length) {
+      const p = document.createElement('p');
+      p.className = 'note';
+      p.style.margin = '0';
+      p.textContent = t('prov_no_catalog');
+      modelsBox.appendChild(p);
+      return;
+    }
+    const free = new Set(sibling.catalogFreeIds || []);
+    const title = document.createElement('div');
+    title.className = 'prov-hint';
+    title.textContent = t('prov_models_pick');
+    modelsBox.appendChild(title);
+    for (const id of ids) {
+      const label = document.createElement('label');
+      label.className = 'check';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.dataset.model = id;
+      if (free.has(id)) box.checked = true;
+      const text = document.createElement('span');
+      text.className = 'mono';
+      text.textContent = id + (free.has(id) ? '' : ' ' + t('prov_paid_tag'));
+      label.append(box, text);
+      modelsBox.appendChild(label);
+    }
+    if (sibling.catalogTruncated) {
+      const p = document.createElement('p');
+      p.className = 'note';
+      p.style.margin = '0';
+      p.textContent = t('prov_truncated');
+      modelsBox.appendChild(p);
+    }
+  }
+  function fillFromPreset() {
+    const preset = presetSelect.value;
+    const sibling = preset ? (state.providers || []).find((entry) => entry.name === preset) : null;
+    const detail = preset
+      ? (state.editable && state.editable.providers || []).find((entry) => entry.name === preset)
+      : null;
+    const fallback = PROVIDER_PRESETS[preset] || {};
+    urlField.value = (sibling && sibling.baseUrl) || fallback.baseUrl || '';
+    catalogBox.checked = detail ? detail.catalog === true : fallback.catalog !== false && preset !== '';
+    if (!preset) catalogBox.checked = true;
+    pricingBox.checked = detail ? detail.pricing === true : fallback.pricing === true;
+    renderModelChecks();
+  }
+  presetSelect.onchange = fillFromPreset;
   save.onclick = async () => {
     const name = nameField.value.trim().toLowerCase();
     const baseUrl = urlField.value.trim();
     if (!name || !baseUrl) { toast(t('np_need'), 'err'); return; }
+    const checked = [...modelsBox.querySelectorAll('input[type="checkbox"]:checked')]
+      .map((box) => box.dataset.model)
+      .filter(Boolean);
+    const typed = modelsField.value.split(',').map((s) => s.trim()).filter(Boolean);
+    const freeModels = [...new Set([...checked, ...typed])];
     save.disabled = true;
     try {
       await api('api/providers', {
@@ -990,7 +1090,7 @@ function buildProviderForm() {
           baseUrl,
           catalog: catalogBox.checked,
           pricing: pricingBox.checked,
-          freeModels: modelsField.value.split(',').map((s) => s.trim()).filter(Boolean),
+          freeModels,
         }),
       });
       const key = keyField.value.trim();
