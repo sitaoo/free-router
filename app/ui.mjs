@@ -619,6 +619,7 @@ input {
           <div class="set-text">
             <div class="set-title" data-i18n="admin_pass_t">Admin password</div>
             <div class="set-desc" data-i18n="admin_pass_d">Changing it logs out all sessions.</div>
+            <div class="set-desc" id="admin-pw-changed"></div>
           </div>
           <div class="set-ctl">
             <input id="admin-pass" type="password" data-i18n-ph="admin_pass_ph" placeholder="New admin password" style="max-width:200px">
@@ -1645,6 +1646,10 @@ function renderSession() {
   el('sess-note').textContent = state.webui.sessionExpiresAt
     ? t('sess_expires', { at: state.webui.sessionExpiresAt })
     : t('sess_never');
+  const changedAt = state.webui.passwordChangedAt;
+  el('admin-pw-changed').textContent = changedAt
+    ? t('admin_pw_changed', { at: new Date(changedAt).toLocaleString() })
+    : t('admin_pw_never');
 }
 
 function renderTuning() {

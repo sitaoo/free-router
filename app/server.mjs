@@ -2505,6 +2505,9 @@ async function handleWebuiPassword(req, res) {
     });
   }
   config.webui ||= {};
+  // Stamp explicit changes only (not boot upgrades or first-boot seeds) so
+  // the UI can tell whether the password was ever changed by hand.
+  setOverlayValue(['webui', 'passwordChangedAt'], new Date().toISOString());
   if (!setStoredWebuiPassword(hashPassword(password))) {
     return sendJson(res, 500, {
       error: { message: `could not write ${OVERLAY_FILENAME}`, type: 'config_write_failed' },
@@ -3142,6 +3145,7 @@ async function handler(req, res) {
         },
         webui: {
           defaultPassword: isDefaultPassword(),
+          passwordChangedAt: config.webui?.passwordChangedAt || null,
           sessionTtlHours: sessionTtlHours(),
           sessionExpiresAt: (() => {
             const expiresAt = webuiSessions.get(webuiSessionToken(req));

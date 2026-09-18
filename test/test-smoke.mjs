@@ -1851,6 +1851,11 @@ try {
     res.json(),
   );
   assert.equal(freshState.webui.defaultPassword, false);
+  // Explicit password changes are stamped (boot hashing and first-boot seeds
+  // are not); the UI shows it next to the change control.
+  assert.match(freshState.webui.passwordChangedAt || '', /^\d{4}-\d{2}-\d{2}T/);
+  assert.ok(Date.parse(freshState.webui.passwordChangedAt) <= Date.now());
+  assert.match(fs.readFileSync(overlayPath, 'utf8'), /"passwordChangedAt": "\d{4}-\d{2}-\d{2}T/);
 
   const logout = await fetch(`${base}/api/logout`, {
     method: 'POST',
