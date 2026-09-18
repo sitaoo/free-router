@@ -27,6 +27,23 @@ export const QUALITY_FAIL_KINDS = new Set(['empty', 'serverError', 'other']);
 export const CAPACITY_FAIL_KINDS = new Set(['rateLimit', 'timeout', 'overloaded', 'aborted']);
 export const UNATTRIBUTED_FAIL_KINDS = new Set(['notFound', 'forbidden', 'payment']);
 
+// Documented score scale: every base signal (config anchors 30-94,
+// evaluations 0-91, explicit overrides, usage ±12, portrait bonus 0-8)
+// lives on 0-100. normalizeScore clamps hand-written values into it;
+// constructed signals are already in range by design.
+export const SCORE_MIN = 0;
+export const SCORE_MAX = 100;
+
+// Pinned sits above the scale but stays finite: it serializes to JSON,
+// composes arithmetically, and must exceed the max reachable normal score
+// (explicit 100 + usage weight 12). Usage adjustments never apply to it.
+export const PINNED_SCORE = 150;
+
+export function normalizeScore(value) {
+  const clamped = Math.max(SCORE_MIN, Math.min(SCORE_MAX, Number(value)));
+  return Math.round(clamped * 10) / 10;
+}
+
 // Maps an upstream outcome to a usage kind. Payment and overload get their
 // own kinds instead of hiding in 'other'/'serverError': a billing refusal
 // says nothing about the model, and an overloaded endpoint recovers in

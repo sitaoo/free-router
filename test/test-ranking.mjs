@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 
 import {
   CAPACITY_FAIL_KINDS,
+  PINNED_SCORE,
   QUALITY_FAIL_KINDS,
   UNATTRIBUTED_FAIL_KINDS,
   USAGE_KINDS,
@@ -13,6 +14,7 @@ import {
   isCredentialFault,
   metadataBonus,
   metadataScore,
+  normalizeScore,
   pickExplorationTarget,
   qualityTotals,
 } from '../app/ranking.mjs';
@@ -146,5 +148,17 @@ assert.equal(pickExplorationTarget(['a', 'b'], new Map([['a', 30], ['b', 3]]), 5
 assert.equal(pickExplorationTarget(['a', 'b'], new Map(), 5, 0.01, 20), 'a');
 assert.equal(pickExplorationTarget([], new Map(), 5, 0.01, 20), null);
 assert.equal(pickExplorationTarget(['a'], new Map([['a', 0]]), 100, 0.5, 0), null);
+
+// Documented 0-100 scale: every base signal lives on it. Hand-written
+// overrides clamp into it so nothing outranks pinned by accident.
+assert.equal(normalizeScore(9999), 100);
+assert.equal(normalizeScore(-5), 0);
+assert.equal(normalizeScore(0), 0);
+assert.equal(normalizeScore(100), 100);
+assert.equal(normalizeScore(82.46), 82.5);
+// Pinned sits above the scale but stays finite (serializes to JSON, and
+// usage adjustments never apply to it). Must exceed the max reachable
+// normal score: explicit 100 + usage weight 12.
+assert.ok(PINNED_SCORE > 100 + 12);
 
 console.log('ranking unit tests passed');

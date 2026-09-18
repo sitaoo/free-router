@@ -1505,6 +1505,9 @@ try {
   assert.equal(extraEntry.score, 82);
   // Pinned models are exempt from reliability adjustment.
   assert.equal(routeByKey.get('bai:glm-5.3-flash').scoreAdjustment, 0);
+  // Pinned sits above the 0-100 scale but stays finite (was +Infinity,
+  // which serialized as null).
+  assert.equal(routeByKey.get('bai:glm-5.3-flash').score, 150);
   // A group is ranked by its best provider, so the sibling's clean record keeps
   // the pair in place instead of the whole model sinking.
   assert.equal(routeByKey.get('openrouter:acme/extra-1:free').scoreAdjustment, 0);

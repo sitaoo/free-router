@@ -32,7 +32,7 @@ import { installUpstreamProxy } from './proxy.mjs';
 import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
 import { createSecretRedactor } from './redact.mjs';
 import { describeLanAccess, lanGuard, loginLockout, recordLoginFailure } from './net.mjs';
-import { USAGE_KINDS, classifyFailure, isCredentialFault, metadataBonus, metadataScore, pickExplorationTarget, qualityTotals } from './ranking.mjs';
+import { PINNED_SCORE, USAGE_KINDS, classifyFailure, isCredentialFault, metadataBonus, metadataScore, normalizeScore, pickExplorationTarget, qualityTotals } from './ranking.mjs';
 import {
   createStreamSignatureExtractor,
   createThoughtSignatureCache,
@@ -925,7 +925,8 @@ function explicitScore(key) {
   const explicit = Number(
     evaluationConfig.baselineScores?.[key] ?? evaluationConfig.baselineScores?.[modelId],
   );
-  return Number.isFinite(explicit) ? explicit : null;
+  if (!Number.isFinite(explicit)) return null;
+  return normalizeScore(explicit);
 }
 
 function configuredScore(id, configuredIndex) {
@@ -954,7 +955,7 @@ function usageAdjustment(key) {
 function baseModelScore(key, configured, configuredIndex) {
   const slug = keySlug(key);
   const modelId = key.includes(':') ? key.slice(key.indexOf(':') + 1) : key;
-  if (PINNED_MODELS.has(key) || PINNED_MODELS.has(modelId)) return Number.POSITIVE_INFINITY;
+  if (PINNED_MODELS.has(key) || PINNED_MODELS.has(modelId)) return PINNED_SCORE;
   if (configured.has(key)) {
     return configuredScore(key, configuredIndex.get(key)) + metadataBonus(metadataForKey(key));
   }
@@ -972,6 +973,7 @@ function baseModelScore(key, configured, configuredIndex) {
 function rankedModelScore(key, configured, configuredIndex) {
   const base = baseModelScore(key, configured, configuredIndex);
   if (!Number.isFinite(base) || base < 0) return base;
+  if (isPinnedKey(key)) return base;
   return Math.round((base + usageAdjustment(key)) * 10) / 10;
 }
 
@@ -1012,7 +1014,7 @@ function groupRank(group, configuredSet, configuredIndex) {
     configuredKey = key;
   }
   const base = pinned
-    ? Number.POSITIVE_INFINITY
+    ? PINNED_SCORE
     : configuredIdx !== Number.POSITIVE_INFINITY
       ? configuredScore(configuredKey, configuredIdx) +
         metadataBonus(group.members.length ? candidateMetadata(group.members[0].candidate) : null)
@@ -1940,10 +1942,8 @@ function routeStatus() {
         provider: candidate.provider,
         id: candidate.model,
         pinned,
-        score: pinned
-          ? null
-          : rankedModelScore(key, configuredSet, configuredIndex),
-        baseScore: pinned ? null : baseModelScore(key, configuredSet, configuredIndex),
+        score: rankedModelScore(key, configuredSet, configuredIndex),
+        baseScore: baseModelScore(key, configuredSet, configuredIndex),
         scoreAdjustment: pinned ? 0 : usageAdjustment(key),
         scoreSource: scoreSourceFor(key, configuredSet),
         // Only meaningful where the catalog publishes prices; elsewhere the
