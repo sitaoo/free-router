@@ -1063,14 +1063,6 @@ function renderServer() {
   renderLanAddrs(el('srv-lan').checked);
 }
 
-function renderServer() {
-  el('server-blurb').textContent =
-    'Config: ' + state.configFile + ' (' + state.configFormat + '). Running on ' + state.server.runningHost + ':' + state.server.runningPort + '.';
-  el('srv-lan').checked = isLanOpen(state.server.host);
-  el('srv-port').value = state.server.port || '';
-  renderLanAddrs(el('srv-lan').checked);
-}
-
 let activeTab = 'status';
 let draftRoute = '';
 let draftEntries = [];
