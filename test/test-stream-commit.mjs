@@ -158,6 +158,19 @@ function kill() {
   child.kill('SIGTERM');
 }
 
+// The router flushes state into tempDir on SIGTERM; removing the directory
+// before the process exits races that write (ENOTEMPTY under load).
+async function waitForExit() {
+  if (child.exitCode !== null) return;
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, 5000);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
 try {
   await waitForHealth();
 
@@ -225,6 +238,7 @@ try {
   console.log('stream-commit tests passed');
 } finally {
   kill();
+  await waitForExit();
   await close(mock);
   fs.rmSync(tempDir, { recursive: true, force: true });
 }
