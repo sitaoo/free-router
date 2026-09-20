@@ -538,6 +538,10 @@ export function defaultConfigObject() {
     host: '127.0.0.1',
     port: 8787,
     attemptTimeoutMs: 180000,
+    // Upper bound on the headerless wait for the first content/tool-call
+    // delta of a stream. Thinking models reason first; without this bound the
+    // client (e.g. OpenWebUI) times out and shows an empty reply.
+    streamCommitGraceMs: 10000,
     catalogRefreshMs: 900000,
     redactSecrets: true,
     socksFirstHosts: ['generativelanguage.googleapis.com'],

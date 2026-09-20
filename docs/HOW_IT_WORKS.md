@@ -476,8 +476,7 @@ or image input.
 successful responses. A `401` retires only that key; other keys keep serving.
 10. Before sending a request upstream, redacts values of `*_API_KEY` / `*_TOKEN` /
 `*_SECRET` / `*_PASSWORD` from the local environment (including provider keys, gateway keys, and the admin password), and `NAME=...` assignment lines for those names. This cannot stop Hermes from reading `.env` locally; it only keeps those values out of OpenRouter, TokenRouter, and B.AI payloads.
-11. Buffers reasoning-only stream chunks. Nothing is sent to the client until a
-model emits content or a tool call, so an empty model can still be replaced.
+11. Buffers reasoning-only stream chunks. Nothing is sent to the client until a model emits content or a tool call, so an empty model can still be replaced. The wait is bounded by `streamCommitGraceMs` (default 10s, `FREE_ROUTER_STREAM_COMMIT_GRACE_MS` wins): once it expires the buffered prefix is flushed and the rest streams through live, so browsers and proxies never sit on a headerless connection. A stream that commits this way but never yields content keeps its 200 yet counts as `empty`, never `ok`.
 12. On Gemini tool-call follow-ups, reattaches `extra_content.google.thought_signature`
 that OpenAI-only clients drop. Cached signatures from the previous Gemini response are preferred; otherwise Google's `skip_thought_signature_validator` sentinel is used so the request is not a quota-burning 400. If Gemini still returns that 400, remaining Gemini models for the same request are skipped.
 

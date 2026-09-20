@@ -184,6 +184,17 @@ const PORT = Number(process.env.FREE_ROUTER_PORT || config.port || 8787);
 let attemptTimeoutMs = Number(
   process.env.FREE_ROUTER_ATTEMPT_TIMEOUT_MS || config.attemptTimeoutMs || 180000,
 );
+// How long a stream may stay headerless while waiting for the first content or
+// tool-call delta. Thinking models stream reasoning long before content; held
+// headers read as a hang to browsers and proxies (OpenWebUI shows an empty
+// reply), so the buffered prefix is flushed once this grace expires. Streams
+// that finish inside the grace with nothing useful still fail over as before.
+function streamCommitGraceMs() {
+  const raw = Number(
+    process.env.FREE_ROUTER_STREAM_COMMIT_GRACE_MS || config.streamCommitGraceMs || 10000,
+  );
+  return Number.isFinite(raw) && raw >= 0 ? raw : 10000;
+}
 let catalogRefreshMs = Number(config.catalogRefreshMs || 900000);
 const registry = createProviderRegistry(config, { host: HOST, port: PORT });
 const PROVIDERS = registry.providers;
@@ -1879,9 +1890,26 @@ async function attemptStream(candidate, body, res, clientSignal, slot) {
   const decoder = new TextDecoder();
   const extractor = geminiStreamExtractor(candidate);
   const bufferedChunks = [];
+  const graceMs = streamCommitGraceMs();
+  const streamStartedAt = Date.now();
   let parserBuffer = '';
   let committed = false;
+  let sawUseful = false;
   let finishReason = '';
+
+  function commitStream() {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Free-Router-Model': candidate.model,
+      'X-Free-Router-Provider': candidate.provider,
+    });
+    for (const chunk of bufferedChunks) res.write(chunk);
+    bufferedChunks.length = 0;
+    committed = true;
+    log(`selected ${candidateKey(candidate)} (stream)`);
+  }
 
   while (true) {
     let read;
@@ -1894,6 +1922,9 @@ async function attemptStream(candidate, body, res, clientSignal, slot) {
         res.end();
         return { ok: true, candidate, interrupted: true };
       }
+      if (clientSignal?.aborted) {
+        return { ok: false, status: 499, reason: 'client disconnected', kind: 'aborted' };
+      }
       return { ok: false, status: 502, reason: String(error), kind: 'serverError' };
     }
     if (read.done) break;
@@ -1902,10 +1933,12 @@ async function attemptStream(candidate, body, res, clientSignal, slot) {
     extractor?.push(text);
     if (committed) {
       res.write(bytes);
-      continue;
+    } else {
+      bufferedChunks.push(bytes);
     }
-
-    bufferedChunks.push(bytes);
+    // One shared scan drives commit, finish tracking, and usefulness
+    // accounting both before and after the commit, so a grace-committed
+    // stream that later yields content still counts as a success.
     parserBuffer += text;
     const lines = parserBuffer.split('\n');
     parserBuffer = lines.pop() || '';
@@ -1919,28 +1952,30 @@ async function attemptStream(candidate, body, res, clientSignal, slot) {
         const finish = payload?.choices?.[0]?.finish_reason;
         if (finish) finishReason = finish;
         if (usefulDelta(payload)) {
-          res.writeHead(200, {
-            'Content-Type': 'text/event-stream; charset=utf-8',
-            'Cache-Control': 'no-cache, no-transform',
-            Connection: 'keep-alive',
-            'X-Free-Router-Model': candidate.model,
-            'X-Free-Router-Provider': candidate.provider,
-          });
-          for (const chunk of bufferedChunks) res.write(chunk);
-          bufferedChunks.length = 0;
-          committed = true;
-          log(`selected ${candidateKey(candidate)} (stream)`);
-          break;
+          sawUseful = true;
+          if (!committed) {
+            commitStream();
+            break;
+          }
         }
       } catch {
         // Ignore keepalives and malformed provider-specific event lines.
       }
+    }
+    if (!committed && bufferedChunks.length && Date.now() - streamStartedAt >= graceMs) {
+      commitStream();
     }
   }
 
   extractor?.flush();
   if (committed) {
     cleanup();
+    if (!sawUseful) {
+      res.end();
+      const reason = `reasoning only or empty stream (finish_reason=${finishReason || 'unknown'})`;
+      setCooldown(candidate, 'empty', reason, 0, slot);
+      return { ok: true, candidate, hollow: true };
+    }
     res.end();
     return { ok: true, candidate };
   }
@@ -2106,14 +2141,19 @@ async function handleChat(req, res) {
         : await attemptJson(candidate, body, clientController.signal, slot);
 
       if (result.ok) {
-        recordUsage(candidate, 'ok');
-        recordLatency(candidate, Date.now() - attemptStartedAt);
-        rememberSelection({
-          route: requestedModel,
-          provider: candidate.provider,
-          model: candidate.model,
-          selectedAt: new Date().toISOString(),
-        });
+        // A grace-committed stream that never yielded content kept the
+        // client's 200 but served nothing: count it as empty (the cooldown
+        // was already set inside the attempt) instead of a success.
+        recordUsage(candidate, result.hollow ? 'empty' : 'ok');
+        if (!result.hollow) {
+          recordLatency(candidate, Date.now() - attemptStartedAt);
+          rememberSelection({
+            route: requestedModel,
+            provider: candidate.provider,
+            model: candidate.model,
+            selectedAt: new Date().toISOString(),
+          });
+        }
         if (!body.stream) {
           log(`selected ${candidateKey(candidate)}${slotLabel}`);
           return sendJson(res, 200, result.payload, {

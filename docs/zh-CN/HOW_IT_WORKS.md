@@ -467,8 +467,7 @@ journalctl --user -u free-router -f
 `401` 只退役那把 Key。
 10. 发上游前，把本地环境里 `*_API_KEY` / `*_TOKEN` / `*_SECRET` /
 `*_PASSWORD` 的值（含 provider Key、网关 Key、管理密码）以及这些名字的 `NAME=...` 赋值行都脱敏。这拦不住 Hermes 在本地读 `.env`，只保证这些值不进 OpenRouter、TokenRouter、B.AI 的请求体。
-11. 推理专用的流 chunk 先攒着，模型吐出正文或工具调用才往客户端发，
-空模型照样能被换掉。
+11. 推理专用的流 chunk 先攒着，模型吐出正文或工具调用才往客户端发，空模型照样能被换掉。等待有上限 `streamCommitGraceMs`（默认 10 秒，`FREE_ROUTER_STREAM_COMMIT_GRACE_MS` 环境变量优先）：超时就把已攒的前缀先发出去、剩下实时透传，浏览器和代理永远不会卡在无头连接上。这样提交了却始终没有正文的流，客户端照旧拿到 200，但记账按 `empty` 算、永不记 `ok`。
 12. Gemini 工具调用续聊，把 OpenAI 客户端丢掉的
 `extra_content.google.thought_signature` 贴回去。优先用上次 Gemini回包缓存的签名，不然用 Google 的 `skip_thought_signature_validator`哨兵，省一次烧配额的 400。还 400 就跳过同请求的剩下 Gemini 模型。
 
