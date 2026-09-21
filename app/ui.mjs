@@ -863,6 +863,7 @@ function renderProviders() {
     const origSave = created.save.onclick;
     created.save.onclick = async (e) => {
       await origSave(e);
+      // save.disabled stays true only on success (the create handler re-enables it on error).
       if (!created.save.disabled) return;
       closeProviderModal();
     };
@@ -926,15 +927,18 @@ function renderProviders() {
     opsTd.appendChild(del);
     tr.append(nameTd, urlTd, keysTd, modelsTd, freeTd, opsTd);
     body.appendChild(tr);
-
-    const detailTr = document.createElement('tr');
-    const detailTd = document.createElement('td');
-    detailTd.colSpan = 6;
-    detailTd.appendChild(buildProviderDetail(provider));
-    detailTr.appendChild(detailTd);
-    detailTr.hidden = true;
-    body.appendChild(detailTr);
-    manage.onclick = () => { detailTr.hidden = !detailTr.hidden; };
+    manage.onclick = () => {
+      openProviderModal('edit', provider);
+      const modalBody = el('provider-modal-body');
+      const curTitle = document.createElement('h4');
+      curTitle.textContent = t('prov_current_models');
+      modalBody.appendChild(curTitle);
+      modalBody.appendChild(buildProviderDetail(provider));
+      const addTitle = document.createElement('h4');
+      addTitle.textContent = t('prov_add_models');
+      modalBody.appendChild(addTitle);
+      modalBody.appendChild(buildModelPicker(provider));
+    };
   }
   el('keys-blurb').textContent = t('keys_blurb', { file: state.overlayFile, format: state.configFormat });
 }
@@ -948,6 +952,42 @@ const PROVIDER_PRESETS = {
   tokenrouter: { baseUrl: 'https://api.tokenrouter.com/v1', catalog: true, pricing: false },
   bai: { baseUrl: 'https://api.b.ai/v1', catalog: false, pricing: false },
 };
+
+function renderModelList(box, ids, freeSet, truncated) {
+  box.textContent = '';
+  if (!ids.length) {
+    const p = document.createElement('p');
+    p.className = 'note';
+    p.style.margin = '0';
+    p.textContent = t('prov_no_catalog');
+    box.appendChild(p);
+    return;
+  }
+  const title = document.createElement('div');
+  title.className = 'prov-hint';
+  title.textContent = t('prov_models_pick');
+  box.appendChild(title);
+  for (const id of ids) {
+    const label = document.createElement('label');
+    label.className = 'check';
+    const boxEl = document.createElement('input');
+    boxEl.type = 'checkbox';
+    boxEl.dataset.model = id;
+    if (freeSet.has(id)) boxEl.checked = true;
+    const text = document.createElement('span');
+    text.className = 'mono';
+    text.textContent = id + (freeSet.has(id) ? '' : ' ' + t('prov_paid_tag'));
+    label.append(boxEl, text);
+    box.appendChild(label);
+  }
+  if (truncated) {
+    const p = document.createElement('p');
+    p.className = 'note';
+    p.style.margin = '0';
+    p.textContent = t('prov_truncated');
+    box.appendChild(p);
+  }
+}
 
 function buildProviderForm() {
   const form = document.createElement('div');
@@ -1071,41 +1111,6 @@ function buildProviderForm() {
   note.className = 'note';
   note.textContent = t('prov_auto_note');
   form.append(r0, r1, modelsBox, r2, r3, r3b, r4, note);
-  function renderModelList(box, ids, freeSet, truncated) {
-    box.textContent = '';
-    if (!ids.length) {
-      const p = document.createElement('p');
-      p.className = 'note';
-      p.style.margin = '0';
-      p.textContent = t('prov_no_catalog');
-      box.appendChild(p);
-      return;
-    }
-    const title = document.createElement('div');
-    title.className = 'prov-hint';
-    title.textContent = t('prov_models_pick');
-    box.appendChild(title);
-    for (const id of ids) {
-      const label = document.createElement('label');
-      label.className = 'check';
-      const boxEl = document.createElement('input');
-      boxEl.type = 'checkbox';
-      boxEl.dataset.model = id;
-      if (freeSet.has(id)) boxEl.checked = true;
-      const text = document.createElement('span');
-      text.className = 'mono';
-      text.textContent = id + (freeSet.has(id) ? '' : ' ' + t('prov_paid_tag'));
-      label.append(boxEl, text);
-      box.appendChild(label);
-    }
-    if (truncated) {
-      const p = document.createElement('p');
-      p.className = 'note';
-      p.style.margin = '0';
-      p.textContent = t('prov_truncated');
-      box.appendChild(p);
-    }
-  }
   function renderModelChecks() {
     modelsBox.textContent = '';
     const preset = presetSelect.value;
@@ -1379,6 +1384,84 @@ function buildProviderDetail(provider) {
   fmWrap.appendChild(fmRow);
   adv.appendChild(fmWrap);
   return fieldCell;
+}
+
+// Add-models picker for the edit modal: catalog checkbox list (shared
+// renderModelList) plus manual entry, saved via update {freeModels:[...]}.
+// Union-only: unchecking here never removes; removal stays on the × chips
+// in buildProviderDetail.
+function buildModelPicker(provider) {
+  const wrap = document.createElement('div');
+  const box = document.createElement('div');
+  wrap.appendChild(box);
+  const detail = (state.editable && state.editable.providers || []).find((entry) => entry.name === provider.name) || {};
+  const current = new Set(detail.freeModels || []);
+  const paint = (ids, freeSet, truncated) => {
+    const checked = new Set(freeSet);
+    for (const id of current) if (ids.includes(id)) checked.add(id);
+    renderModelList(box, ids, checked, truncated);
+  };
+  paint(
+    Array.isArray(provider.catalogIds) ? provider.catalogIds : [],
+    new Set(provider.catalogFreeIds || []),
+    Boolean(provider.catalogTruncated),
+  );
+  const row = document.createElement('div');
+  row.className = 'row';
+  const field = document.createElement('input');
+  field.className = 'mono';
+  field.placeholder = t('fm_add_ph');
+  field.style.flex = '1';
+  field.style.minWidth = '220px';
+  const fetchBtn = document.createElement('button');
+  fetchBtn.textContent = t('prov_fetch');
+  fetchBtn.onclick = async () => {
+    const baseUrl = (provider.baseUrl || '').trim();
+    if (!baseUrl) { toast(t('np_need'), 'err'); return; }
+    fetchBtn.disabled = true;
+    try {
+      const result = await api('api/providers', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'fetch-models', baseUrl }),
+      });
+      paint(
+        (result.models || []).map((m) => m.id),
+        new Set((result.models || []).filter((m) => m.free).map((m) => m.id)),
+        Boolean(result.truncated),
+      );
+      if (!result.models.length) toast(t('prov_no_catalog'), 'err');
+    } catch (error) {
+      toast(String(error.message || error), 'err');
+    } finally {
+      fetchBtn.disabled = false;
+    }
+  };
+  const save = document.createElement('button');
+  save.className = 'primary';
+  save.textContent = t('fm_add');
+  save.onclick = async () => {
+    const checked = [...box.querySelectorAll('input[type="checkbox"]:checked')]
+      .map((item) => item.dataset.model)
+      .filter(Boolean);
+    const typed = field.value.split(',').map((s) => s.trim()).filter(Boolean);
+    const freeModels = [...new Set([...(detail.freeModels || []), ...checked, ...typed])];
+    if (!freeModels.length) return;
+    save.disabled = true;
+    try {
+      await api('api/providers', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'update', name: provider.name, freeModels }),
+      });
+      toast(t('saved'), 'good');
+      await load();
+    } catch (error) {
+      toast(String(error.message || error), 'err');
+      save.disabled = false;
+    }
+  };
+  row.append(field, fetchBtn, save);
+  wrap.appendChild(row);
+  return wrap;
 }
 
 function renderGateway() {
