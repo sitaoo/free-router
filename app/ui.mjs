@@ -1454,6 +1454,7 @@ function buildModelPicker(provider) {
       });
       toast(t('saved'), 'good');
       await load();
+      closeProviderModal();
     } catch (error) {
       toast(String(error.message || error), 'err');
       save.disabled = false;
@@ -1667,10 +1668,11 @@ function renderUsage() {
   host.appendChild(table(
     [{ label: t('th_model') }, { label: t('th_today_used'), num: true }, { label: t('th_today_ok'), num: true }, { label: t('th_today_fail'), num: true }, { label: t('th_limit'), num: true }],
     models.map((entry) => {
-      const used = td(entry.today ? entry.today.consumed : '-', 'num');
-      const ok = td(entry.today ? (entry.today.ok || '-') : '-', 'num');
+      const today = entry.today || {};
+      const used = td(today.consumed ?? '-', 'num');
+      const ok = td(today.ok ?? '-', 'num');
       ok.title = t('usage_tip_ok', { n, v: entry.ok || 0 });
-      const fail = td(entry.today ? (entry.today.fail || '-') : '-', 'num');
+      const fail = td(today.fail ?? '-', 'num');
       fail.title = t('usage_tip_fail', { n, v: entry.fail || 0 });
       return [td(entry.key, 'mono'), used, ok, fail, td(entry.dailyLimit || '-', 'num')];
     }),
