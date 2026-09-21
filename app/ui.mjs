@@ -1509,7 +1509,6 @@ function renderStatus() {
   endpointWrap.appendChild(endpointText);
   endpointWrap.appendChild(copy);
   card(host, t('card_endpoint'), endpointWrap);
-  card(host, t('card_config'), state.configFile + ' (' + state.configFormat + ')');
   const gwCount = (state.gateway && state.gateway.keys.length) || 0;
   const gwValue = document.createElement('span');
   if (state.gateway.requireAuth) {
