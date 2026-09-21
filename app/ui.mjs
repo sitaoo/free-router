@@ -372,6 +372,10 @@ input {
 #toast.good { border-left: 3px solid var(--ok); }
 #toast.err { border-left: 3px solid var(--bad); }
 
+.overlay { position: fixed; inset: 0; background: rgba(15,23,42,.45); display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; z-index: 50; }
+.overlay[hidden] { display: none; }
+.modal { background: #fff; border-radius: 12px; max-width: 720px; width: 100%; max-height: 85vh; overflow: auto; padding: 16px 18px; box-shadow: 0 12px 40px rgba(0,0,0,.25); }
+
 @media (max-width: 760px) {
   .prov { grid-template-columns: 1fr; gap: 10px; }
   .prov-name { padding-top: 0; }
@@ -446,6 +450,16 @@ input {
         <div id="providers"></div>
       </div>
     </section>
+  </div>
+
+  <div id="provider-modal" class="overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h3 id="provider-modal-title" style="margin:0"></h3>
+        <button class="quiet" id="provider-modal-x">×</button>
+      </div>
+      <div id="provider-modal-body"></div>
+    </div>
   </div>
 
   <div data-pane="routes" hidden>
@@ -813,6 +827,20 @@ function pill(text, kind) {
 function providerRowCounts(provider) {
   const q = (v) => (v === null || v === undefined ? '?' : v);
   return { models: q(provider.modelCount), free: q(provider.freeCount) };
+}
+
+let modalReturnFocus = null;
+function openProviderModal(mode, provider) {
+  const overlay = el('provider-modal');
+  modalReturnFocus = document.activeElement;
+  el('provider-modal-title').textContent = mode === 'create' ? t('prov_modal_add') : t('prov_modal_edit', { p: provider ? provider.name : '' });
+  el('provider-modal-body').textContent = '';
+  overlay.hidden = false;
+}
+function closeProviderModal() {
+  el('provider-modal').hidden = true;
+  el('provider-modal-body').textContent = '';
+  if (modalReturnFocus && modalReturnFocus.focus) modalReturnFocus.focus();
 }
 
 function renderProviders() {
@@ -1815,6 +1843,9 @@ function bindOnce() {
     button.onclick = () => switchTab(button.dataset.tab);
   }
   el('lang').onchange = () => setLang(el('lang').value);
+  el('provider-modal-x').onclick = closeProviderModal;
+  el('provider-modal').addEventListener('mousedown', (e) => { if (e.target.id === 'provider-modal') closeProviderModal(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !el('provider-modal').hidden) closeProviderModal(); });
   const doLogout = async () => {
     try { await api('api/logout', { method: 'POST' }); } catch (error) { /* ignore */ }
     showLogin();
