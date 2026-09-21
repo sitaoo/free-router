@@ -835,6 +835,9 @@ function openProviderModal(mode, provider) {
   modalReturnFocus = document.activeElement;
   el('provider-modal-title').textContent = mode === 'create' ? t('prov_modal_add') : t('prov_modal_edit', { p: provider ? provider.name : '' });
   el('provider-modal-body').textContent = '';
+  const closer = el('provider-modal-x');
+  closer.title = t('prov_modal_close');
+  closer.setAttribute('aria-label', t('prov_modal_close'));
   overlay.hidden = false;
 }
 function closeProviderModal() {
@@ -849,23 +852,23 @@ function renderProviders() {
 
   const toolbar = document.createElement('div');
   toolbar.className = 'row';
-  const addShow = document.createElement('button');
-  addShow.className = 'primary';
-  addShow.textContent = t('prov_add_show');
-  const created = buildProviderForm();
-  const form = created.form;
-  form.hidden = true;
-  addShow.onclick = () => {
-    form.hidden = !form.hidden;
-    addShow.textContent = form.hidden ? t('prov_add_show') : t('prov_add_hide');
+  const addBtn = document.createElement('button');
+  addBtn.className = 'primary';
+  addBtn.textContent = t('prov_modal_add');
+  addBtn.onclick = () => {
+    openProviderModal('create');
+    const created = buildProviderForm();
+    el('provider-modal-body').appendChild(created.form);
+    created.cancel.onclick = () => closeProviderModal();
+    const origSave = created.save.onclick;
+    created.save.onclick = async (e) => {
+      await origSave(e);
+      if (!created.save.disabled) return;
+      closeProviderModal();
+    };
   };
-  created.cancel.onclick = () => {
-    form.hidden = true;
-    addShow.textContent = t('prov_add_show');
-  };
-  toolbar.appendChild(addShow);
+  toolbar.appendChild(addBtn);
   host.appendChild(toolbar);
-  host.appendChild(form);
 
   const tbl = document.createElement('table');
   const head = document.createElement('thead');
