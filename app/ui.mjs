@@ -1539,7 +1539,8 @@ function renderStatus() {
 function renderUsage() {
   const host = el('usage');
   host.textContent = '';
-  el('usage-blurb').textContent = t('usage_blurb', { today: state.usage.today, tz: state.usage.timezone });
+  const n = state.usage.retentionDays || 7;
+  el('usage-blurb').textContent = t('usage_blurb', { today: state.usage.today, tz: state.usage.timezone, n });
   const models = (state.usage.models || []).slice(0, 12);
   if (!models.length) {
     const p = document.createElement('p');
@@ -1550,14 +1551,15 @@ function renderUsage() {
     return;
   }
   host.appendChild(table(
-    [{ label: t('th_model') }, { label: t('th_today'), num: true }, { label: t('th_ok'), num: true }, { label: t('th_fail'), num: true }, { label: t('th_limit'), num: true }],
-    models.map((entry) => [
-      td(entry.key, 'mono'),
-      td(entry.today ? entry.today.consumed : '-', 'num'),
-      td(entry.ok || '-', 'num'),
-      td(entry.fail || '-', 'num'),
-      td(entry.dailyLimit || '-', 'num'),
-    ]),
+    [{ label: t('th_model') }, { label: t('th_today_used'), num: true }, { label: t('th_today_ok'), num: true }, { label: t('th_today_fail'), num: true }, { label: t('th_limit'), num: true }],
+    models.map((entry) => {
+      const used = td(entry.today ? entry.today.consumed : '-', 'num');
+      const ok = td(entry.today ? (entry.today.ok || '-') : '-', 'num');
+      ok.title = t('usage_tip_ok', { n, v: entry.ok || 0 });
+      const fail = td(entry.today ? (entry.today.fail || '-') : '-', 'num');
+      fail.title = t('usage_tip_fail', { n, v: entry.fail || 0 });
+      return [td(entry.key, 'mono'), used, ok, fail, td(entry.dailyLimit || '-', 'num')];
+    }),
   ));
 }
 
