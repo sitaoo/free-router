@@ -410,15 +410,15 @@ input {
       <div class="sec-body"><div id="status-cards" class="cards"></div></div>
     </section>
     <section>
+      <div class="sec-head"><h2 data-i18n="usage_today">Usage today</h2><p id="usage-blurb"></p></div>
+      <div class="sec-body"><div id="usage"></div></div>
+    </section>
+    <section>
       <div class="sec-head">
         <h2 data-i18n="route_priority">Route priority</h2>
         <p id="routes-blurb"></p>
       </div>
       <div class="sec-body"><div id="routes"></div></div>
-    </section>
-    <section>
-      <div class="sec-head"><h2 data-i18n="usage_today">Usage today</h2><p id="usage-blurb"></p></div>
-      <div class="sec-body"><div id="usage"></div></div>
     </section>
   </div>
 
@@ -2263,9 +2263,32 @@ function renderRoutes() {
   }
 }
 
+// Status tab auto-refresh: poll /api/state every 5s while the status pane
+// is visible. Skips when another tab is active (so route drafts and form
+// inputs elsewhere are never clobbered), when the page is hidden, when
+// logged out, or when a previous poll is still in flight.
+const STATUS_REFRESH_MS = 5000;
+let statusRefreshing = false;
+function startStatusAutoRefresh() {
+  if (startStatusAutoRefresh.done) return;
+  startStatusAutoRefresh.done = true;
+  setInterval(async () => {
+    if (activeTab !== 'status' || document.hidden || !state || statusRefreshing) return;
+    statusRefreshing = true;
+    try {
+      await load();
+    } catch (error) {
+      // load() already surfaces login/toast feedback.
+    } finally {
+      statusRefreshing = false;
+    }
+  }, STATUS_REFRESH_MS);
+}
+
 // Bind buttons before the first load: an unauthenticated visit fails
 // /api/state and returns early, which must not leave the login button dead.
 bindOnce();
+startStatusAutoRefresh();
 load().catch((error) => toast(String(error.message || error), 'err'));
 </script>
 </body>
