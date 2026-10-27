@@ -313,9 +313,9 @@ Scores are made of three parts, capped so no single part can dominate:
 | metadata | 20 | tools, structured output, context length, modality, recency |
 | latency | 6 | one cold sample, so deliberately a small tiebreaker |
 
-A model is re-evaluated when its stored score is missing, still `pending`, or was produced by an older benchmark version. Without this, a model whose single evaluation attempt hit a 429 would keep the fallback score of `-1` and stay last forever, because it was already tracked and so never looked like a new discovery again. At most `evaluation.maxPerRun` models are evaluated per run.
+A model is re-evaluated when its stored score is missing, still `pending`, or was produced by an older benchmark version. Without this, a model whose single evaluation attempt hit a 429 would keep the fallback score of `-1` and stay last forever, because it was already tracked and so never looked like a new discovery again. At most `evaluation.maxPerRun` models are evaluated per run. When there is no configured anchor, no `baselineScores` entry and no evaluation score, the router falls back to a shipped SWE-bench Verified prior (`app/data/swe-bench.json`, the same unofficial snapshot upstream publishes) instead of `-1`. `/health` reports which source won per entry as `scoreSource`: `baseline`, `evaluation`, `swe-bench`, or `unranked`; the web UI route table shows it as a tooltip on the score cell.
 
-Ranking also reacts to real traffic. Once a model has at least `evaluation.usageMinRequests` recorded attempts in the usage window, its success rate shifts its score by up to `evaluation.usageWeight` points: 100% success adds the full weight, 80% is neutral, 60% or worse subtracts the full weight. Pinned models are exempt. When one model is offered by several providers, the group is ranked by its best provider, so one bad provider does not sink the model. `./script/models.sh` shows the current shift in the `rank+-` column, and `/health` reports `baseScore` and `scoreAdjustment` per entry.
+Ranking also reacts to real traffic. Once a model has at least `evaluation.usageMinRequests` recorded attempts in the usage window, its success rate shifts its score by up to `evaluation.usageWeight` points: 100% success adds the full weight, 80% is neutral, 60% or worse subtracts the full weight. Pinned models are exempt. When one model is offered by several providers, the group is ranked by its best provider, so one bad provider does not sink the model. `./script/models.sh` shows the score, its source, and the current shift in the `score`, `source`, and `rank+-` columns, and `/health` reports `baseScore` and `scoreAdjustment` per entry.
 
 ### Scoring scale and live signals
 
@@ -331,6 +331,8 @@ scarce-but-smart models are saved for when they matter. Unlimited models sort fi
 above, once 5 samples exist. Small and capped by design.
 
 A few percent of requests (`routing.explorePercent`, default 5) detour to an underexplored model so cold models can earn traffic; pinned models never give up first place. External leaderboards feed in through `script/sync-scores.mjs`, which writes `baselineScores` (40-80 prior band) plus provenance — see `./script/sync-scores.mjs --help`.
+
+Before ranking, `filterCandidates` drops a model whose published `context_length` clearly cannot hold the request. It estimates input tokens from the message and tool JSON (CJK runs close to 1 token per character, Latin about 4 characters per token) and adds the requested `max_tokens` / `max_completion_tokens` / `max_output_tokens`, then skips the candidate only when the known window is smaller than that sum. An unknown window, an unknown size, or a request with inline media (billed by resolution, not characters) keeps the candidate, so the estimate can cost an extra upstream attempt but never rejects one that might have worked. Skipped candidates are logged with `request exceeds context window`.
 
 ### Asking a provider what is free
 

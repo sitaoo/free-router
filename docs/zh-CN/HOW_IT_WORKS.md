@@ -308,9 +308,9 @@ OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers
 | metadata | 20 | 工具、结构化输出、上下文长度、模态、新鲜度 |
 | latency | 6 | 一次冷采样，故意只做小权重平局裁决 |
 
-分数缺失、还是 `pending`、或是老 benchmark 版本产的，都会重评。不然单次评测撞上 429 的模型会永远背着 `-1` 的 fallback 分垫底——它已经在跟踪名单里，再也不会被当新模型看。每轮最多评 `evaluation.maxPerRun` 个。
+分数缺失、还是 `pending`、或是老 benchmark 版本产的，都会重评。不然单次评测撞上 429 的模型会永远背着 `-1` 的 fallback 分垫底——它已经在跟踪名单里，再也不会被当新模型看。每轮最多评 `evaluation.maxPerRun` 个。没有配置锚点、没有 `baselineScores`、也还没评测分时，路由器改用随包携带的 SWE-bench Verified 先验（`app/data/swe-bench.json`，与上游发布的是同一份非官方快照），而不是直接给 `-1`。`/health` 每条用 `scoreSource` 报告分数来源：`baseline`、`evaluation`、`swe-bench` 或 `unranked`；Web UI 路由表把来源放在评分格的提示里。
 
-排名还会跟着真实流量走。单个模型在用量窗口攒够`evaluation.usageMinRequests` 次尝试后，成功率按`evaluation.usageWeight` 上下调分：100% 加满，80% 不动，60% 及以下扣满。置顶模型豁免。同一模型多家提供时按最好的一家排名，一家拉胯不连累模型。`./script/models.sh` 的 `rank+-` 列看当前偏移，`/health` 里每条有`baseScore` 和 `scoreAdjustment`。
+排名还会跟着真实流量走。单个模型在用量窗口攒够`evaluation.usageMinRequests` 次尝试后，成功率按`evaluation.usageWeight` 上下调分：100% 加满，80% 不动，60% 及以下扣满。置顶模型豁免。同一模型多家提供时按最好的一家排名，一家拉胯不连累模型。`./script/models.sh` 的 `score`、`source`、`rank+-` 三列分别看当前分数、来源和偏移，`/health` 里每条有`baseScore` 和 `scoreAdjustment`。
 
 ### 打分尺度与实时信号
 
@@ -324,6 +324,8 @@ OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers
 - **延迟**：滚动平均响应 5 秒内 +2，30 秒内 0，以上 −2，攒够 5 个样本才生效，小而封顶。
 
 百分之几的请求（`routing.explorePercent`，默认 5）会绕去没跑过的模型，让冷模型有机会赚流量；置顶模型永远不让第一。外部榜单走`script/sync-scores.mjs` 写 `baselineScores`（40-80 先验带），带来源戳，详见 `./script/sync-scores.mjs --help`。
+
+排序之前，`filterCandidates` 会先丢掉公开 `context_length` 明显装不下这次请求的模型。它从 messages 和 tools 的 JSON 估算输入 token（中日韩字符接近 1 token/字，拉丁文约 4 字符/token），再加上请求的 `max_tokens` / `max_completion_tokens` / `max_output_tokens`；只有已知窗口小于这个和时才跳过。窗口未知、大小无法估算、或请求里带内联媒体（按分辨率计费，不按字符数）都保留候选，所以估算最多多花一次上游尝试，不会误杀本来能用的模型。被跳过的候选会在日志里标 `request exceeds context window`。
 
 ### 问渠道什么免费
 

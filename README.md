@@ -93,7 +93,7 @@ Detailed notes: [Run with Docker](docs/HOW_IT_WORKS.md#run-with-docker).
 
 - **Discovers every two days**: scans provider catalogs. New free models pass a capability exam before joining the ranking.
 - **Ranks live on every request**: config order sets the baseline. Real success rates, cooldowns, and daily limits weigh in. Pinned models always go first.
-- **Scores on a 0-100 scale**: capability portrait, scarcity, and live latency refine the order; a few percent of traffic samples cold models. Details: [Scoring scale and live signals](docs/HOW_IT_WORKS.md#scoring-scale-and-live-signals).
+- **Scores on a 0-100 scale**: capability portrait, scarcity, and live latency refine the order; models with no local score use a shipped SWE-bench prior, and a request that clearly exceeds a model's published context window skips it. A few percent of traffic samples cold models. Details: [Scoring scale and live signals](docs/HOW_IT_WORKS.md#scoring-scale-and-live-signals).
 - **Bad keys do not implicate anyone**: a `401` retires only the current key. Rate limits only cool down the current key. The model record stays clean.
 - **Settings never get lost**: factory defaults and your changes live in separate files. `git pull` can never clobber them.
 - **Runs anywhere**: foreground, `systemd`, or Docker Compose. Everything writable lives in the single `data/` directory.

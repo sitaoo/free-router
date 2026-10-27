@@ -5,7 +5,7 @@
 config.local.json
 app/config/config.local.json
 # Future writable dir (see #11; server still uses the repo root).
-data/
+/data/
 router.log
 router.pid
 discovered-free-models.json

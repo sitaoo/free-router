@@ -10,6 +10,8 @@ tags are cut here. Dates are commit dates (`YYYY-MM-DD`).
 
 - Free-tier probing now runs for every price-free catalog by default (Gemini, TokenRouter, B.AI) and a new HashNeuron provider is shipped; a probe that returns a positive `usage.cost`/`credits` is treated as billed and kept out of routes.
 - Cached free verdicts are re-adopted into discovery after a state-file loss, without spending another probe.
+- Context-window pre-filter: estimated input plus requested output skips a candidate only when its published `context_length` is clearly too small; unknown limits and inline media keep it.
+- SWE-bench Verified prior (shipped `app/data/swe-bench.json`) ranks models with no config anchor, `baselineScores` entry, or evaluation score; `/health`, the web UI, and `models.sh` report the source as `scoreSource`.
 - LAN access toggle in Settings replacing the host textbox: ON writes `0.0.0.0`, OFF writes `127.0.0.1`; reachable addresses (LAN IPs, loopback, hostname) listed with container-view note; warning when enabling with zero gateway keys.
 - Boot guard: refuse to start on a non-loopback bind without gateway keys or with the default password.
 - Login brute-force brake: 5 failures lock an IP for 5 minutes (`429` + `Retry-After`).

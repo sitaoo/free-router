@@ -449,6 +449,7 @@ const mock = http.createServer(async (req, res) => {
           'mock-audio',
           'acme/extra-1:free',
           'mock-domain',
+          'deepseek-v3.2:free',
         ].map((id) => ({
           id,
           description:
@@ -460,6 +461,7 @@ const mock = http.createServer(async (req, res) => {
               ? { prompt: '0.000001', completion: '0.000001' }
               : { prompt: '0', completion: '0' },
           supported_parameters: ['tools', 'response_format'],
+          ...(id === 'deepseek-v3.2:free' ? { context_length: 8192 } : {}),
           architecture: {
             input_modalities: ['text'],
             output_modalities: id === 'mock-audio' ? ['text', 'audio'] : ['text'],
@@ -476,6 +478,14 @@ const mock = http.createServer(async (req, res) => {
     const isEvaluation = body.messages?.some(
       (message) => typeof message.content === 'string' && message.content.includes('OX-RANK-7'),
     );
+    // This discovery-only model fails its evaluation on purpose, so the route
+    // falls back to the published capability prior instead of a local score.
+    if (isEvaluation && body.model === 'deepseek-v3.2:free') {
+      res.setHeader('Content-Type', 'application/json');
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: { message: 'evaluation endpoint down' } }));
+      return;
+    }
     if (isEvaluation) {
       res.setHeader('Content-Type', 'application/json');
       res.end(
@@ -1023,9 +1033,14 @@ async function waitForHealth() {
 try {
   const health = await waitForHealth();
   assert.equal(health.version, PACKAGE_VERSION);
-  // mock-new came from the priced catalog; glm-5.3-pro came from asking bai to
+  // mock-new came from the priced catalog; deepseek could not be evaluated so
+  // it keeps the static SWE-bench prior; glm-5.3-pro came from asking bai to
   // serve a model its price-free catalog says nothing about.
-  assert.deepEqual(health.discovery.addedModels, ['mock-new', 'bai:models/glm-5.3-pro']);
+  assert.deepEqual(health.discovery.addedModels, [
+    'deepseek-v3.2:free',
+    'mock-new',
+    'bai:models/glm-5.3-pro',
+  ]);
 
   const probeVerdicts = health.discovery.modelVerdicts;
   assert.equal(probeVerdicts['bai:models/glm-5.3-pro'].free, true);
@@ -1074,6 +1089,7 @@ try {
       'extra:extra-1',
       'openrouter:acme/extra-1:free',
       'quotamock:no-free-tier',
+      'openrouter:deepseek-v3.2:free',
       'quotamock:daily-exhausted',
       'bai:models/glm-5.3-pro',
     ],
@@ -1089,6 +1105,21 @@ try {
     (entry) => `${entry.provider}:${entry.id}` === 'openrouter:mock-a',
   );
   assert.equal(mockAEntry.baseScore, 98);
+  assert.equal(mockAEntry.scoreSource, 'baseline');
+  // Its evaluation failed, so ranking falls back to the shipped SWE-bench
+  // prior instead of treating the model as unranked.
+  const sweEntry = health.routes['test-route'].find(
+    (entry) => `${entry.provider}:${entry.id}` === 'openrouter:deepseek-v3.2:free',
+  );
+  assert.equal(sweEntry.baseScore, 73.1);
+  assert.equal(sweEntry.score, 73.1);
+  assert.equal(sweEntry.scoreSource, 'swe-bench');
+  assert.equal(
+    health.routes['test-route'].find(
+      (entry) => `${entry.provider}:${entry.id}` === 'openrouter:mock-new',
+    ).scoreSource,
+    'evaluation',
+  );
   assert.equal(mockNewEvaluation.score, 83);
   assert.equal(health.defaultProvider, 'openrouter');
   assert.equal(health.discovery.provider, 'openrouter');
@@ -1130,7 +1161,7 @@ try {
   assert.equal(
     JSON.parse(fs.readFileSync(path.join(tempDir, 'discovered-free-models.json'), 'utf8'))
       .addedModels[0],
-    'mock-new',
+    'deepseek-v3.2:free',
   );
   const modelsResponse = await fetch(`http://127.0.0.1:${routerPort}/v1/models`);
   assert.equal(modelsResponse.status, 200);
@@ -1150,11 +1181,25 @@ try {
       'no-free-tier',
       'daily-exhausted',
       'acme/extra-1:free',
+      'deepseek-v3.2:free',
       'mock-a',
       'mock-domain',
       'mock-new',
     ],
   );
+  // Input plus requested output exceeds the model's published window, so the
+  // candidate is dropped before an upstream request is spent on it.
+  const oversized = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'deepseek-v3.2:free',
+      messages: [{ role: 'user', content: 'hi' }],
+      max_tokens: 9000,
+    }),
+  });
+  assert.equal(oversized.status, 503);
+  assert.equal((await oversized.json()).error.type, 'no_compatible_free_model');
   const request = {
     model: 'test-route',
     messages: [{ role: 'user', content: 'force-token-failure' }],
@@ -1489,6 +1534,7 @@ try {
       'extra:extra-1',
       'gemini:gemini-3.8-flash',
       'openrouter:acme/extra-1:free',
+      'openrouter:deepseek-v3.2:free',
       'openrouter:mock-new',
       'quotamock:daily-exhausted',
       'quotamock:no-free-tier',
@@ -1497,6 +1543,7 @@ try {
   );
   // The discovery evaluation burns real quota, so it has to be counted too.
   assert.equal(usageByKey.get('openrouter:mock-new').ok, 1);
+  assert.equal(usageByKey.get('openrouter:deepseek-v3.2:free').fail, 1);
   assert.equal(usageByKey.get('bai:glm-5.3-flash').ok, 4);
   assert.equal(usageByKey.get('bai:glm-5.3-flash').fail, 0);
   assert.equal(usageByKey.get('tokenrouter:z-ai/glm-5.3-free').ok, 1);
@@ -1510,9 +1557,9 @@ try {
   assert.equal(usage.days[0].ok, 15);
   assert.equal(usageByKey.get('bai:models/glm-5.3-billed').ok, 1);
   // Three routing failures, the two deliberate quota rejections, the probe
-  // that found glm-5.3-paid has no free allowance, and one forced Gemini
-  // thought-signature 400.
-  assert.equal(usage.days[0].fail, 7);
+  // that found glm-5.3-paid has no free allowance, the purposefully failed
+  // deepseek evaluation, and one forced Gemini thought-signature 400.
+  assert.equal(usage.days[0].fail, 8);
   assert.equal(usage.days[0].topModel.key, 'gemini:gemini-3.8-flash');
 
   // A daily limit only counts attempts the provider actually served, so the
@@ -1542,6 +1589,8 @@ try {
   assert.equal(extraEntry.baseScore, 82);
   assert.equal(extraEntry.scoreAdjustment, 0);
   assert.equal(extraEntry.score, 82);
+  assert.equal(extraEntry.scoreSource, 'baseline');
+  assert.equal(routeByKey.get('openrouter:deepseek-v3.2:free').scoreSource, 'swe-bench');
   // Pinned models are exempt from reliability adjustment.
   assert.equal(routeByKey.get('bai:glm-5.3-flash').scoreAdjustment, 0);
   // Pinned sits above the 0-100 scale but stays finite (was +Infinity,
@@ -1562,6 +1611,7 @@ try {
       'openrouter:mock-new',
       'extra:extra-1',
       'openrouter:acme/extra-1:free',
+      'openrouter:deepseek-v3.2:free',
       'quotamock:daily-exhausted',
       'bai:models/glm-5.3-pro',
     ],

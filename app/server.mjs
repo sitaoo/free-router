@@ -29,9 +29,11 @@ import {
   supportsRequest,
 } from './providers.mjs';
 import { adoptableFreeModels, responseLooksBilled } from './discovery.mjs';
+import { estimateRequestTokens, fitsContext } from './context.mjs';
 import { installUpstreamProxy } from './proxy.mjs';
 import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
 import { createSecretRedactor } from './redact.mjs';
+import { loadSweBenchScores, sweBenchScoreFor } from './swe-bench.mjs';
 import { describeLanAccess, lanGuard, loginLockout, recordLoginFailure } from './net.mjs';
 import { PINNED_SCORE, USAGE_KINDS, classifyFailure, compareByScarcity, ewmaLatency, isCredentialFault, latencyAdjustment, metadataBonus, metadataScore, normalizeScore, pickExplorationTarget, qualityTotals } from './ranking.mjs';
 import {
@@ -231,6 +233,9 @@ const EVALUATION_MAX_PER_RUN = Math.max(1, Number(evaluationConfig.maxPerRun || 
 const RANK_USAGE_WEIGHT = Math.max(0, Number(evaluationConfig.usageWeight ?? 12));
 const RANK_USAGE_MIN_REQUESTS = Math.max(1, Number(evaluationConfig.usageMinRequests || 20));
 const PINNED_MODELS = new Set(evaluationConfig.pinnedModels || []);
+// Static capability prior for models with no configured anchor and no
+// evaluation score yet. Loaded once; a missing table just means no prior.
+const SWE_BENCH_SCORES = loadSweBenchScores(path.join(HERE, 'data', 'swe-bench.json'));
 const usageConfig = config.usage || {};
 const USAGE_RETENTION_DAYS = Math.max(1, Number(usageConfig.retentionDays || 7));
 const USAGE_TIMEZONE = String(usageConfig.timezone || '');
@@ -977,12 +982,16 @@ function rememberSelection(selection) {
 // A manual override in `baselineScores`, keyed by `provider:model` or by the
 // bare model ID. Applies to discovered models too, not just configured ones.
 function explicitScore(key) {
-  const modelId = String(key).includes(':') ? key.slice(key.indexOf(':') + 1) : key;
+  const modelId = String(key).includes(':') ? String(key).slice(String(key).indexOf(':') + 1) : key;
   const explicit = Number(
     evaluationConfig.baselineScores?.[key] ?? evaluationConfig.baselineScores?.[modelId],
   );
   if (!Number.isFinite(explicit)) return null;
   return normalizeScore(explicit);
+}
+
+function modelIdFromKey(key) {
+  return String(key).includes(':') ? String(key).slice(String(key).indexOf(':') + 1) : String(key);
 }
 
 function configuredScore(id, configuredIndex) {
@@ -1023,7 +1032,11 @@ function baseModelScore(key, configured, configuredIndex) {
   const explicit = explicitScore(key);
   if (explicit !== null) return explicit;
   const evaluated = Number(modelEvaluations[modelId]?.score);
-  return Number.isFinite(evaluated) ? evaluated : -1;
+  if (Number.isFinite(evaluated)) return evaluated;
+  // No local measurement yet: fall back to the published capability prior,
+  // which is weaker evidence but better than treating every newcomer as worst.
+  const prior = sweBenchScoreFor(SWE_BENCH_SCORES, modelId);
+  return prior !== null ? prior : -1;
 }
 
 function rankedModelScore(key, configured, configuredIndex) {
@@ -1039,7 +1052,11 @@ function scoreSourceFor(key, configured) {
   for (const configuredKey of configured) {
     if (keySlug(configuredKey) === slug) return 'baseline';
   }
-  return 'evaluation';
+  if (explicitScore(key) !== null) return 'baseline';
+  const modelId = modelIdFromKey(key);
+  if (Number.isFinite(Number(modelEvaluations[modelId]?.score))) return 'evaluation';
+  if (sweBenchScoreFor(SWE_BENCH_SCORES, modelId) !== null) return 'swe-bench';
+  return 'unranked';
 }
 
 function groupRank(group, configuredSet, configuredIndex) {
@@ -1048,6 +1065,7 @@ function groupRank(group, configuredSet, configuredIndex) {
   let configuredIdx = Number.POSITIVE_INFINITY;
   let configuredKey = '';
   let evalScore = -1;
+  let sweScore = -1;
   let explicit = null;
   for (const { candidate, originalIndex } of group.members) {
     const key = candidateKey(candidate);
@@ -1063,6 +1081,8 @@ function groupRank(group, configuredSet, configuredIndex) {
     if (override !== null && (explicit === null || override > explicit)) explicit = override;
     const evaluated = Number(modelEvaluations[candidate.model]?.score);
     if (Number.isFinite(evaluated)) evalScore = Math.max(evalScore, evaluated);
+    const prior = sweBenchScoreFor(SWE_BENCH_SCORES, candidate.model);
+    if (prior !== null) sweScore = Math.max(sweScore, prior);
   }
   for (const [key, index] of configuredIndex) {
     if (keySlug(key) !== group.slug || index >= configuredIdx) continue;
@@ -1076,7 +1096,9 @@ function groupRank(group, configuredSet, configuredIndex) {
         metadataBonus(group.members.length ? candidateMetadata(group.members[0].candidate) : null)
       : explicit !== null
         ? explicit
-        : evalScore;
+        : evalScore >= 0
+          ? evalScore
+          : sweScore;
   let score = base;
   if (!pinned && Number.isFinite(base) && base >= 0) {
     const adjustments = group.members.map(({ candidate }) =>
@@ -1592,6 +1614,7 @@ function requestNeeds(body) {
     tools: Array.isArray(body.tools) && body.tools.length > 0,
     responseFormat: Boolean(body.response_format),
     modalities,
+    estimatedTokens: estimateRequestTokens(body),
   };
 }
 
@@ -1688,6 +1711,10 @@ function filterCandidates(configured, body, requestedModel) {
       skipped.push({ model: candidateKey(candidate), reason: 'missing requested capability' });
       continue;
     }
+    if (!fitsContext(model, needs.estimatedTokens)) {
+      skipped.push({ model: candidateKey(candidate), reason: 'request exceeds context window' });
+      continue;
+    }
     const slots = registry.keySlots(candidate.provider);
     const remaining = slots.length
       ? Math.min(...slots.map((slot) => cooldownRemaining(candidate, slot)))
@@ -1706,9 +1733,11 @@ function filterCandidates(configured, body, requestedModel) {
   // turning a temporary cooldown into a hard outage.
   if (!active.length) {
     for (const candidate of configured) {
+      const model = candidateMetadata(candidate);
       if (
         candidateIsFree(candidate) &&
-        supportsRequest(candidateMetadata(candidate), needs)
+        supportsRequest(model, needs) &&
+        fitsContext(model, needs.estimatedTokens)
       ) {
         active.push(candidate);
       }
@@ -2407,6 +2436,9 @@ function uiRouteState() {
     pinned: entry.pinned,
     zeroCost: entry.zeroCost,
     cooldownSeconds: entry.cooldownSeconds,
+    score: entry.score,
+    baseScore: entry.baseScore,
+    scoreSource: entry.scoreSource,
     scoreAdjustment: entry.scoreAdjustment,
     providerConfigured: registry.hasUsableKey(PROVIDERS.get(entry.provider)),
     usage: entry.usage,

@@ -2463,11 +2463,17 @@ function renderRoutes() {
     else if (entry.zeroCost === false) { status = t('st_paid'); kind = 'bad'; }
     else if (entry.cooldownSeconds > 0) { status = t('st_cooldown', { n: entry.cooldownSeconds }); kind = 'warn'; }
     const used = entry.usage ? entry.usage.today.consumed : 0;
+    const scoreCell = td(
+      Number.isFinite(entry.score) && entry.score >= 0 ? String(entry.score) : '-',
+      'num',
+    );
+    scoreCell.title = t('score_source', { source: entry.scoreSource });
     return [
       td(String(entry.priority), 'num'),
       td(pill(status, kind)),
       td(entry.provider, 'muted'),
       td(entry.model + (entry.pinned ? '  *' : ''), 'mono'),
+      scoreCell,
       td(used || '-', 'num'),
     ];
   });
@@ -2477,6 +2483,7 @@ function renderRoutes() {
       { label: t('th_status') },
       { label: t('th_provider') },
       { label: t('th_model') },
+      { label: t('th_score'), num: true },
       { label: t('th_used'), num: true },
     ],
     rows,
