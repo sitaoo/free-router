@@ -288,7 +288,7 @@ OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers
 | `static+catalog` | `catalog: true, pricing: false` | `freeModels`，外加实际能免费服务的 | 只管减；`probeFreeTier` 开了也能加 |
 | `static` | 都不设 | `freeModels` | 无 |
 
-只有 OpenRouter 公布价格，所以只有它能光看目录加新模型。Gemini 和TokenRouter 的 `/models` 没有 `pricing` 字段，免费收费混在一起，按列表自动加可能把流量引到计费模型上。但它们的目录照样拉，有两个用：掉线了的 `freeModels` 条目会被拿掉，以及给探活（下面）提供候选。下架的模型一回来就自动恢复。
+只有 OpenRouter 公布价格，所以只有它能光看目录加新模型。Gemini、TokenRouter、B.AI、HashNeuron 的 `/models` 没有 `pricing` 字段，免费收费混在一起，按列表自动加可能把流量引到计费模型上。它们改成探活（下面的 `probeFreeTier`），四家默认都开。它们的目录照样拉，用来拿掉已下线的 `freeModels` 条目，以及给探活提供候选。下架的模型一回来就自动恢复。
 
 目录拉失败、返回空、或者渠道没 Key，都不改变现状：`freeModels` 照旧说了算。删条目必须看到一份**真正拉到的**目录，上游一抖不会清空路由。
 
@@ -298,7 +298,7 @@ OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers
 
 ## 免费模型发现
 
-路由器每 `discovery.intervalMs`（当前每 2 天）扫一遍开了 `discover` 的目录渠道，看有没有新的免费文本模型。每个新模型得一次缓存的混合评测：确定性推理/指令题、延迟、上下文长度、工具和结构化输出支持，分数决定它插进 `free-best` 的位置。
+路由器每 `discovery.intervalMs`（当前每 2 天）扫一遍带价格目录和开了 `probeFreeTier` 的目录渠道，看有没有新的免费文本模型。每个新模型得一次缓存的混合评测：确定性推理/指令题、延迟、上下文长度、工具和结构化输出支持，分数决定它插进 `free-best` 的位置。
 
 分数三部分封顶，单项带不动全局：
 
@@ -331,16 +331,19 @@ OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers
 
 | 回复 | 含义 | 效果 |
 |---|---|---|
-| `200` | 这把 Key 能 serve | 免费；带评测分进路由 |
+| `200`，无计费字段 | 这把 Key 能 serve | 免费；带评测分进路由 |
+| `200`，`usage.cost` / `credits` 大于 0 | serve 了，但计费 | 不免费；移出路由 |
 | `429`，免费配额全 `limit: 0` | 根本没有免费档 | 移出路由 |
 | `429`，有 `limit` 大于 `0` | 免费，但今天花完了 | 留下；数字变每日限额 |
 | `404` | 不接，或下架了 | 移出路由 |
 | `400` "only supports Interactions API" | 不是聊天模型 | 移出路由 |
 | 超时、`5xx` | 说明不了问题 | 无 verdict，下轮再探 |
 
-这招只对无账单的 Key 成立——serve 成功只能证明"能跑"，证明不了"免费"，所以按渠道 opt-in：开了账单就别开它。
+响应里的正数账单压过状态码和目录：请求确实跑了，但不是免费的，就不能进零成本路由。仍然建议用无账单的 Key，因为不报 `cost` 的计费网关用这招看不出来。
 
 每个 verdict 缓存进状态文件，一个模型一辈子只花一次探路钱，`evaluation.maxPerRun` 卡单轮上限。"不免费"的 verdict 过`discovery.verdictRetryMs`（默认等于发现间隔）过期，provider 抖一下不会永久退役模型；"免费"的不过期，反正正常流量天天 revisit，翻车了后来的拒绝会覆盖。
+
+免费 verdict 不跟着发现条目一起丢。状态迁移或手改只留下了 verdict、丢了条目时，下一轮目录刷新会把模型补回路由，不再花一次探路请求。
 
 verdict 双向压过 `freeModels`，这就是意义所在：`config.json` 的白名单只是你对别人定价的猜，配额数字是 provider 亲口报的价。
 

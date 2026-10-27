@@ -118,6 +118,7 @@ mkdir -p data && cp .env.example data/.env
 | `OPENROUTER_API_KEY` | [openrouter.ai/keys](https://openrouter.ai/keys) |
 | `TOKENROUTER_API_KEY` | TokenRouter |
 | `BAI_API_KEY` | [chat.b.ai](https://chat.b.ai) |
+| `HASHNEURON_API_KEY` | HashNeuron（`https://hashneuron.space/v1`） |
 
 命名规则：`FOO_API_KEY` + `FOO_BASE_URL`，任意兼容 OpenAI 的渠道照此即用，多 Key 逗号分隔。
 

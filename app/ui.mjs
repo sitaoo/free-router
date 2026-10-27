@@ -1184,7 +1184,8 @@ const PROVIDER_PRESETS = {
   gemini: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', catalog: true, pricing: false },
   openrouter: { baseUrl: 'https://openrouter.ai/api/v1', catalog: true, pricing: true },
   tokenrouter: { baseUrl: 'https://api.tokenrouter.com/v1', catalog: true, pricing: false },
-  bai: { baseUrl: 'https://api.b.ai/v1', catalog: false, pricing: false },
+  bai: { baseUrl: 'https://api.b.ai/v1', catalog: true, pricing: false },
+  hashneuron: { baseUrl: 'https://hashneuron.space/v1', catalog: true, pricing: false },
 };
 
 function renderModelList(box, ids, freeSet, truncated) {

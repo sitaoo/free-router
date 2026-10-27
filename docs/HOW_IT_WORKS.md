@@ -293,7 +293,7 @@ Two fields cover a catalog served outside the chat prefix, on its own auth: `mod
 | `static+catalog` | `catalog: true, pricing: false` | `freeModels`, plus anything the provider serves for free | removals, and additions when `probeFreeTier` is on |
 | `static` | neither | `freeModels` | none |
 
-Only OpenRouter publishes prices, so only OpenRouter can add unknown models from a catalog alone. Gemini's and TokenRouter's `/models` carry no `pricing` field and mix free and paid models, so auto-adding from the listing could route traffic to a billed model. Their catalogs are still fetched for two things: dropping a `freeModels` entry that has disappeared upstream, and supplying candidates for probing (below). A withdrawn model returns automatically once the provider lists it again.
+Only OpenRouter publishes prices, so only OpenRouter can add unknown models from a catalog alone. Gemini's, TokenRouter's, B.AI's and HashNeuron's `/models` carry no `pricing` field and mix free and paid models, so auto-adding from the listing could route traffic to a billed model. They are probed instead (`probeFreeTier`, below), which is on by default for all four. Their catalogs are also fetched to drop a `freeModels` entry that has disappeared upstream and to supply probe candidates. A withdrawn model returns automatically once the provider lists it again.
 
 A catalog that fails to load, returns nothing, or belongs to a provider with no key changes nothing: `freeModels` stays authoritative. Removal requires a catalog that actually loaded, so an upstream outage cannot empty a route.
 
@@ -303,7 +303,7 @@ Model IDs are matched by slug, so Gemini listing `models/gemini-3.8-flash` again
 
 ## Free-model discovery
 
-The router checks each `discover`-enabled catalog provider every `discovery.intervalMs` (currently every 2 days) for newly free text-generation models. Each new model receives one cached hybrid evaluation using deterministic reasoning/instruction checks, response latency, context size, and tool/structured output support. Its score places it among the manually ranked models in `free-best`.
+The router checks each priced catalog and each `probeFreeTier` catalog every `discovery.intervalMs` (currently every 2 days) for newly free text-generation models. Each new model receives one cached hybrid evaluation using deterministic reasoning/instruction checks, response latency, context size, and tool/structured output support. Its score places it among the manually ranked models in `free-best`.
 
 Scores are made of three parts, capped so no single part can dominate:
 
@@ -338,16 +338,19 @@ A provider without prices in its catalog can still answer the question, just not
 
 | Reply | Meaning | Effect |
 |---|---|---|
-| `200` | served on this key | free; enters the route with its evaluation score |
+| `200`, no billing fields | served on this key | free; enters the route with its evaluation score |
+| `200`, positive `usage.cost` / `credits` | served, but billed | not free; dropped from routes |
 | `429`, every free-tier `limit: 0` | no free allowance exists | dropped from routes |
 | `429`, some `limit` above `0` | free, but spent for now | kept; the number becomes its daily limit |
 | `404` | not served, or withdrawn | dropped from routes |
 | `400` "only supports Interactions API" | not a chat model | dropped from routes |
 | timeout, `5xx` | says nothing | no verdict; retried next run |
 
-This is only sound on a key with no billing enabled, which is why it is opt-in per provider: with billing on, a served request proves the model runs, not that it was free.
+A positive bill on the response outranks the catalog and the status code: the request ran, but it was not free, so the model stays out of zero-cost routes. A key with no billing attached is still preferable, because a gateway that bills without reporting `cost` cannot be detected this way.
 
 Each verdict is cached in the state file, so a model costs one probe ever rather than one per run, and `evaluation.maxPerRun` caps a single run. A "not free" verdict expires after `discovery.verdictRetryMs` (defaulting to the discovery interval) so a provider blip cannot retire a model permanently; a "free" verdict does not expire, because ordinary traffic revisits it and a later refusal replaces it.
+
+Free verdicts survive the discovered-entry list. If a state migration or hand edit keeps the verdict but drops the entry, the next catalog refresh adopts the model back into the route without spending another probe.
 
 Verdicts outrank `freeModels` in both directions. That is the point: an allowlist in `config.json` is a guess about someone else's pricing, while a quota figure is that provider stating its own terms.
 

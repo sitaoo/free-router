@@ -28,6 +28,7 @@ import {
   normalizeModelSlug,
   supportsRequest,
 } from './providers.mjs';
+import { adoptableFreeModels, responseLooksBilled } from './discovery.mjs';
 import { installUpstreamProxy } from './proxy.mjs';
 import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
 import { createSecretRedactor } from './redact.mjs';
@@ -1199,6 +1200,7 @@ function syncModelAvailability() {
 async function refreshCatalog(force = false) {
   await registry.refreshCatalogs(force, catalogRefreshMs, log);
   syncModelAvailability();
+  if (adoptKnownFreeCatalogModels().length) saveDiscoveryState();
 }
 
 function evaluationText(payload) {
@@ -1270,6 +1272,22 @@ async function evaluateModel(target) {
       error: `${result.status} ${result.reason}`.slice(0, 300),
     };
   }
+  // Serving the request is not proof it was free when the response carries a
+  // positive bill. That answer costs money, so the model must not enter a
+  // zero-cost route no matter what the catalog published.
+  if (responseLooksBilled(result.payload)) {
+    setModelVerdict(candidateKey(candidate), {
+      free: false,
+      reason: 'probe response reported billing',
+    });
+    return {
+      status: 'pending',
+      version: EVALUATION_VERSION,
+      attemptedAt: new Date().toISOString(),
+      latencyMs,
+      error: 'probe response reported billing',
+    };
+  }
   // Serving the request is itself the proof, on a key with no billing.
   if (!PROVIDERS.get(candidate.provider)?.catalogHasPricing) {
     setModelVerdict(candidateKey(candidate), {
@@ -1311,6 +1329,32 @@ async function evaluateModel(target) {
   };
 }
 
+// A cached free verdict outlives the discovered-entry list: migrations, a
+// hand-edited state file, or an older layout can keep the verdict and drop the
+// entry. Re-adopt those models without spending another probe request.
+function adoptKnownFreeCatalogModels() {
+  if (!discoveryEnabled) return [];
+  const configured = (config.routes?.[DISCOVERY_ROUTE] || []).map(normalizeCandidate);
+  const knownSlugs = new Set(
+    [
+      ...configured.map((candidate) => normalizeModelSlug(candidate.model)),
+      ...discoveredModelIds.map((id) => normalizeModelSlug(discoveredCandidate(id).model)),
+    ].filter(Boolean),
+  );
+  const adopted = adoptableFreeModels({
+    providers: [...PROVIDERS.values()],
+    discoveredIds: discoveredModelIds,
+    knownSlugs,
+    verdictFor,
+    isExcluded: (key) => discoveryExclusionReason(key),
+  });
+  if (adopted.length) {
+    discoveredModelIds.push(...adopted);
+    log(`adopted ${adopted.length} model(s) already proven free`, adopted);
+  }
+  return adopted;
+}
+
 // For a provider that publishes no prices, the only way to learn whether a
 // model is free is to ask it. One request per candidate, verdict cached
 // forever, so the cost is paid once per model rather than once per run.
@@ -1319,7 +1363,7 @@ async function probeFreeTierCandidates() {
   let budget = EVALUATION_MAX_PER_RUN;
 
   for (const provider of PROVIDERS.values()) {
-    if (!provider.probeFreeTier || !provider.apiKey || !provider.catalog?.size) continue;
+    if (!provider.probeFreeTier || !registry.hasUsableKey(provider) || !provider.catalog?.size) continue;
 
     const known = new Set(
       [
@@ -1497,6 +1541,10 @@ async function performFreeModelDiscovery(forceCatalogRefresh = false) {
       log(`free-tier probing failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+
+  // Cached verdicts are cheap evidence; promote them before the run is stamped
+  // so a state-file loss cannot strand a model that was already proven free.
+  adoptKnownFreeCatalogModels();
 
   // Timestamped once the whole run is over, so the interval measures complete
   // runs and an observer waiting on it cannot see a half-finished one.
@@ -3323,9 +3371,9 @@ async function handler(req, res) {
         modelVerdicts,
         // Which providers can contribute new models, and which are only
         // checked for models that disappeared.
-        addsFrom: [...PROVIDERS.values()].filter((p) => p.discover).map((p) => p.name),
+        addsFrom: [...PROVIDERS.values()].filter((p) => p.discover || p.probeFreeTier).map((p) => p.name),
         availabilityOnly: [...PROVIDERS.values()]
-          .filter((p) => p.usesCatalog && !p.catalogHasPricing)
+          .filter((p) => p.usesCatalog && !p.catalogHasPricing && !p.probeFreeTier)
           .map((p) => p.name),
         evaluations: modelEvaluations,
         error: discoveryError || null,

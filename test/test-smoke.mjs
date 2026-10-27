@@ -142,6 +142,19 @@ assert.equal(normalizeCatalogPayload({ weird: true }).shape, 'unknown');
   }
 }
 
+// Discovery must be able to ask every price-free catalog, not just OpenRouter.
+{
+  const defaults = defaultConfigObject();
+  assert.equal(defaults.providers.gemini.probeFreeTier, true);
+  assert.equal(defaults.providers.tokenrouter.probeFreeTier, true);
+  assert.equal(defaults.providers.bai.catalog, true);
+  assert.equal(defaults.providers.bai.probeFreeTier, true);
+  assert.equal(defaults.providers.hashneuron.baseUrl, 'https://hashneuron.space/v1');
+  assert.equal(defaults.providers.hashneuron.catalog, true);
+  assert.equal(defaults.providers.hashneuron.pricing, false);
+  assert.equal(defaults.providers.hashneuron.probeFreeTier, true);
+}
+
 // Verbatim from a live 429 for gemini-3.1-pro-preview on a free-tier key.
 const noFreeTierBody = {
   error: {
@@ -580,10 +593,12 @@ const baiMock = http.createServer(async (req, res) => {
         object: 'list',
         data: [
           { id: 'models/glm-5.3-flash', object: 'model', owned_by: 'bai' },
-          // Not in freeModels, so these three are probe candidates: one is
-          // served, one has no free allowance, one is not a chat model at all.
+          // Not in freeModels, so these four are probe candidates: one is
+          // served, one has no free allowance, one bills the response, one is
+          // not a chat model at all.
           { id: 'models/glm-5.3-pro', object: 'model', owned_by: 'bai' },
           { id: 'models/glm-5.3-paid', object: 'model', owned_by: 'bai' },
+          { id: 'models/glm-5.3-billed', object: 'model', owned_by: 'bai' },
           {
             id: 'models/glm-5.3-embed',
             object: 'model',
@@ -608,6 +623,20 @@ const baiMock = http.createServer(async (req, res) => {
       // errors. Read as an object, `error.message` is missing and the whole
       // reason for the refusal is lost.
       res.end(JSON.stringify([quotaRejection(0)]));
+      return;
+    }
+    // 200 with a positive bill: the catalog is not the last word on cost.
+    if (normalizeModelSlug(body.model) === 'glm-5.3-billed') {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(
+        JSON.stringify({
+          model: body.model,
+          usage: { prompt_tokens: 3, completion_tokens: 2, cost: 0.000012 },
+          choices: [
+            { message: { role: 'assistant', content: 'billed-ok' }, finish_reason: 'stop' },
+          ],
+        }),
+      );
       return;
     }
     if (body.stream) {
@@ -1007,6 +1036,14 @@ try {
     health.routes['test-route'].some((entry) => entry.id.includes('glm-5.3-paid')),
     false,
   );
+  // A 200 that reports a positive cost is paid, whatever the catalog said.
+  assert.equal(probeVerdicts['bai:models/glm-5.3-billed'].free, false);
+  assert.match(probeVerdicts['bai:models/glm-5.3-billed'].reason, /billing/);
+  assert.equal(health.discovery.evaluations['glm-5.3-billed'], undefined);
+  assert.equal(
+    health.routes['test-route'].some((entry) => entry.id.includes('glm-5.3-billed')),
+    false,
+  );
   // Not a chat model, so it was filtered out before any request was spent on it.
   assert.equal(probeVerdicts['bai:models/glm-5.3-embed'], undefined);
   // Already configured under a bare id, so the prefixed catalog entry for the
@@ -1059,10 +1096,10 @@ try {
   assert.equal(health.providers.tokenrouter.kind, 'static');
   assert.equal(health.providers.extra.configured, true);
 
-  // Only a provider that publishes prices may contribute new models; the others
-  // consult their catalog purely to notice withdrawals.
-  assert.deepEqual(health.discovery.addsFrom, ['openrouter']);
-  assert.deepEqual(health.discovery.availabilityOnly, ['bai', 'extra']);
+  // Priced catalogs and probeFreeTier catalogs both add models; extra has a
+  // catalog only so it can notice withdrawals.
+  assert.deepEqual(health.discovery.addsFrom, ['openrouter', 'bai']);
+  assert.deepEqual(health.discovery.availabilityOnly, ['extra']);
   assert.equal(health.providers.bai.kind, 'static+catalog');
 
   // glm-5.3-flash is listed upstream as "models/glm-5.3-flash": a spelling
@@ -1446,6 +1483,7 @@ try {
     [
       'bai:glm-5.3-flash',
       // A probe spends a real request, so it is counted like any other.
+      'bai:models/glm-5.3-billed',
       'bai:models/glm-5.3-paid',
       'bai:models/glm-5.3-pro',
       'extra:extra-1',
@@ -1467,9 +1505,10 @@ try {
   assert.equal(usageByKey.get('gemini:gemini-3.8-flash').ok, 5);
   assert.equal(usageByKey.get('gemini:gemini-3.8-flash').fail, 1);
   assert.equal(usageByKey.has('gemini:gemini-3.7-flash'), false);
-  // Eight from routing, plus the successful probe of bai's glm-5.3-pro, plus
-  // five Gemini tool-call round trips.
-  assert.equal(usage.days[0].ok, 14);
+  // Eight from routing, plus two served probes on bai (one free, one billed
+  // and therefore not routed), plus five Gemini tool-call round trips.
+  assert.equal(usage.days[0].ok, 15);
+  assert.equal(usageByKey.get('bai:models/glm-5.3-billed').ok, 1);
   // Three routing failures, the two deliberate quota rejections, the probe
   // that found glm-5.3-paid has no free allowance, and one forced Gemini
   // thought-signature 400.

@@ -118,6 +118,7 @@ Detailed notes: [Run with Docker](docs/HOW_IT_WORKS.md#run-with-docker).
 | `OPENROUTER_API_KEY` | [openrouter.ai/keys](https://openrouter.ai/keys) |
 | `TOKENROUTER_API_KEY` | TokenRouter |
 | `BAI_API_KEY` | [chat.b.ai](https://chat.b.ai) |
+| `HASHNEURON_API_KEY` | HashNeuron (`https://hashneuron.space/v1`) |
 
 Naming rule: `FOO_API_KEY` plus `FOO_BASE_URL`. Any OpenAI-compatible provider works. Multiple keys, comma-separated.
 

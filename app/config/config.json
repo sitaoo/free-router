@@ -51,7 +51,8 @@
       "keyEnv": "TOKENROUTER_API_KEY",
       "freeModels": [
         "z-ai/glm-5.3-free"
-      ]
+      ],
+      "probeFreeTier": true
     },
     "bai": {
       "baseUrl": "https://api.b.ai/v1",
@@ -62,7 +63,18 @@
         "qwen3.8-flash",
         "hy3",
         "mimo-v2.5"
-      ]
+      ],
+      "catalog": true,
+      "pricing": false,
+      "probeFreeTier": true
+    },
+    "hashneuron": {
+      "catalog": true,
+      "pricing": false,
+      "probeFreeTier": true,
+      "baseUrl": "https://hashneuron.space/v1",
+      "keyEnv": "HASHNEURON_API_KEY",
+      "freeModels": []
     }
   },
   "discovery": {
