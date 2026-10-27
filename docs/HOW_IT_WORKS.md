@@ -57,11 +57,13 @@ The gateway listens on `127.0.0.1:8787` by default. Stop it with `./script/stop.
 git clone https://github.com/sitaoo/free-router.git
 cd free-router
 mkdir -p data && cp .env.example data/.env
-# edit data/.env and set the keys you have (add FREE_ROUTER_HOST=0.0.0.0 for LAN)
+# edit data/.env before the first boot. A published Docker port needs
+# FREE_ROUTER_HOST=0.0.0.0, plus a non-default FREE_ROUTER_WEBUI_PASSWORD
+# and a FREE_ROUTER_API_KEY: a wide bind refuses to start without them.
 docker compose -f docker/compose.yaml up -d
 ```
 
-The gateway is reachable at `http://127.0.0.1:8787/v1` by default; set `FREE_ROUTER_HOST=0.0.0.0` in `data/.env` before the first boot and publish the port to allow LAN access — but create a gateway API key and change the admin password first (see LAN access below). On first boot the `.env` seed is migrated into `data/config.local.json` and `.env` files are ignored afterwards, so later UI edits always stick. Keys are never baked into the image. Discovery state lives in `data/` and persists across rebuilds via the mounted volume.
+The published port only reaches a server listening on `0.0.0.0`, so that seed is required; a fresh container left on the default `127.0.0.1` is unreachable even from the host. Because that binding also accepts LAN connections, the server refuses to start while the admin password is still `admin123` or no gateway key exists — the password and key in the seed satisfy the check. Open `http://127.0.0.1:8787/` with the seeded password; clients use the seeded gateway key. To keep the published port local-only, map `127.0.0.1:8787:8787` instead of `8787:8787`. On first boot the `.env` seed is migrated into `data/config.local.json` and `.env` files are ignored afterwards, so later UI edits always stick. Keys are never baked into the image. Discovery state lives in `data/` and persists across rebuilds via the mounted volume.
 
 ```bash
 docker compose -f docker/compose.yaml ps

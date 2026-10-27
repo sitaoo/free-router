@@ -7,11 +7,14 @@ services:
     container_name: free-router
     restart: unless-stopped
     # No env_file / environment: all settings come from data/.env (first
-    # boot seed only, e.g. FREE_ROUTER_HOST=0.0.0.0 for LAN), config.local.json
+    # boot seed only; the published port requires FREE_ROUTER_HOST=0.0.0.0,
+    # FREE_ROUTER_WEBUI_PASSWORD and FREE_ROUTER_API_KEY (a wide bind refuses
+    # to start without a non-default password and a gateway key), config.local.json
     # in data/ (operator writes, authoritative afterwards), and
     # app/config/config.json (tracked defaults). Explicit `docker compose
-    # run -e ...` still wins for one-off overrides. NOTE: a fresh container
-    # binds 127.0.0.1 until data/.env or the UI sets a host.
+    # run -e ...` still wins for one-off overrides. NOTE: the published port
+    # cannot reach a fresh container that still binds 127.0.0.1; seed
+    # these values in data/.env before the first boot.
     ports:
       # Published on all host interfaces; the server inside still binds what
       # data/.env (first boot) or the overlay says (127.0.0.1 by default).

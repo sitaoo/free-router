@@ -57,11 +57,13 @@ mkdir -p data && cp .env.example data/.env
 git clone https://github.com/sitaoo/free-router.git
 cd free-router
 mkdir -p data && cp .env.example data/.env
-# 编辑 data/.env，填上你有的 Key（局域网再加 FREE_ROUTER_HOST=0.0.0.0）
+# 首启前编辑 data/.env。Docker 发布端口需要
+# FREE_ROUTER_HOST=0.0.0.0，外加非默认的 FREE_ROUTER_WEBUI_PASSWORD
+# 和 FREE_ROUTER_API_KEY；宽绑定缺这两项会拒绝启动。
 docker compose -f docker/compose.yaml up -d
 ```
 
-网关默认在 `http://127.0.0.1:8787/v1` 可达，和非 Docker 一样；首次启动前在 `data/.env` 里设置 `FREE_ROUTER_HOST=0.0.0.0` 并发布端口即允许局域网访问——但先建网关 API Key、改管理密码（下面局域网一节）。首启 `.env`种子会迁入 `data/config.local.json`，之后 `.env` 文件彻底忽略，UI 改的一定生效。Key 永远不会 bake 进镜像。发现状态跟着 `./data` volume 跨重建保留。
+发布端口只能转发到监听 `0.0.0.0` 的进程，所以种子必须这样写；新容器若仍绑定默认的 `127.0.0.1`，宿主机本机也访问不到。这个绑定同时接受局域网连接，因此服务在管理密码仍是 `admin123` 或没有网关 Key 时会拒绝启动——种子里的密码和 Key 正好满足检查。用种子里的密码打开 `http://127.0.0.1:8787/`，客户端用种子里的网关 Key。只在本机用可把映射从 `8787:8787` 改成 `127.0.0.1:8787:8787`。首启 `.env` 种子会迁入 `data/config.local.json`，之后 `.env` 文件彻底忽略，UI 改的一定生效。Key 永远不会 bake 进镜像。发现状态跟着 `./data` volume 跨重建保留。
 
 ```bash
 docker compose -f docker/compose.yaml ps
