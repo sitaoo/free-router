@@ -91,7 +91,7 @@ mkdir -p data && cp .env.example data/.env
 
 ## 它在背后做什么
 
-- **每两天自动发现**：扫描各渠道目录，新出现的免费模型先做一套能力实测，够格才进榜。
+- **每两天自动发现**：扫描各渠道目录，新出现的免费模型先做一套能力实测，够格才进榜。也可以随时到发现 tab 点 **立即运行**。
 - **每次请求现场排名**：配置顺序定起跑线，真实成功率、冷静期、日限额实时加权，pinned 模型永远先上。
 - **0-100 打分尺度**：画像加成、稀缺让路、实时延迟微调排序；没有本地分数的模型用随包 SWE-bench 先验，明显装不下上下文窗口的请求直接跳过该模型，百分之几的流量探冷模型。详见[打分尺度与实时信号](HOW_IT_WORKS.md#打分尺度与实时信号)。
 - **坏 Key 不连坐**：401 只退役当前 Key，限流只冷却当前 Key，从不给模型记黑账。
@@ -107,7 +107,7 @@ mkdir -p data && cp .env.example data/.env
 ```
 
 - 局域网：设置 → **允许局域网访问**，按页面的地址列表连，记得先建网关 Key、改密码。
-- 加新渠道：Web UI 里填名字和 base URL，或往 `app/config/config.json` 加一段。
+- 加新渠道：Web UI 里选预设（Gemini、OpenRouter、TokenRouter、B.AI、HashNeuron、Groq、Cerebras、Mistral、Hugging Face）或填任意 OpenAI 兼容端点，或往 `app/config/config.json` 加一段。
 - 原理与配置分层：[工作原理](HOW_IT_WORKS.md)。
 
 ## Key 去哪领

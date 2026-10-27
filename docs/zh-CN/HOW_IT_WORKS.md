@@ -251,11 +251,11 @@ curl -s http://127.0.0.1:8787/health | jq
 
 - `free-best`：一个排好序的模型表；同一模型可以由多家提供
 
-去 Web UI（路由 tab）里排序、增删，别直接改文件。`provider:model` 格式写进 `discovery.evaluation.pinnedModels` 置顶。没 Key、或已经不免费的模型直接跳过。只差 org 前缀或 `:free` 后缀的 ID 算同一个模型（比如`gemini-3.8-flash` 和 `google/gemini-3.8-flash:free`）。
+去 Web UI（路由 tab）里排序、增删，别直接改文件。`provider:model` 格式写进 `discovery.evaluation.pinnedModels` 置顶。没 Key、或已经不免费的模型直接跳过。只差 org 前缀或 `:free` 后缀的 ID 算同一个模型（比如`gemini-3.8-flash` 和 `google/gemini-3.8-flash:free`）。发现路由为空时，编辑器会直接列出它此刻按发现结果会生成的排序，点 `+` 就把该模型放进草稿。
 
 ## 加新渠道
 
-OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers.mjs`的注册表加载 `config.json` 里 `providers` 下的每一块。最省事的是 Web UI（渠道 tab → 添加渠道，名字加 base URL 就行）；手改的话：
+OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers.mjs`的注册表加载 `config.json` 里 `providers` 下的每一块。最省事的是 Web UI（渠道 tab → 添加渠道）：预设菜单会填好 Gemini、OpenRouter、TokenRouter、B.AI、HashNeuron、Groq、Cerebras、Mistral、Hugging Face 的地址和发现开关，其他服务选 Custom。预设只是快捷方式，Key 仍要自己贴。手改的话：
 
 1. 加一个 provider 对象。有 `GET /models` 就 `"catalog": true`；返回体
 带逐 token 价格才加 `"pricing": true`，否则 `freeModels` 当白名单（见下）。
@@ -265,7 +265,7 @@ OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers
 4. `.env` 或 `~/.hermes/.env` 里设 `<NAME>_API_KEY`；URL 不一样用
 `<NAME>_BASE_URL` 覆盖。
 5. 只有改了要重启的开关（`catalog`、`pricing`）才重启；Key、地址、
-白名单都是即时生效。
+白名单、`probeFreeTier` 都是即时生效。
 
 ```json
 "newvendor": {
@@ -274,7 +274,7 @@ OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers
 }
 ```
 
-可选字段：`keyEnv`、`baseUrlEnv`、`headers`、`chatPath`、`modelsPath`、`discover: false`（把带价格目录的渠道排除在发现之外）、`probeFreeTier: true`（让无价格目录自己探出免费模型）。
+可选字段：`keyEnv`、`baseUrlEnv`、`headers`、`chatPath`、`modelsPath`、`discover: false`（把带价格目录的渠道排除在发现之外）、`probeFreeTier: true`（让无价格目录自己探出免费模型）。创建表单和每个渠道的高级设置里都有同一个探活开关，切换后立即生效，不用重启。
 
 `modelsUrl` + `modelsKeyHeader` 覆盖一种特殊情况：目录不在 chat 前缀下、走独立鉴权。Gemini 两样都要，因为只有它的原生列表里才有`supportedGenerationMethods`，而且它对 Bearer token 直接回 `401`。两种返回形状都认：OpenAI 的 `data[].id` 或 Google 的 `models[].name`。
 
@@ -298,7 +298,7 @@ OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers
 
 ## 免费模型发现
 
-路由器每 `discovery.intervalMs`（当前每 2 天）扫一遍带价格目录和开了 `probeFreeTier` 的目录渠道，看有没有新的免费文本模型。每个新模型得一次缓存的混合评测：确定性推理/指令题、延迟、上下文长度、工具和结构化输出支持，分数决定它插进 `free-best` 的位置。
+路由器每 `discovery.intervalMs`（当前每 2 天）扫一遍带价格目录和开了 `probeFreeTier` 的目录渠道，看有没有新的免费文本模型。发现 tab 的 **立即运行** 会跳过这个间隔、在后台启动一轮，运维不用等定时器，也不用重启服务。每个新模型得一次缓存的混合评测：确定性推理/指令题、延迟、上下文长度、工具和结构化输出支持，分数决定它插进 `free-best` 的位置。
 
 分数三部分封顶，单项带不动全局：
 

@@ -256,11 +256,11 @@ curl -s http://127.0.0.1:8787/health | jq
 - `free-best`: one ranked list of models; the same model can be tried from
 more than one provider
 
-Reorder, add, or delete entries in the web UI (Routes tab) instead of editing files. Pin entries with `provider:model` in `discovery.evaluation.pinnedModels`. Models without a key, or that are no longer free, are skipped. IDs that differ only by org prefix or a `:free` suffix (for example `gemini-3.8-flash` and `google/gemini-3.8-flash:free`) count as the same model.
+Reorder, add, or delete entries in the web UI (Routes tab) instead of editing files. Pin entries with `provider:model` in `discovery.evaluation.pinnedModels`. Models without a key, or that are no longer free, are skipped. IDs that differ only by org prefix or a `:free` suffix (for example `gemini-3.8-flash` and `google/gemini-3.8-flash:free`) count as the same model. When the discovery route has no entries, the editor shows the route it would build right now from discovered models; the `+` button seeds the draft with one.
 
 ## Add a provider
 
-No code change is needed for an OpenAI-compatible `/chat/completions` endpoint. The registry in `providers.mjs` loads every block under `config.json` `providers`. Easiest is the web UI (Providers tab → Add provider, name plus base URL); to do it by hand:
+No code change is needed for an OpenAI-compatible `/chat/completions` endpoint. The registry in `providers.mjs` loads every block under `config.json` `providers`. Easiest is the web UI (Providers tab → Add provider): the preset menu fills the base URL and discovery flags for Gemini, OpenRouter, TokenRouter, B.AI, HashNeuron, Groq, Cerebras, Mistral, and Hugging Face, and Custom accepts anything else. A preset is only a shortcut — you still paste the key yourself. To do it by hand:
 
 1. Add a provider object. Set `"catalog": true` if it exposes `GET /models`.
 Add `"pricing": true` only when that response carries per-token prices; otherwise keep `freeModels` as the allowlist (see below).
@@ -270,7 +270,7 @@ where you want it ranked. Bare strings belong to `defaultProvider`.
 4. Set `<NAME>_API_KEY` in `.env` or `~/.hermes/.env`, or paste the key in the
 web UI. Override the URL with `<NAME>_BASE_URL` if needed.
 5. Restart only if you changed flags that require it (`catalog`, `pricing`);
-keys, URLs, and allowlists apply immediately.
+keys, URLs, allowlists, and `probeFreeTier` apply immediately.
 
 ```json
 "newvendor": {
@@ -279,7 +279,7 @@ keys, URLs, and allowlists apply immediately.
 }
 ```
 
-Optional fields: `keyEnv`, `baseUrlEnv`, `headers`, `chatPath`, `modelsPath`, `discover: false` to keep a priced catalog provider out of discovery, and `probeFreeTier: true` to let a price-free catalog contribute models by probing.
+Optional fields: `keyEnv`, `baseUrlEnv`, `headers`, `chatPath`, `modelsPath`, `discover: false` to keep a priced catalog provider out of discovery, and `probeFreeTier: true` to let a price-free catalog contribute models by probing. The create form and each provider's advanced settings expose the same probe switch; toggling it there takes effect without a restart.
 
 Two fields cover a catalog served outside the chat prefix, on its own auth: `modelsUrl` for an absolute listing URL and `modelsKeyHeader` for the header carrying the key. Gemini needs both, because its native listing is the only place `supportedGenerationMethods` appears and it answers `401` to a Bearer token. Either response shape is accepted: OpenAI's `data[].id` or Google's `models[].name`.
 
@@ -303,7 +303,7 @@ Model IDs are matched by slug, so Gemini listing `models/gemini-3.8-flash` again
 
 ## Free-model discovery
 
-The router checks each priced catalog and each `probeFreeTier` catalog every `discovery.intervalMs` (currently every 2 days) for newly free text-generation models. Each new model receives one cached hybrid evaluation using deterministic reasoning/instruction checks, response latency, context size, and tool/structured output support. Its score places it among the manually ranked models in `free-best`.
+The router checks each priced catalog and each `probeFreeTier` catalog every `discovery.intervalMs` (currently every 2 days) for newly free text-generation models. The Discovery tab's **Run now** bypasses that interval and starts a run in the background, so an operator does not have to wait for the timer or restart the server. Each new model receives one cached hybrid evaluation using deterministic reasoning/instruction checks, response latency, context size, and tool/structured output support. Its score places it among the manually ranked models in `free-best`.
 
 Scores are made of three parts, capped so no single part can dominate:
 

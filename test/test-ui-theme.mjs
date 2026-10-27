@@ -43,4 +43,14 @@ const inline = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[
 assert.equal(inline.length >= 2, true, 'page has boot and runtime scripts');
 assert.doesNotThrow(() => new Function(inline.join('\n')), 'inline scripts must parse together');
 
+// Provider/discovery controls: verified presets, a probe toggle, a manual run,
+// and live suggestions when the discovery route is empty.
+for (const preset of ['groq', 'cerebras', 'mistral', 'huggingface']) {
+  assert.match(page, new RegExp(`${preset}:\\s*\\{ baseUrl:`), `${preset} preset missing`);
+}
+assert.match(page, /np-probe/, 'probe-free-tier toggle missing from provider form');
+assert.match(page, /id="disc-run"/, 'manual discovery button missing');
+assert.match(page, /runNow:\s*true/, 'manual discovery must send runNow');
+assert.match(page, /route_suggestions/, 'empty-route live ranking hint missing');
+
 console.log('ui-theme unit tests passed');

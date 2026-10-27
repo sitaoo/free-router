@@ -91,7 +91,7 @@ Detailed notes: [Run with Docker](docs/HOW_IT_WORKS.md#run-with-docker).
 
 ## What it does behind the scenes
 
-- **Discovers every two days**: scans provider catalogs. New free models pass a capability exam before joining the ranking.
+- **Discovers every two days**: scans provider catalogs. New free models pass a capability exam before joining the ranking. Trigger a scan immediately from Discovery → **Run now**.
 - **Ranks live on every request**: config order sets the baseline. Real success rates, cooldowns, and daily limits weigh in. Pinned models always go first.
 - **Scores on a 0-100 scale**: capability portrait, scarcity, and live latency refine the order; models with no local score use a shipped SWE-bench prior, and a request that clearly exceeds a model's published context window skips it. A few percent of traffic samples cold models. Details: [Scoring scale and live signals](docs/HOW_IT_WORKS.md#scoring-scale-and-live-signals).
 - **Bad keys do not implicate anyone**: a `401` retires only the current key. Rate limits only cool down the current key. The model record stays clean.
@@ -107,7 +107,7 @@ Detailed notes: [Run with Docker](docs/HOW_IT_WORKS.md#run-with-docker).
 ```
 
 - LAN: Settings → **Allow LAN access**. It lists the exact addresses. Create a gateway key and change the password first.
-- New provider: name plus base URL in the web UI, or a block in `app/config/config.json`.
+- New provider: pick a preset (Gemini, OpenRouter, TokenRouter, B.AI, HashNeuron, Groq, Cerebras, Mistral, Hugging Face) or enter any OpenAI-compatible endpoint in the web UI, or add a block in `app/config/config.json`.
 - Design and config layers: [How it works](docs/HOW_IT_WORKS.md).
 
 ## Where to get keys

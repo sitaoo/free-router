@@ -1840,6 +1840,26 @@ try {
   });
   assert.equal(discOn.status, 200);
 
+  // Manual discovery bypasses the interval and starts in the background, then
+  // stamps a fresh run so the UI can tell it happened.
+  const beforeManual = await fetch(`${base}/health`).then((res) => res.json());
+  const beforeStamp = Date.parse(beforeManual.discovery.lastCheckedAt);
+  const discRun = await fetch(`${base}/api/discovery`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ runNow: true }),
+  });
+  assert.equal(discRun.status, 200);
+  assert.ok((await discRun.json()).notes.includes('discovery started in the background'));
+  let afterStamp = beforeStamp;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const current = await fetch(`${base}/health`).then((res) => res.json());
+    afterStamp = Date.parse(current.discovery.lastCheckedAt);
+    if (afterStamp > beforeStamp) break;
+  }
+  assert.ok(afterStamp > beforeStamp, 'manual discovery must stamp a new run');
+
   const settings = await fetch(`${base}/api/settings`, {
     method: 'POST',
     headers: uiHeaders,
@@ -1852,9 +1872,32 @@ try {
   const addProv = await fetch(`${base}/api/providers`, {
     method: 'POST',
     headers: uiHeaders,
-    body: JSON.stringify({ action: 'create', name: 'smokeprov', baseUrl: 'http://127.0.0.1:1/v1', freeModels: ['smoke-1'] }),
+    body: JSON.stringify({
+      action: 'create',
+      name: 'smokeprov',
+      baseUrl: 'http://127.0.0.1:1/v1',
+      catalog: true,
+      pricing: false,
+      freeModels: ['smoke-1'],
+      probeFreeTier: true,
+    }),
   });
   assert.equal(addProv.status, 200);
+  const providerFlags = async () =>
+    (await fetch(`${base}/api/state`, { headers: { Cookie: sessionCookie } }).then((res) =>
+      res.json(),
+    )).editable.providers.find((entry) => entry.name === 'smokeprov');
+  assert.equal((await providerFlags()).probeFreeTier, true);
+  const probeUpdate = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ action: 'update', name: 'smokeprov', probeFreeTier: false }),
+  });
+  assert.equal(probeUpdate.status, 200);
+  assert.ok((await probeUpdate.json()).notes.includes('probeFreeTier updated'));
+  // The probe flag applies to the live provider object, so no restart note and
+  // no stale state.
+  assert.equal((await providerFlags()).probeFreeTier, false);
   const dupProv = await fetch(`${base}/api/providers`, {
     method: 'POST',
     headers: uiHeaders,

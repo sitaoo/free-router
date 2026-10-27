@@ -2943,7 +2943,10 @@ async function handleProviders(req, res) {
     }
     if (body.probeFreeTier !== undefined) {
       cfg.probeFreeTier = body.probeFreeTier === true;
-      notes.push('probeFreeTier saved; restart to take effect');
+      // The discovery loop reads this straight off the live provider object,
+      // so probing can start or stop without a restart.
+      provider.probeFreeTier = cfg.probeFreeTier;
+      notes.push('probeFreeTier updated');
     }
     // cfg is already the overlay-owned raw (see editableProviderRaw above).
     if (!persistOrFail(res)) return undefined;
@@ -3110,6 +3113,19 @@ async function handleDiscovery(req, res) {
     setOverlayValue(['discovery', 'evaluation', 'pinnedModels'], [...pinned]);
   }
   if (!persistOrFail(res)) return undefined;
+  // Manual run: bypass the interval check and start in the background, since
+  // probing and evaluating can take far longer than an HTTP request should.
+  if (body.runNow === true) {
+    if (!discoveryEnabled) {
+      notes.push('discovery is disabled');
+    } else {
+      discoveryLastCheckedAt = 0;
+      discoverFreeModels(true).catch((error) => {
+        log(`manual discovery failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+      notes.push('discovery started in the background');
+    }
+  }
   return sendJson(res, 200, { ok: true, notes });
 }
 

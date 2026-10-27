@@ -12,6 +12,8 @@ tags are cut here. Dates are commit dates (`YYYY-MM-DD`).
 - Cached free verdicts are re-adopted into discovery after a state-file loss, without spending another probe.
 - Context-window pre-filter: estimated input plus requested output skips a candidate only when its published `context_length` is clearly too small; unknown limits and inline media keep it.
 - SWE-bench Verified prior (shipped `app/data/swe-bench.json`) ranks models with no config anchor, `baselineScores` entry, or evaluation score; `/health`, the web UI, and `models.sh` report the source as `scoreSource`.
+- Provider presets for Groq, Cerebras, Mistral, and Hugging Face, plus a `probeFreeTier` switch in the create form and each provider's advanced settings; the toggle applies without a restart.
+- Discovery **Run now** bypasses the interval and runs in the background; an empty discovery route offers its live ranking as one-click draft entries.
 - LAN access toggle in Settings replacing the host textbox: ON writes `0.0.0.0`, OFF writes `127.0.0.1`; reachable addresses (LAN IPs, loopback, hostname) listed with container-view note; warning when enabling with zero gateway keys.
 - Boot guard: refuse to start on a non-loopback bind without gateway keys or with the default password.
 - Login brute-force brake: 5 failures lock an IP for 5 minutes (`429` + `Retry-After`).

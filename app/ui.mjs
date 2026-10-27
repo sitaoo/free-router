@@ -699,6 +699,7 @@ body[data-gate="1"] main#app { display: none; }
         </div>
         <div class="row">
           <button id="disc-save" data-i18n="disc_save">Save</button>
+          <button id="disc-run" class="quiet" data-i18n="disc_run">Run now</button>
         </div>
         <p class="note" id="disc-note"></p>
         <div id="pinned-list"></div>
@@ -1181,11 +1182,15 @@ function renderProviders() {
 // never configured). Live sibling data (URL, flags, catalog ids) wins
 // whenever present.
 const PROVIDER_PRESETS = {
-  gemini: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', catalog: true, pricing: false },
+  gemini: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', catalog: true, pricing: false, probeFreeTier: true },
   openrouter: { baseUrl: 'https://openrouter.ai/api/v1', catalog: true, pricing: true },
-  tokenrouter: { baseUrl: 'https://api.tokenrouter.com/v1', catalog: true, pricing: false },
-  bai: { baseUrl: 'https://api.b.ai/v1', catalog: true, pricing: false },
-  hashneuron: { baseUrl: 'https://hashneuron.space/v1', catalog: true, pricing: false },
+  tokenrouter: { baseUrl: 'https://api.tokenrouter.com/v1', catalog: true, pricing: false, probeFreeTier: true },
+  bai: { baseUrl: 'https://api.b.ai/v1', catalog: true, pricing: false, probeFreeTier: true },
+  hashneuron: { baseUrl: 'https://hashneuron.space/v1', catalog: true, pricing: false, probeFreeTier: true },
+  groq: { baseUrl: 'https://api.groq.com/openai/v1', catalog: true, pricing: false },
+  cerebras: { baseUrl: 'https://api.cerebras.ai/v1', catalog: true, pricing: false },
+  mistral: { baseUrl: 'https://api.mistral.ai/v1', catalog: true, pricing: false },
+  huggingface: { baseUrl: 'https://router.huggingface.co/v1', catalog: true, pricing: false },
 };
 
 function renderModelList(box, ids, freeSet, truncated) {
@@ -1323,7 +1328,17 @@ function buildProviderForm() {
   pricingLabel.append(pricingBox, pricingSlider);
   const pricingText = document.createElement('span');
   pricingText.textContent = t('np_pricing');
-  r3.append(catalogLabel, catalogText, pricingLabel, pricingText);
+  const probeLabel = document.createElement('label');
+  probeLabel.className = 'switch';
+  const probeBox = document.createElement('input');
+  probeBox.type = 'checkbox';
+  probeBox.id = 'np-probe';
+  const probeSlider = document.createElement('span');
+  probeSlider.className = 'slider';
+  probeLabel.append(probeBox, probeSlider);
+  const probeText = document.createElement('span');
+  probeText.textContent = t('np_probe');
+  r3.append(catalogLabel, catalogText, pricingLabel, pricingText, probeLabel, probeText);
   const r3b = document.createElement('div');
   r3b.className = 'row';
   const flagsNote = document.createElement('p');
@@ -1375,6 +1390,7 @@ function buildProviderForm() {
     catalogBox.checked = detail ? detail.catalog === true : fallback.catalog !== false && preset !== '';
     if (!preset) catalogBox.checked = true;
     pricingBox.checked = detail ? detail.pricing === true : fallback.pricing === true;
+    probeBox.checked = detail ? detail.probeFreeTier === true : fallback.probeFreeTier === true;
     renderModelChecks();
   }
   presetSelect.onchange = fillFromPreset;
@@ -1397,6 +1413,7 @@ function buildProviderForm() {
           baseUrl,
           catalog: catalogBox.checked,
           pricing: pricingBox.checked,
+          probeFreeTier: probeBox.checked,
           freeModels,
         }),
       });
@@ -1551,6 +1568,41 @@ function buildProviderDetail(provider) {
   urlRow.appendChild(urlField);
   urlRow.appendChild(urlSave);
   adv.appendChild(urlRow);
+
+  const probeRow = document.createElement('div');
+  probeRow.className = 'row';
+  const probeLabel = document.createElement('label');
+  probeLabel.className = 'switch';
+  const probeToggle = document.createElement('input');
+  probeToggle.type = 'checkbox';
+  probeToggle.checked = detail.probeFreeTier === true;
+  const probeSlider = document.createElement('span');
+  probeSlider.className = 'slider';
+  probeLabel.append(probeToggle, probeSlider);
+  const probeText = document.createElement('span');
+  probeText.textContent = t('np_probe');
+  probeToggle.onchange = async () => {
+    probeToggle.disabled = true;
+    try {
+      const result = await api('api/providers', {
+        method: 'POST',
+        body: JSON.stringify({
+          action: 'update',
+          name: provider.name,
+          probeFreeTier: probeToggle.checked,
+        }),
+      });
+      toast(t('saved') + ((result.notes || []).length ? ' ' + result.notes.join(' ') : ''), 'good');
+      await load();
+    } catch (error) {
+      probeToggle.checked = !probeToggle.checked;
+      toast(String(error.message || error), 'err');
+    } finally {
+      probeToggle.disabled = false;
+    }
+  };
+  probeRow.append(probeLabel, probeText);
+  adv.appendChild(probeRow);
 
   const fmWrap = document.createElement('div');
   fmWrap.style.marginTop = '8px';
@@ -2001,6 +2053,36 @@ function renderRouteEditor() {
     line.appendChild(rm);
     host.appendChild(line);
   });
+  // An empty discovery route has nothing to edit, so offer the live ranking it
+  // would have: one click seeds the draft with a discovered model.
+  const live = current === state.route ? state.routes || [] : [];
+  if (!draftEntries.length && live.length) {
+    const hint = document.createElement('p');
+    hint.className = 'note';
+    hint.textContent = t('route_suggestions');
+    host.appendChild(hint);
+    for (const entry of live.slice(0, 12)) {
+      const modelString = entry.provider + ':' + entry.model;
+      const line = document.createElement('div');
+      line.className = 'entry';
+      const id = document.createElement('span');
+      id.className = 'mono';
+      id.textContent = modelString;
+      const st = document.createElement('span');
+      st.className = 'st';
+      st.textContent =
+        Number.isFinite(entry.score) && entry.score >= 0 ? String(entry.score) : '-';
+      const add = document.createElement('button');
+      add.textContent = '+';
+      add.title = t('route_add');
+      add.onclick = () => {
+        draftEntries.push(modelString);
+        renderRouteEditor();
+      };
+      line.append(id, st, add);
+      host.appendChild(line);
+    }
+  }
   el('route-note').textContent = draftEntries.length ? t('route_unsaved_note') : t('route_empty');
 }
 
@@ -2378,6 +2460,24 @@ function bindOnce() {
       await load();
     } catch (error) {
       toast(String(error.message || error), 'err');
+    }
+  };
+  el('disc-run').onclick = async () => {
+    el('disc-run').disabled = true;
+    try {
+      const result = await api('api/discovery', {
+        method: 'POST',
+        body: JSON.stringify({ runNow: true }),
+      });
+      toast(
+        t('disc_run_started') + ((result.notes || []).length ? ' ' + result.notes.join(' ') : ''),
+        'good',
+      );
+      await load();
+    } catch (error) {
+      toast(String(error.message || error), 'err');
+    } finally {
+      el('disc-run').disabled = false;
     }
   };
   el('pin-add').onclick = async () => {
