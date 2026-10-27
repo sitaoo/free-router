@@ -222,12 +222,7 @@ header {
   color: var(--accent-fg); box-shadow: var(--glow-accent);
 }
 .brand-mark svg { width: 17px; height: 17px; }
-.brand-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
 .brand-name { font-family: var(--font-display); font-size: 16px; font-weight: 600; letter-spacing: .01em; }
-.brand-sub {
-  font-size: 11px; color: var(--muted); max-width: 240px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
 .head-actions { display: flex; align-items: center; gap: 6px; justify-self: end; }
 #lang {
   max-width: 132px; height: 34px; padding: 0 8px; font-size: 12.5px;
@@ -530,7 +525,6 @@ body[data-gate="1"] main#app { display: none; }
   .brand { grid-column: 1; grid-row: 1; }
   .head-actions { grid-column: 2; grid-row: 1; }
   #tabs { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; padding-bottom: 2px; }
-  .brand-sub { max-width: 46vw; }
 }
 @media (max-width: 760px) {
   main { padding: 20px 16px 56px; gap: 14px; }
@@ -542,7 +536,6 @@ body[data-gate="1"] main#app { display: none; }
 }
 @media (max-width: 640px) {
   .head-inner { padding: 8px 14px 7px; }
-  .brand-sub { display: none; }
   #tabs button { padding: 0 10px; font-size: 12.5px; }
   #tabs button svg { display: none; }
   .cards { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
@@ -564,10 +557,7 @@ body[data-gate="1"] main#app { display: none; }
   <div class="head-inner">
     <div class="brand">
       <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></span>
-      <span class="brand-text">
-        <span class="brand-name">Free Router</span>
-        <span class="brand-sub mono" id="endpoint"></span>
-      </span>
+      <span class="brand-name">Free Router</span>
     </div>
     <nav id="tabs" aria-label="Sections">
       <button data-tab="status" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg><span data-i18n="tab_status">Status</span></button>
@@ -1752,7 +1742,7 @@ function renderGateway() {
   }
   el('gw-require').checked = Boolean(state.gateway && state.gateway.requireAuth);
   el('gw-note').textContent = keys.length
-    ? 'Clients call: curl -H "Authorization: Bearer <key>" ' + state.endpoint + '/chat/completions'
+    ? 'Clients call: curl -H "Authorization: Bearer <key>" ' + gatewayEndpoint() + '/chat/completions'
     : '';
 }
 
@@ -1850,20 +1840,28 @@ function gotoLink(label, tab) {
   return link;
 }
 
+// Clients call the gateway on the same origin that serves this UI, so show the
+// address the admin is actually browsing. The configured bind host may be
+// 0.0.0.0, which is not a routable address.
+function gatewayEndpoint() {
+  return location.origin + '/v1';
+}
+
 function renderStatus() {
   const host = el('status-cards');
   host.textContent = '';
+  const endpoint = gatewayEndpoint();
   const endpointWrap = document.createElement('span');
   const endpointText = document.createElement('span');
   endpointText.className = 'mono';
-  endpointText.textContent = state.endpoint + ' ';
+  endpointText.textContent = endpoint + ' ';
   const copy = document.createElement('button');
   copy.className = 'iconbtn';
   copy.appendChild(svgIcon('copy'));
   copy.title = t('copy_title');
   copy.onclick = async () => {
-    const ok = await copyText(state.endpoint);
-    toast(ok ? t('copied_msg') : state.endpoint, ok ? 'good' : 'err');
+    const ok = await copyText(endpoint);
+    toast(ok ? t('copied_msg') : endpoint, ok ? 'good' : 'err');
   };
   endpointWrap.appendChild(endpointText);
   endpointWrap.appendChild(copy);
@@ -2448,8 +2446,6 @@ async function load() {
   el('login').style.display = 'none';
   el('app').style.display = '';
   el('logout-top').style.display = '';
-  el('endpoint').textContent = state.endpoint;
-  el('endpoint').title = state.endpoint;
   bindOnce();
   applyI18n();
   renderAll();

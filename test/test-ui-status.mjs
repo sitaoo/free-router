@@ -18,4 +18,11 @@ assert.match(page, /activeTab\s*!==?\s*['"]status['"]/, 'refresh must only run o
 assert.match(page, /document\.hidden/, 'refresh must skip when page is hidden');
 assert.match(page, /!state/, 'refresh must skip when logged out (no state)');
 
+// 3. The displayed API address follows the browser, not the bind address:
+// 0.0.0.0 is not routable, so derive it from the current origin instead.
+assert.doesNotMatch(page, /id="endpoint"/, 'topbar must not print the bind address');
+assert.doesNotMatch(page, /state\.endpoint/, 'UI must not print the server bind endpoint');
+assert.match(page, /location\.origin \+ ['"]\/v1['"]/, 'endpoint must come from the current origin');
+assert.match(page, /function gatewayEndpoint/, 'one helper for every displayed endpoint');
+
 console.log('ui-status unit tests passed');
