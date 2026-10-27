@@ -56,6 +56,8 @@ export const STRINGS = {
 en: {
   tab_status: "Status", tab_access: "Access", tab_providers: "Providers", tab_routes: "Routes", tab_quota: "Quota", tab_settings: "Settings",
   logout: "Log out",
+  lang_name: "Language",
+  theme_title: "Theme: {mode}. Click to switch.", theme_system: "follow system", theme_light: "light", theme_dark: "dark",
   login_blurb: "Enter the admin password to continue.", login_pass_ph: "Default admin123", login_go: "Log in",
   overview: "Overview", route_priority: "Route priority", usage_today: "Usage today",
   card_endpoint: "endpoint", card_config: "config", card_gateway: "gateway auth", card_nokey: "providers without key", card_adminpw: "admin password",
@@ -128,6 +130,7 @@ en: {
   route_disc_suffix: " (discovery)",
   route_label: "Route", route_new: "New route", route_del: "Delete route",
   route_add_ph: "provider:model or model id", route_add: "Add", route_save: "Save route",
+  route_move_up: "Move up", route_move_down: "Move down", route_remove: "Remove",
   route_in_list: "Already in the list.",
   route_saved: "Saved route {r} ({n} entries).", route_created: "Created route {r}.", route_deleted: "Deleted route.",
   route_new_prompt: "New route name (letters, digits, _ or -):", route_confirm_del: "Delete route {r}?",
@@ -199,6 +202,7 @@ en: {
 "zh-CN": {
   tab_status: "状态", tab_access: "访问", tab_providers: "上游", tab_routes: "路由", tab_quota: "配额", tab_settings: "设置",
   logout: "登出", lang_name: "语言",
+  theme_title: "主题：{mode}。点击切换。", theme_system: "跟随系统", theme_light: "浅色", theme_dark: "深色",
   login_blurb: "输入管理员密码以继续。", login_pass_ph: "Default admin123", login_go: "登录",
   overview: "概览", route_priority: "路由优先级", usage_today: "今日用量",
   card_endpoint: "接口地址", card_config: "配置文件", card_gateway: "网关鉴权", card_nokey: "未配置 Key 的渠道", card_adminpw: "管理密码",
@@ -271,6 +275,7 @@ en: {
   route_disc_suffix: "（发现）",
   route_label: "路由", route_new: "新建路由", route_del: "删除路由",
   route_add_ph: "provider:model 或模型 id", route_add: "添加", route_save: "保存路由",
+  route_move_up: "上移", route_move_down: "下移", route_remove: "移除",
   route_in_list: "已在列表中。",
   route_saved: "已保存路由 {r}（{n} 条）。", route_created: "已创建路由 {r}。", route_deleted: "已删除路由。",
   route_new_prompt: "新路由名（字母、数字、_ 或 -）：", route_confirm_del: "删除路由 {r}？",
@@ -342,6 +347,7 @@ en: {
 "zh-TW": {
   tab_status: "狀態", tab_access: "存取", tab_providers: "上游", tab_routes: "路由", tab_quota: "配額", tab_settings: "設定",
   logout: "登出", lang_name: "語言",
+  theme_title: "主題：{mode}。點擊切換。", theme_system: "跟隨系統", theme_light: "淺色", theme_dark: "深色",
   login_blurb: "輸入管理員密碼以繼續。", login_pass_ph: "Default admin123", login_go: "登入",
   overview: "總覽", route_priority: "路由優先順序", usage_today: "今日用量",
   card_endpoint: "介面位址", card_config: "設定檔", card_gateway: "閘道鑑權", card_nokey: "未設定 Key 的管道", card_adminpw: "管理密碼",
@@ -414,6 +420,7 @@ en: {
   route_disc_suffix: "（探索）",
   route_label: "路由", route_new: "新增路由", route_del: "刪除路由",
   route_add_ph: "provider:model 或模型 id", route_add: "新增", route_save: "儲存路由",
+  route_move_up: "上移", route_move_down: "下移", route_remove: "移除",
   route_in_list: "已在清單中。",
   route_saved: "已儲存路由 {r}（{n} 筆）。", route_created: "已建立路由 {r}。", route_deleted: "已刪除路由。",
   route_new_prompt: "新路由名（字母、數字、_ 或 -）：", route_confirm_del: "刪除路由 {r}？",

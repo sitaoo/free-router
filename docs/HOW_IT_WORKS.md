@@ -97,7 +97,7 @@ See where requests actually landed, and how much of today's quota is left:
 
 ## Web interface
 
-Open <http://127.0.0.1:8787/> and log in (default password `admin123`, change it in Settings → Admin). The interface has tabs for status, access keys, providers, routes, quotas, and settings, follows the browser language, and applies every change to the running process immediately — except host, port, and a few marked settings, which need a restart (there is a Restart button next to Save; under Docker the supervisor brings the server back up).
+Open <http://127.0.0.1:8787/> and log in (default password `admin123`, change it in Settings → Admin). The interface has tabs for status, access keys, providers, routes, quotas, and settings, follows the browser language, and applies every change to the running process immediately — except host, port, and a few marked settings, which need a restart (there is a Restart button next to Save; under Docker the supervisor brings the server back up). The theme button in the top bar cycles follow-system, light, and dark; the choice is stored in that browser's local storage.
 
 ```json
 "webui": {
