@@ -396,6 +396,15 @@ td.muted { color: var(--muted); }
 .warn { color: var(--warn); font-weight: 600; }
 .bad-text { color: var(--bad); font-weight: 600; }
 .ok-text { color: var(--ok); font-weight: 600; }
+/* A security warning has to read as a warning in both themes, so it uses the
+   danger tokens rather than the amber "warn" ones. */
+.warn-banner {
+  margin-top: 12px; padding: 10px 12px; border-radius: 8px;
+  color: var(--bad-fg); background: var(--bad-soft);
+  border: 1px solid var(--bad-line); border-left-width: 3px;
+  font-size: 13px; line-height: 1.6;
+}
+.warn-banner[hidden] { display: none; }
 
 /* ===== Provider modal detail ===== */
 .prov-hint { margin-top: 7px; font-size: 12px; color: var(--muted); }
@@ -741,6 +750,7 @@ body[data-gate="1"] main#app { display: none; }
           <button id="srv-save" data-i18n="srv_save">Save</button>
           <button id="srv-restart" data-i18n="restart_btn">Restart</button>
         </div>
+        <div id="srv-lan-insecure" class="warn-banner" role="alert" hidden></div>
       </div>
     </section>
     <section>
@@ -1822,6 +1832,14 @@ function isLanOpen(host) {
 function renderLanAddrs(lanOn) {
   const slot = el('srv-lan-addrs');
   slot.textContent = '';
+  // Reaching the UI over the LAN means every byte — the admin password, gateway
+  // keys, prompts and answers — crosses the network in clear text. Say so where
+  // the switch is, since that is the moment the trade-off is made.
+  const insecure = el('srv-lan-insecure');
+  if (insecure) {
+    insecure.hidden = !lanOn;
+    insecure.textContent = lanOn ? t('srv_lan_insecure') : '';
+  }
   const port = state.server.runningPort || state.server.port || '';
   const lan = state.server.lan || { addresses: [], hostname: '', inDocker: false };
   const line = (text, cls) => {

@@ -25,4 +25,26 @@ assert.doesNotMatch(page, /state\.endpoint/, 'UI must not print the server bind 
 assert.match(page, /location\.origin \+ ['"]\/v1['"]/, 'endpoint must come from the current origin');
 assert.match(page, /function gatewayEndpoint/, 'one helper for every displayed endpoint');
 
+// 4. Turning LAN access on is a plaintext-to-the-network decision, so the
+// server section must say so in danger colour, and only while it is on.
+assert.match(page, /id="srv-lan-insecure"/, 'LAN plaintext warning slot missing');
+assert.match(
+  page,
+  /class="[^"]*\bwarn-banner\b[^"]*"[^>]*id="srv-lan-insecure"|id="srv-lan-insecure"[^>]*class="[^"]*\bwarn-banner\b/,
+  'LAN warning must use the danger banner style',
+);
+assert.match(page, /\.warn-banner\s*\{[^}]*var\(--bad/, 'warning banner must be red in both themes');
+assert.match(page, /srv_lan_insecure/, 'warning text must be translated, not hard-coded');
+// It follows the switch: rendered by renderLanAddrs, hidden when LAN is off.
+assert.match(
+  page,
+  /function renderLanAddrs\(lanOn\)[\s\S]{0,4000}?srv-lan-insecure/,
+  'warning must be rendered by the LAN renderer',
+);
+assert.match(
+  page,
+  /srv-lan-insecure[\s\S]{0,200}?!lanOn/,
+  'warning must be hidden while LAN access is off',
+);
+
 console.log('ui-status unit tests passed');

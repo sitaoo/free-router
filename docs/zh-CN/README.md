@@ -114,7 +114,7 @@ mkdir -p data && cp .env.example data/.env
 ./ctl.sh docker --dev       # Docker 开发模式（代码热挂载）
 ```
 
-- 局域网：设置 → **允许局域网访问**，按页面的地址列表连，记得先建网关 Key、改密码。
+- 局域网：设置 → **允许局域网访问**，按页面的地址列表连，记得先建网关 Key、改密码。网关只提供 HTTP，有公网 IP 时别开，远程访问请在前面加一层 HTTPS 反向代理。
 - 加新渠道：Web UI 里选预设（Gemini、OpenRouter、TokenRouter、B.AI、HashNeuron、Groq、Cerebras、Mistral、Hugging Face）或填任意 OpenAI 兼容端点，或往 `app/config/config.json` 加一段。
 - 原理与配置分层：[工作原理](HOW_IT_WORKS.md)。
 

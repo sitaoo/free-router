@@ -114,7 +114,7 @@ Detailed notes: [Run with Docker](docs/HOW_IT_WORKS.md#run-with-docker).
 ./ctl.sh docker --dev       # Docker dev mode (live code mount)
 ```
 
-- LAN: Settings → **Allow LAN access**. It lists the exact addresses. Create a gateway key and change the password first.
+- LAN: Settings → **Allow LAN access**. It lists the exact addresses. Create a gateway key and change the password first. The gateway serves plain HTTP only, so keep it off a public IP and put an HTTPS reverse proxy in front for remote access.
 - New provider: pick a preset (Gemini, OpenRouter, TokenRouter, B.AI, HashNeuron, Groq, Cerebras, Mistral, Hugging Face) or enter any OpenAI-compatible endpoint in the web UI, or add a block in `app/config/config.json`.
 - Design and config layers: [How it works](docs/HOW_IT_WORKS.md).
 

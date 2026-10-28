@@ -17,7 +17,7 @@ tags are cut here. Dates are commit dates (`YYYY-MM-DD`).
 - SWE-bench Verified prior (shipped `app/data/swe-bench.json`) ranks models with no config anchor, `baselineScores` entry, or evaluation score; `/health`, the web UI, and `models.sh` report the source as `scoreSource`.
 - Provider presets for Groq, Cerebras, Mistral, and Hugging Face, plus a `probeFreeTier` switch in the create form and each provider's advanced settings; the toggle applies without a restart.
 - Discovery **Run now** bypasses the interval and runs in the background; an empty discovery route offers its live ranking as one-click draft entries.
-- LAN access toggle in Settings replacing the host textbox: ON writes `0.0.0.0`, OFF writes `127.0.0.1`; reachable addresses (LAN IPs, loopback, hostname) listed with container-view note; warning when enabling with zero gateway keys.
+- LAN access toggle in Settings replacing the host textbox: ON writes `0.0.0.0`, OFF writes `127.0.0.1`; reachable addresses (LAN IPs, loopback, hostname) listed with container-view note; warning when enabling with zero gateway keys. Turning it on also shows a red plaintext notice: the gateway has no TLS, so the admin password, gateway keys, prompts and answers cross the network in clear text — do not use it on a public IP; put an HTTPS reverse proxy in front instead.
 - Boot guard: refuse to start on a non-loopback bind without gateway keys or with the default password.
 - Login brute-force brake: 5 failures lock an IP for 5 minutes (`429` + `Retry-After`).
 - Failure taxonomy: `402 payment` and `529`/`overload` kinds; capacity faults drive cooldowns only, routing/billing/credential faults are never scored.
