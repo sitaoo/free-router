@@ -70,15 +70,16 @@ const GATEWAY_KEY = process.env.FREE_ROUTER_API_KEY || firstOverlayGatewayKey();
 const authHeaders = GATEWAY_KEY ? { Authorization: `Bearer ${GATEWAY_KEY}` } : {};
 const HOST = process.env.FREE_ROUTER_HOST || config.host || '127.0.0.1';
 const PORT = Number(process.env.FREE_ROUTER_PORT || config.port || 8787);
-const DEFAULT_ROUTE = config.discovery?.route || 'free-best';
+const DEFAULT_ALIAS = 'free-best';
 
 function usage() {
   console.log(`Usage: ./script/models.sh [options]
 
-Show free-router models in priority order (same ranking as route \`free-best\`).
+Show the gateway's model pool: free models in priority order, then (with
+--paid) the paid models a request must name explicitly.
 
 Options:
-  --route <name>   Route alias to inspect (default: ${DEFAULT_ROUTE})
+  --paid           Also list selected paid models
   --ready-only     Only show models that are ready right now
   --usage          Show the request history instead of the priority list
   --json           Machine-readable JSON output
@@ -88,7 +89,7 @@ Options:
 
 function parseArgs(argv) {
   const options = {
-    route: DEFAULT_ROUTE,
+    paid: false,
     readyOnly: false,
     usage: false,
     json: false,
@@ -104,6 +105,10 @@ function parseArgs(argv) {
       options.readyOnly = true;
       continue;
     }
+    if (arg === '--paid') {
+      options.paid = true;
+      continue;
+    }
     if (arg === '--usage') {
       options.usage = true;
       continue;
@@ -112,27 +117,20 @@ function parseArgs(argv) {
       options.json = true;
       continue;
     }
-    if (arg === '--route') {
-      options.route = String(argv[index + 1] || '');
-      index += 1;
-      continue;
-    }
     throw new Error(`unknown option: ${arg}`);
   }
-  if (!options.route) throw new Error('--route requires a value');
   return options;
 }
 
-function statusFor(entry, providerConfigured) {
-  if (!providerConfigured) return 'no-key';
-  if (entry.zeroCost === false) return 'paid';
+function statusFor(entry) {
+  if (entry.blockedUntil) return 'blocked';
   if (entry.cooldownSeconds > 0) return 'cooldown';
+  if (entry.zeroCost === false) return 'paid';
   return 'ready';
 }
 
-function annotate(entry, providers) {
-  const providerConfigured = Boolean(providers?.[entry.provider]?.configured);
-  const status = statusFor(entry, providerConfigured);
+function annotate(entry) {
+  const status = statusFor(entry);
   return {
     priority: entry.priority,
     status,
@@ -148,7 +146,7 @@ function annotate(entry, providers) {
     supportsTools: entry.supportsTools,
     cooldownSeconds: entry.cooldownSeconds,
     cooldownReason: entry.cooldownReason || null,
-    providerConfigured,
+    blockedUntil: entry.blockedUntil || null,
     usage: entry.usage || null,
   };
 }
@@ -178,11 +176,11 @@ function failureDetail(counts) {
   return parts.join(', ') || '-';
 }
 
-function formatTable(models, route, health, allModels) {
+function formatTable(models, poolLabel, health, allModels) {
   const usage = health.usage;
   const totalCount = allModels.length;
   const lines = [];
-  lines.push(`route: ${route}`);
+  lines.push(`pool: ${poolLabel}`);
   lines.push(`endpoint: http://${HOST}:${PORT}/v1`);
   if (health.lastSelection?.model) {
     const last = health.lastSelection;
@@ -294,14 +292,14 @@ async function main() {
     return;
   }
 
-  const routeModels = health.routes?.[options.route];
-  if (!routeModels) {
-    console.error(`route not found: ${options.route}`);
-    console.error(`available routes: ${Object.keys(health.routes || {}).join(', ') || '(none)'}`);
+  if (!health.pool) {
+    console.error('this free-router build does not expose a model pool');
     process.exit(1);
   }
-
-  const allModels = routeModels.map((entry) => annotate(entry, health.providers));
+  const free = health.pool.free || [];
+  const paid = options.paid ? health.pool.paid || [] : [];
+  const poolLabel = options.paid ? `free (${free.length}) + paid (${paid.length})` : `free (${free.length})`;
+  const allModels = [...free, ...paid].map((entry) => annotate(entry));
   const totalCount = allModels.length;
   const models = options.readyOnly
     ? allModels.filter((entry) => entry.ready)
@@ -311,8 +309,9 @@ async function main() {
     console.log(
       JSON.stringify(
         {
-          route: options.route,
+          alias: DEFAULT_ALIAS,
           endpoint: `http://${HOST}:${PORT}/v1`,
+          includesPaid: options.paid,
           readyCount: models.filter((entry) => entry.ready).length,
           totalCount,
           lastSelection: health.lastSelection || null,
@@ -326,7 +325,7 @@ async function main() {
     return;
   }
 
-  console.log(formatTable(models, options.route, health, allModels));
+  console.log(formatTable(models, poolLabel, health, allModels));
 }
 
 main().catch((error) => {

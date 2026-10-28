@@ -374,12 +374,38 @@ export function addMissingKeys(target, defaults) {
 }
 
 // Schema version of the overlay file. Bump when new structural fields are
-// introduced and append a migration step that adds ONLY the new skeleton
-// (addMissingKeys semantics: user values are never touched).
-export const SCHEMA_VERSION = 1;
+// introduced and append a migration step. `addDefaults` adds the new skeleton
+// only (addMissingKeys semantics: user values are never touched); `apply` is
+// for removals the new schema genuinely drops.
+export const SCHEMA_VERSION = 2;
 const OVERLAY_MIGRATIONS = [
-  // v1: baseline marker. The live code tolerates absent sections, so the
-  // first version needs no structural backfill.
+  {
+    // v2: routes are gone. Membership now comes from freeModels/selectedModels
+    // plus the free-model rules; discovery no longer names a provider or route.
+    version: 2,
+    apply(overlay) {
+      let changed = false;
+      for (const key of ['routes', '_removedRoutes']) {
+        if (Object.prototype.hasOwnProperty.call(overlay, key)) {
+          delete overlay[key];
+          changed = true;
+        }
+      }
+      if (isPlainObject(overlay.discovery)) {
+        for (const key of ['route', 'provider']) {
+          if (Object.prototype.hasOwnProperty.call(overlay.discovery, key)) {
+            delete overlay.discovery[key];
+            changed = true;
+          }
+        }
+        changed =
+          addMissingKeys(overlay.discovery, {
+            evaluation: { probeBatchSize: 3, probeBatchDelayMs: 2000, probeMaxPerProvider: 100 },
+          }) || changed;
+      }
+      return changed;
+    },
+  },
 ];
 
 export function runOverlayMigrations(overlay) {
@@ -389,6 +415,7 @@ export function runOverlayMigrations(overlay) {
   for (const step of OVERLAY_MIGRATIONS) {
     if (step.version <= current) continue;
     if (step.addDefaults) changed = addMissingKeys(overlay, step.addDefaults) || changed;
+    if (typeof step.apply === 'function') changed = step.apply(overlay) || changed;
   }
   if (current !== SCHEMA_VERSION) {
     overlay._schemaVersion = SCHEMA_VERSION;
@@ -509,15 +536,11 @@ export function saveOverlayFile(overlayPath, overlay) {
 }
 
 // Builds the live view: base defaults + overlay, minus anything the
-// operator deleted (tombstones in overlay._removedRoutes/_removedProviders
-// keep deletions sticky across restarts, since the base file still lists them).
+// operator deleted (the provider tombstone in overlay._removedProviders keeps
+// deletions sticky across restarts, since the base file still lists them).
 export function buildLiveConfig(base, overlay) {
   const merged = deepMerge(base || {}, overlay || {});
   if (!isPlainObject(merged)) return {};
-  const removedRoutes = overlay?._removedRoutes;
-  if (Array.isArray(removedRoutes) && isPlainObject(merged.routes)) {
-    for (const name of removedRoutes) delete merged.routes[String(name)];
-  }
   const removedProviders = overlay?._removedProviders;
   if (Array.isArray(removedProviders) && isPlainObject(merged.providers)) {
     for (const name of removedProviders) delete merged.providers[String(name)];
@@ -602,9 +625,7 @@ export function defaultConfigObject() {
     },
     discovery: {
       enabled: true,
-      provider: 'openrouter',
       intervalMs: 172800000,
-      route: 'free-best',
       stateFile: 'discovered-free-models.json',
       exclude: {
         modelPatterns: [
@@ -628,6 +649,11 @@ export function defaultConfigObject() {
         enabled: true,
         maxTokens: 4000,
         maxPerRun: 8,
+        // Background free-tier probes: one real request per model, so a large
+        // catalog drains in batches instead of hammering the provider.
+        probeBatchSize: 3,
+        probeBatchDelayMs: 2000,
+        probeMaxPerProvider: 100,
         usageWeight: 12,
         usageMinRequests: 20,
         pinnedModels: [
@@ -656,23 +682,10 @@ export function defaultConfigObject() {
       notFound: 3600000,
       forbidden: 3600000,
       payment: 3600000,
+      // A paid model that reports insufficient funds is parked this long.
+      // Only that provider:model, never the provider or its key.
+      insufficientFunds: 86400000,
       overloaded: 15000,
-    },
-    routes: {
-      'free-best': [
-        { provider: 'gemini', model: 'gemini-3.8-flash' },
-        { provider: 'gemini', model: 'gemini-3.7-flash' },
-        { provider: 'tokenrouter', model: 'z-ai/glm-5.3-free' },
-        { provider: 'bai', model: 'glm-5.3-flash' },
-        { provider: 'gemini', model: 'gemini-3.5-flash-lite' },
-        { provider: 'gemini', model: 'gemini-3.1-flash-lite' },
-        { provider: 'bai', model: 'deepseek-v4-flash' },
-        'stealth/ox-alpha',
-        'z-ai/glm-5.2:free',
-        { provider: 'bai', model: 'qwen3.8-flash' },
-        { provider: 'bai', model: 'hy3' },
-        { provider: 'bai', model: 'mimo-v2.5' },
-      ],
     },
     webui: { enabled: true, envFile: '.env', password: 'admin123' },
     gateway: { requireAuth: false, keys: [] },

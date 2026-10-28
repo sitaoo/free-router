@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 // Unit tests for discovery helpers (app/discovery.mjs):
 // - a probe that reports a positive cost was not free, whatever the catalog said;
-// - a cached free verdict must put the model back into the route after a
-//   state-file loss, without spending another probe.
+// - which catalog models are still worth a probe request, in batches.
 import assert from 'node:assert/strict';
 
-import { adoptableFreeModels, responseLooksBilled } from '../app/discovery.mjs';
+import { probeBatchPlan, probeCandidates, responseLooksBilled } from '../app/discovery.mjs';
 
 assert.equal(responseLooksBilled({ usage: { cost: 0.0001 } }), true);
 assert.equal(responseLooksBilled({ usage: { total_cost: 1 } }), true);
@@ -18,53 +17,52 @@ assert.equal(responseLooksBilled({ usage: null }), false);
 assert.equal(responseLooksBilled({}), false);
 assert.equal(responseLooksBilled(null), false);
 
-const catalog = new Map([
-  ['kept-flash', { id: 'kept-flash', architecture: { output_modalities: ['text'] } }],
-  ['paid-flash', { id: 'paid-flash', architecture: { output_modalities: ['text'] } }],
-  ['embed-only', { id: 'embed-only', architecture: { output_modalities: ['embedding'] } }],
-  ['already', { id: 'already', architecture: { output_modalities: ['text'] } }],
-  ['listed', { id: 'listed', architecture: { output_modalities: ['text'] } }],
-  ['excluded', { id: 'excluded', architecture: { output_modalities: ['text'] } }],
-]);
-const provider = { name: 'demo', probeFreeTier: true, catalog };
-const verdicts = {
-  'demo:kept-flash': { free: true },
-  'demo:paid-flash': { free: false },
-  'demo:already': { free: true },
-  'demo:listed': { free: true },
-  'demo:excluded': { free: true },
+// ---- probe planning (the add-provider background drain) ------------------
+const probeCatalog = new Map(
+  [
+    ['allowlisted', { id: 'allowlisted', architecture: { output_modalities: ['text'] } }],
+    ['selected-paid', { id: 'selected-paid', architecture: { output_modalities: ['text'] } }],
+    ['answered', { id: 'answered', architecture: { output_modalities: ['text'] } }],
+    ['excluded', { id: 'excluded', architecture: { output_modalities: ['text'] } }],
+    ['embed', { id: 'embed', architecture: { output_modalities: ['embedding'] } }],
+    ['fresh-a', { id: 'fresh-a', architecture: { output_modalities: ['text'] } }],
+    ['fresh-b', { id: 'fresh-b', architecture: { output_modalities: ['text'] } }],
+    ['fresh-c', { id: 'fresh-c', architecture: { output_modalities: ['text'] } }],
+  ].map(([id, model]) => [id, model]),
+);
+const probeProvider = {
+  name: 'demo',
+  probeFreeTier: true,
+  catalog: probeCatalog,
+  freeModels: new Set(['allowlisted']),
+  selectedModels: new Set(['selected-paid']),
 };
-const adopted = adoptableFreeModels({
-  providers: [provider],
-  discoveredIds: ['demo:already'],
-  knownSlugs: new Set(['listed']),
-  verdictFor: (key) => verdicts[key] || null,
+const probeVerdicts = { 'demo:answered': { free: false } };
+const plan = probeBatchPlan({
+  provider: probeProvider,
+  verdictFor: (key) => probeVerdicts[key] || null,
   isExcluded: (key) => (key === 'demo:excluded' ? 'domain-specific' : ''),
+  limit: 2,
 });
-assert.deepEqual(adopted, ['demo:kept-flash']);
-
-// Providers without probeFreeTier or without a catalog never contribute.
+assert.deepEqual(plan.candidates, ['fresh-a', 'fresh-b']);
+assert.equal(plan.remaining, 1);
 assert.deepEqual(
-  adoptableFreeModels({
-    providers: [{ name: 'demo', catalog }, { name: 'other', probeFreeTier: true }],
-    discoveredIds: [],
-    knownSlugs: new Set(),
-    verdictFor: () => ({ free: true }),
-    isExcluded: () => '',
+  probeCandidates({ provider: probeProvider, verdictFor: () => null, limit: 10 }).sort(),
+  ['answered', 'excluded', 'fresh-a', 'fresh-b', 'fresh-c'],
+);
+
+// Only probeable providers with a loaded catalog ever produce candidates.
+assert.deepEqual(
+  probeCandidates({
+    provider: { ...probeProvider, probeFreeTier: false },
+    limit: 10,
   }),
   [],
 );
-
-// No verdict is not a free verdict.
-assert.deepEqual(
-  adoptableFreeModels({
-    providers: [provider],
-    discoveredIds: [],
-    knownSlugs: new Set(),
-    verdictFor: () => null,
-    isExcluded: () => '',
-  }),
-  [],
-);
+assert.deepEqual(probeCandidates({ provider: { ...probeProvider, catalog: new Map() }, limit: 10 }), []);
+assert.deepEqual(probeBatchPlan({ provider: { ...probeProvider, probeFreeTier: false } }), {
+  candidates: [],
+  remaining: 0,
+});
 
 console.log('discovery unit tests passed');

@@ -131,6 +131,27 @@ export function permanentRejection(status, payload) {
   return '';
 }
 
+// Billing refusals that mean the account cannot pay for a paid model right
+// now. 402 is unambiguous; gateways that predate it answer 400/403 with a
+// balance message, so those are matched on text. A 429 is deliberately never
+// included: free-tier exhaustion is a different condition with its own reset.
+const FUNDS_PATTERN =
+  /insufficient[\s_-]*(?:funds|credits?|quota|balance)|not enough (?:credits|funds|balance)|credit balance|balance (?:is )?(?:too )?low|out of credits|payment required|check your plan and billing|billing (?:issue|required)|add (?:more )?credits/i;
+
+export function isInsufficientFunds(status, payload, reason = '') {
+  const code = Number(status);
+  if (code === 402) return true;
+  if (code !== 400 && code !== 403) return false;
+  const error = payload?.error || {};
+  const text = [error.message, error.code, error.type, reason]
+    .filter((part) => part !== undefined && part !== null)
+    .join(' ');
+  // A path/function refusal is not a billing answer even when it mentions
+  // quota-shaped words; keep the existing permanent-rejection meaning.
+  if (/only supports .*Interactions API/i.test(text)) return false;
+  return FUNDS_PATTERN.test(text);
+}
+
 // Free-tier daily quotas reset at midnight US Pacific. Cooling down for a fixed
 // interval instead would either retry all night for nothing or idle past the
 // reset, so compute the actual wait.

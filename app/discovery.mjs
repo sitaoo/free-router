@@ -23,31 +23,41 @@ export function responseLooksBilled(payload) {
 // Callers own the exclusions and the known slugs (configured route entries and
 // already-discovered models): a catalog spelling that differs only by prefix
 // or case must not become a duplicate route row.
-export function adoptableFreeModels({
-  providers = [],
-  discoveredIds = [],
-  knownSlugs = new Set(),
+// Which catalog models are still worth a probe request. A probe is the only
+// way a price-free provider can prove a model is free, so anything already
+// known — allowlisted, explicitly selected, or carrying an unexpired verdict —
+// is skipped. Exclusions apply only to models discovery would add on its own.
+export function probeCandidates({
+  provider,
   verdictFor = () => null,
   isExcluded = () => '',
+  limit = 8,
 } = {}) {
-  const discovered = new Set(discoveredIds);
-  const known = new Set(knownSlugs);
-  const adopted = [];
-  for (const provider of providers) {
-    if (!provider?.probeFreeTier || !provider.name || !provider.catalog?.size) continue;
-    for (const model of provider.catalog.values()) {
-      if (!model || typeof model.id !== 'string' || !model.id) continue;
-      if (!isChatModel(model)) continue;
-      const key = `${provider.name}:${model.id}`;
-      if (discovered.has(key)) continue;
-      const slug = normalizeModelSlug(model.id);
-      if (slug && known.has(slug)) continue;
-      if (isExcluded(key)) continue;
-      if (verdictFor(key)?.free !== true) continue;
-      discovered.add(key);
-      if (slug) known.add(slug);
-      adopted.push(key);
-    }
+  if (!provider?.probeFreeTier || !provider.catalog?.size) return [];
+  const knownSlugs = new Set();
+  for (const id of provider.freeModels || []) knownSlugs.add(normalizeModelSlug(id));
+  for (const id of provider.selectedModels || []) knownSlugs.add(normalizeModelSlug(id));
+  const remaining = [];
+  for (const model of provider.catalog.values()) {
+    if (!model || typeof model.id !== 'string' || !model.id) continue;
+    if (!isChatModel(model)) continue;
+    if (knownSlugs.has(normalizeModelSlug(model.id))) continue;
+    if (verdictFor(`${provider.name}:${model.id}`)) continue;
+    if (isExcluded(`${provider.name}:${model.id}`)) continue;
+    remaining.push(model.id);
   }
-  return adopted;
+  return remaining.slice(0, Math.max(0, Number(limit) || 0));
 }
+
+// A probe run is budget-limited on purpose: one real request per candidate,
+// so a large catalog must drain over several batches instead of hammering the
+// provider. `remaining` tells the drain loop whether to schedule another one.
+export function probeBatchPlan(options = {}) {
+  const candidates = probeCandidates(options);
+  if (!options.provider?.probeFreeTier || !options.provider?.catalog?.size) {
+    return { candidates: [], remaining: 0 };
+  }
+  const everything = probeCandidates({ ...options, limit: Number.MAX_SAFE_INTEGER });
+  return { candidates, remaining: Math.max(0, everything.length - candidates.length) };
+}
+

@@ -8,6 +8,18 @@ export function isZeroCost(model) {
   return Number.isFinite(prompt) && Number.isFinite(completion) && prompt === 0 && completion === 0;
 }
 
+// Does this catalog row actually publish per-token prices? A `pricing: true`
+// flag only describes the operator's expectation; a provider that answers with
+// no price fields (Google's native listing, for one) cannot have its freeness
+// decided by price, so it must fall back to probing.
+export function hasPricingFields(model) {
+  const pricing = model?.pricing;
+  if (!pricing || typeof pricing !== 'object') return false;
+  return (
+    Number.isFinite(Number(pricing.prompt)) && Number.isFinite(Number(pricing.completion))
+  );
+}
+
 export function isChatModel(model) {
   // A catalog that states which generation methods a model supports is
   // authoritative; guessing from modalities is only for catalogs that do not.
@@ -121,9 +133,10 @@ export function createProviderRegistry(config, { host, port }) {
     const baseUrlEnv = cfg.baseUrlEnv || envName(name, 'BASE_URL');
     const usesCatalog = cfg.catalog === true;
     // Fetching /models and deciding what is free are separate powers. Only a
-    // catalog that publishes per-token prices can decide freeness by itself;
-    // for the rest `freeModels` stays the allowlist and the catalog is used
-    // solely to notice models that disappeared upstream.
+    // catalog that actually publishes per-token prices can decide freeness by
+    // itself; for the rest `freeModels` stays the allowlist (or polling proves
+    // models free one by one). The flags below start from config and are
+    // re-derived from the fetched rows once a catalog loads.
     const catalogHasPricing = usesCatalog && cfg.pricing !== false;
     const baseUrl = String(process.env[baseUrlEnv] || cfg.baseUrl || '').replace(/\/+$/, '');
     if (!baseUrl) throw new Error(`provider ${name} is missing baseUrl`);
@@ -137,6 +150,9 @@ export function createProviderRegistry(config, { host, port }) {
       baseUrlEnv,
       usesCatalog,
       catalogHasPricing,
+      cfgPricing: cfg.pricing !== false,
+      cfgDiscover: cfg.discover !== false,
+      cfgProbeFreeTier: cfg.probeFreeTier === true,
       // Adding unknown models from a catalog is only safe where prices are
       // published, so a priced catalog is a precondition for that route in.
       discover: catalogHasPricing && cfg.discover !== false,
@@ -158,6 +174,7 @@ export function createProviderRegistry(config, { host, port }) {
       keyCursor: 0,
       invalidKeys: new Set(),
       freeModels: new Set(cfg.freeModels || []),
+      selectedModels: new Set(cfg.selectedModels || []),
       catalog: usesCatalog ? new Map() : null,
       catalogSlugs: usesCatalog ? new Map() : null,
       catalogFetchedAt: 0,
@@ -182,15 +199,6 @@ export function createProviderRegistry(config, { host, port }) {
     [...providers.values()].find((provider) => provider.catalogHasPricing)?.name ||
     [...providers.keys()][0];
 
-  const configuredDiscovery = config.discovery?.provider;
-  if (configuredDiscovery && !providers.has(configuredDiscovery)) {
-    throw new Error(`discovery.provider "${configuredDiscovery}" is not in providers`);
-  }
-  let discoveryProvider =
-    configuredDiscovery ||
-    [...providers.values()].find((provider) => provider.discover)?.name ||
-    defaultProvider;
-
   function get(name) {
     return providers.get(name);
   }
@@ -207,7 +215,6 @@ export function createProviderRegistry(config, { host, port }) {
   function removeProvider(name) {
     if (!providers.has(name)) return false;
     if (name === defaultProvider) throw new Error(`cannot remove the default provider: ${name}`);
-    if (name === discoveryProvider) throw new Error(`cannot remove the discovery provider: ${name}`);
     providers.delete(name);
     return true;
   }
@@ -215,11 +222,6 @@ export function createProviderRegistry(config, { host, port }) {
   function setDefaultProvider(name) {
     if (!providers.has(name)) throw new Error(`unknown provider: ${name}`);
     defaultProvider = name;
-  }
-
-  function setDiscoveryProvider(name) {
-    if (!providers.has(name)) throw new Error(`unknown provider: ${name}`);
-    discoveryProvider = name;
   }
 
   function headers(name, keyOverride) {
@@ -256,19 +258,6 @@ export function createProviderRegistry(config, { host, port }) {
     return Boolean(provider && provider.apiKeys && provider.apiKeys.length);
   }
 
-  function isFree(candidate) {
-    const provider = get(candidate.provider);
-    if (!provider || !hasUsableKey(provider)) return false;
-    if (provider.catalogHasPricing) {
-      const model = provider.catalog.get(candidate.model);
-      return !provider.catalog.size || Boolean(model && isZeroCost(model) && isChatModel(model));
-    }
-    if (!provider.freeModels.has(candidate.model)) return false;
-    // A catalog that failed to load must not empty the route, so absence only
-    // counts as removal when we actually hold a catalog to check against.
-    if (!provider.usesCatalog || !provider.catalog.size) return true;
-    return Boolean(catalogEntry(provider, candidate.model));
-  }
 
   // Allowlisted models the provider no longer offers. Attempting these wastes
   // an upstream round trip and a cooldown slot on a guaranteed 404.
@@ -330,54 +319,6 @@ export function createProviderRegistry(config, { host, port }) {
     return { provider: providerName, model };
   }
 
-  function offeringsForSlug(slug) {
-    const normalized = String(slug || '');
-    if (!normalized) return [];
-    const offerings = [];
-    const seen = new Set();
-    for (const provider of providers.values()) {
-      if (!hasUsableKey(provider)) continue;
-      if (provider.catalogHasPricing) {
-        if (!provider.catalog) continue;
-        for (const model of provider.catalog.values()) {
-          if (normalizeModelSlug(model.id) !== normalized) continue;
-          if (!isZeroCost(model) || !isChatModel(model)) continue;
-          const key = `${provider.name}:${model.id}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          offerings.push({ provider: provider.name, model: model.id });
-        }
-        continue;
-      }
-      for (const id of provider.freeModels) {
-        if (normalizeModelSlug(id) !== normalized) continue;
-        if (provider.usesCatalog && provider.catalog.size && !catalogEntry(provider, id)) continue;
-        const key = `${provider.name}:${id}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        offerings.push({ provider: provider.name, model: id });
-      }
-    }
-    return offerings;
-  }
-
-  function directCandidates(requestedModel) {
-    const prefixed = parsePrefixed(requestedModel);
-    if (prefixed) return [prefixed];
-    const slug = normalizeModelSlug(requestedModel);
-    const offerings = offeringsForSlug(slug);
-    if (!offerings.length) {
-      return [{ provider: defaultProvider, model: requestedModel }];
-    }
-    const exact = [];
-    const rest = [];
-    for (const offering of offerings) {
-      if (offering.model === requestedModel) exact.push(offering);
-      else rest.push(offering);
-    }
-    return [...exact, ...rest];
-  }
-
   function catalogUrl(provider) {
     return provider.modelsUrl || joinUrl(provider.baseUrl, provider.modelsPath);
   }
@@ -409,6 +350,20 @@ export function createProviderRegistry(config, { host, port }) {
       throw error;
     }
     return normalizeCatalogPayload(await response.json());
+  }
+
+  // Freeness semantics are decided by the rows, not only by the config flag.
+  // Only a successful, non-empty fetch may change them: an outage must not
+  // turn a priced provider into a probeable one (or spend probes on a key
+  // that is actually billed).
+  function applyCatalogSemantics(provider, models) {
+    if (!provider?.usesCatalog || !Array.isArray(models) || !models.length) return;
+    const priced = models.some(hasPricingFields);
+    provider.catalogHasPricing = Boolean(provider.cfgPricing && priced);
+    provider.probeFreeTier = Boolean(
+      provider.usesCatalog && !provider.catalogHasPricing && provider.cfgProbeFreeTier,
+    );
+    provider.discover = Boolean(provider.catalogHasPricing && provider.cfgDiscover);
   }
 
   async function refreshProviderCatalog(provider, force, catalogRefreshMs) {
@@ -446,6 +401,7 @@ export function createProviderRegistry(config, { host, port }) {
         }
         provider.catalogFetchedAt = Date.now();
         provider.catalogError = '';
+        applyCatalogSemantics(provider, listed);
         const freeCount = provider.catalogHasPricing
           ? [...provider.catalog.values()].filter(isZeroCost).length
           : null;
@@ -460,6 +416,19 @@ export function createProviderRegistry(config, { host, port }) {
     }
     provider.catalogError = lastError instanceof Error ? lastError.message : String(lastError);
     throw new Error(`${provider.name}: ${provider.catalogError}`);
+  }
+
+  // Refresh a single provider's catalog. Adding or saving a key should not
+  // pay for every other provider's listing.
+  async function refreshCatalogFor(name, force = false, catalogRefreshMs = 0) {
+    const provider = get(name);
+    if (!provider || !provider.usesCatalog) return null;
+    try {
+      const result = await refreshProviderCatalog(provider, force, catalogRefreshMs);
+      return result || null;
+    } catch (error) {
+      throw error;
+    }
   }
 
   async function refreshCatalogs(force, catalogRefreshMs, log) {
@@ -569,55 +538,62 @@ export function createProviderRegistry(config, { host, port }) {
     return entry;
   }
 
-  function listListedModels() {
-    const models = [];
-    const ids = new Set();
-    for (const provider of providers.values()) {
-      if (!hasUsableKey(provider) || provider.catalogHasPricing) continue;
-      for (const id of provider.freeModels) {
-        if (ids.has(id)) continue;
-        if (provider.usesCatalog && provider.catalog.size && !catalogEntry(provider, id)) continue;
-        ids.add(id);
-        models.push(modelEntry({ provider, id }));
-      }
-    }
-    return { models, ids };
+  // Every chat-capable zero-cost model a priced catalog publishes. The pool
+  // uses this to build automatic membership; the UI uses it for pickers.
+  function catalogFreeChatModels(provider) {
+    if (!provider?.catalog?.size || !provider.catalogHasPricing) return [];
+    return [...provider.catalog.values()].filter((model) => isZeroCost(model) && isChatModel(model));
   }
 
-  function listCatalogModels(excludeIds = new Set()) {
+  // One payload for GET /v1/models: the default alias first, then the pool's
+  // free entries (deduplicated by bare id), then explicitly selected paid
+  // entries. Only callable entries appear: a provider without a usable key is
+  // shown in the UI, never advertised to clients.
+  function buildModelList({ aliases = [], entries = [] } = {}) {
     const models = [];
-    const seen = new Set(excludeIds);
-    for (const provider of providers.values()) {
-      if (!provider.catalogHasPricing || !provider.catalog) continue;
-      for (const model of provider.catalog.values()) {
-        if (!isZeroCost(model) || !isChatModel(model) || seen.has(model.id)) continue;
-        seen.add(model.id);
-        models.push(
-          modelEntry({
-            provider,
-            id: model.id,
-            catalogModel: model,
-            ownedBy: model.id.split('/')[0] || provider.name,
-          }),
-        );
-      }
+    const used = new Set();
+    for (const alias of aliases) {
+      models.push({
+        id: alias.id,
+        object: 'model',
+        created: 0,
+        owned_by: alias.owned_by || 'free-router',
+      });
+      used.add(alias.id);
     }
-    models.sort((a, b) => String(a.id).localeCompare(String(b.id)));
-    return models;
-  }
-
-  // One payload for GET /v1/models: route aliases, allowlisted models, and every
-  // currently free catalog model, with duplicates collapsed by id.
-  function listModels(routeIds = []) {
-    const listed = listListedModels();
-    const catalogModels = listCatalogModels(listed.ids);
-    const routes = routeIds.map((id) => ({
-      id,
-      object: 'model',
-      created: 0,
-      owned_by: 'free-router',
-    }));
-    return { models: [...routes, ...listed.models, ...catalogModels], ids: listed.ids };
+    const freeEntries = entries.filter((entry) => entry.free);
+    const paidEntries = entries.filter((entry) => !entry.free);
+    for (const entry of freeEntries) {
+      const provider = get(entry.provider);
+      if (!provider || !hasUsableKey(provider)) continue;
+      if (used.has(entry.model)) continue;
+      used.add(entry.model);
+      const vendor = entry.catalogModel?.id?.includes('/')
+        ? entry.catalogModel.id.split('/')[0]
+        : provider.name;
+      models.push(
+        modelEntry({ provider, id: entry.model, catalogModel: entry.catalogModel, ownedBy: vendor }),
+      );
+    }
+    for (const entry of paidEntries) {
+      const provider = get(entry.provider);
+      if (!provider || !hasUsableKey(provider)) continue;
+      // Two providers can offer the same bare id; a selected paid model then
+      // needs the qualified form so it does not shadow the free offering.
+      const id = used.has(entry.model) ? `${entry.provider}:${entry.model}` : entry.model;
+      used.add(id);
+      const vendor = entry.catalogModel?.id?.includes('/')
+        ? entry.catalogModel.id.split('/')[0]
+        : provider.name;
+      const listed = modelEntry({ provider, id: entry.model, catalogModel: entry.catalogModel, ownedBy: vendor });
+      listed.id = id;
+      listed.provider = entry.provider;
+      listed.free = false;
+      listed.paid = true;
+      if (entry.unknown) listed.unknown = true;
+      models.push(listed);
+    }
+    return { models };
   }
 
   // 'catalog' lets prices decide what is free; 'static' trusts the freeModels
@@ -659,10 +635,6 @@ export function createProviderRegistry(config, { host, port }) {
     );
   }
 
-  function discoveryCatalog() {
-    return get(discoveryProvider);
-  }
-
   // Applied to the live provider and to process.env, so a key set at runtime
   // works on the next request without a restart. Legacy single-key path:
   // replaces the `env` entry, keeps file keys intact.
@@ -688,6 +660,18 @@ export function createProviderRegistry(config, { host, port }) {
       provider.catalogAttemptedAt = 0;
       provider.catalogError = '';
     }
+    return true;
+  }
+
+  // Explicit model selection for one provider. Config persistence is the
+  // caller's job; this mirrors the list into live state so routing sees it on
+  // the next request. Selection enables a model, never marks it free.
+  function setSelectedModels(name, list) {
+    const provider = get(name);
+    if (!provider) return false;
+    const cleaned = [...new Set((list || []).map((id) => String(id || '').trim()).filter(Boolean))];
+    provider.selectedModels = new Set(cleaned);
+    provider.configRef.selectedModels = cleaned;
     return true;
   }
 
@@ -720,22 +704,16 @@ export function createProviderRegistry(config, { host, port }) {
     get defaultProvider() {
       return defaultProvider;
     },
-    get discoveryProvider() {
-      return discoveryProvider;
-    },
     get,
     headers,
     metadata,
-    isFree,
     parsePrefixed,
-    offeringsForSlug,
-    directCandidates,
     refreshCatalogs,
-    listListedModels,
-    listCatalogModels,
-    listModels,
+    refreshCatalogFor,
+    catalogFreeChatModels,
+    buildModelList,
+    setSelectedModels,
     health,
-    discoveryCatalog,
     catalogEntry,
     unavailableFreeModels,
     providerKind,
@@ -744,7 +722,6 @@ export function createProviderRegistry(config, { host, port }) {
     addProvider,
     removeProvider,
     setDefaultProvider,
-    setDiscoveryProvider,
     keySlots,
     rotateKeyCursor,
     markKeyInvalid,

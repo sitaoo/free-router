@@ -113,8 +113,20 @@ const registry = createProviderRegistry(
 );
 
 await registry.refreshCatalogs(true, 0, () => {});
-const listed = registry.listModels();
-const byId = new Map(listed.models.map((model) => [model.id, model]));
+// The pool, not a route list, decides the listing: an allowlisted model plus
+// every zero-cost chat model the priced catalog publishes.
+const { models: listedModels } = registry.buildModelList({
+  entries: [
+    { provider: 'gem', model: 'gemini-x-flash', free: true },
+    ...registry.catalogFreeChatModels(registry.get('or')).map((model) => ({
+      provider: 'or',
+      model: model.id,
+      free: true,
+      catalogModel: model,
+    })),
+  ],
+});
+const byId = new Map(listedModels.map((model) => [model.id, model]));
 
 // The allowlisted Gemini model now carries the sizes its catalog publishes,
 // instead of the zeroes the old listing hard-coded.
@@ -158,12 +170,119 @@ assert.equal(flash.expiration_date, '2027-01-31', 'and shared with the same mode
 assert.equal(byId.has('acme/paid-1'), false);
 assert.equal(byId.has('acme/image-1'), false);
 
-// Allowlisted models come in provider order; catalog models follow, sorted.
-assert.deepEqual(listed.models.map((model) => model.id), [
+// The caller's order is kept: allowlist entry first, catalog entries after.
+assert.deepEqual(listedModels.map((model) => model.id), [
   'gemini-x-flash',
   'google/gemini-x-flash:free',
 ]);
-assert.deepEqual([...listed.ids], ['gemini-x-flash']);
 
+// ---- buildModelList: the pool's listing ----------------------------------
+{
+  const poolListed = registry.buildModelList({
+    aliases: [{ id: 'free-best' }],
+    entries: [
+      { provider: 'gem', model: 'gemini-x-flash', free: true },
+      { provider: 'or', model: 'google/gemini-x-flash:free', free: true },
+      { provider: 'or', model: 'acme/paid-1', free: false, paid: true },
+      // Same bare id as a free entry: a selected paid copy needs a qualified id.
+      { provider: 'or', model: 'google/gemini-x-flash:free', free: false, paid: true },
+      // A provider without a usable key is configured in the UI, not advertised.
+      { provider: 'no-key', model: 'anything', free: true },
+    ],
+  });
+  assert.deepEqual(poolListed.models.map((model) => model.id), [
+    'free-best',
+    'gemini-x-flash',
+    'google/gemini-x-flash:free',
+    'acme/paid-1',
+    'or:google/gemini-x-flash:free',
+  ]);
+  const paid = poolListed.models.find((model) => model.id === 'acme/paid-1');
+  assert.equal(paid.free, false);
+  assert.equal(paid.paid, true);
+  assert.equal(paid.provider, 'or');
+}
+
+// ---- selection is mirrored into live state (and configRef) ---------------
+{
+  const gem = registry.get('gem');
+  assert.deepEqual([...gem.selectedModels], []);
+  registry.setSelectedModels('gem', ['gemini-x-flash', 'gemini-x-flash', '  paid-one ', '']);
+  assert.deepEqual([...gem.selectedModels], ['gemini-x-flash', 'paid-one']);
+  assert.deepEqual(gem.configRef.selectedModels, ['gemini-x-flash', 'paid-one']);
+  registry.setSelectedModels('gem', []);
+}
+
+// ---- freeness semantics follow the fetched rows --------------------------
+// A catalog flagged as priced whose rows carry no prices cannot decide
+// freeness; with probing enabled it becomes probeable instead of yielding an
+// empty free set forever.
+let noPriceMode = 'noprice';
+let brokenStatus = 200;
+const flaky = http.createServer((req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  if (req.url.startsWith('/broken/')) {
+    res.statusCode = brokenStatus;
+    res.end(JSON.stringify({ error: { message: 'boom' } }));
+    return;
+  }
+  if (noPriceMode === 'noprice') {
+    res.end(JSON.stringify({ data: [{ id: 'noprice-1', object: 'model' }] }));
+    return;
+  }
+  if (noPriceMode === 'priced') {
+    res.end(
+      JSON.stringify({
+        data: [{ id: 'priced-1', object: 'model', pricing: { prompt: '0.1', completion: '0.2' } }],
+      }),
+    );
+    return;
+  }
+  res.statusCode = brokenStatus;
+  res.end(JSON.stringify({ error: { message: 'boom' } }));
+});
+await listen(flaky);
+const flakyBase = `http://127.0.0.1:${flaky.address().port}`;
+process.env.FLAKY_KEY = 'flaky-key';
+
+const flakyRegistry = createProviderRegistry(
+  {
+    providers: {
+      noprice: {
+        catalog: true,
+        pricing: true,
+        probeFreeTier: true,
+        baseUrl: `${flakyBase}/v1`,
+        keyEnv: 'FLAKY_KEY',
+      },
+      broken: {
+        catalog: true,
+        pricing: true,
+        baseUrl: `${flakyBase}/broken/v1`,
+        keyEnv: 'FLAKY_KEY',
+      },
+    },
+  },
+  { host: '127.0.0.1', port: 8787 },
+);
+await flakyRegistry.refreshCatalogs(true, 0, () => {});
+assert.equal(flakyRegistry.get('noprice').catalogHasPricing, false, 'no price fields means probing, not pricing');
+assert.equal(flakyRegistry.get('noprice').probeFreeTier, true);
+assert.equal(flakyRegistry.get('broken').catalogHasPricing, true, 'a failed fetch keeps the previous semantics');
+assert.equal(flakyRegistry.get('broken').catalogError !== '', true);
+
+// Same provider, now publishing prices: the flag flips back.
+noPriceMode = 'priced';
+await flakyRegistry.refreshCatalogFor('noprice', true);
+assert.equal(flakyRegistry.get('noprice').catalogHasPricing, true);
+assert.equal(flakyRegistry.get('noprice').probeFreeTier, false);
+
+// Empty catalog is a failure, not evidence of anything.
+noPriceMode = 'empty';
+brokenStatus = 500;
+await flakyRegistry.refreshCatalogFor('noprice', true).catch(() => {});
+assert.equal(flakyRegistry.get('noprice').catalogHasPricing, true, 'an empty/erroring listing never downgrades');
+
+await close(flaky);
 await close(mock);
 console.log('models listing unit tests passed');

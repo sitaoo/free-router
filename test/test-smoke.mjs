@@ -316,7 +316,9 @@ assert.equal(validateSecret('sk-normal-key'), '');
     _removedRoutes: ['r1'],
     _removedProviders: ['p1'],
   });
-  assert.deepEqual(Object.keys(live.routes).sort(), ['r2', 'r3']);
+  // Routes are no longer a feature, so buildLiveConfig ignores the old route
+  // tombstone entirely; only provider tombstones are honoured.
+  assert.deepEqual(Object.keys(live.routes).sort(), ['r1', 'r2', 'r3']);
   assert.deepEqual(live.providers, {});
   // Schema migrations only add missing skeleton keys, never overwrite.
   const overlay = { custom: 'mine', nested: { overrideMe: 'user' } };
@@ -437,6 +439,7 @@ function close(server) {
   return new Promise((resolve) => server.close(resolve));
 }
 
+let paidBrokeRequests = 0;
 const mock = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/api/v1/models') {
     res.setHeader('Content-Type', 'application/json');
@@ -450,6 +453,8 @@ const mock = http.createServer(async (req, res) => {
           'acme/extra-1:free',
           'mock-domain',
           'deepseek-v3.2:free',
+          'acme/paid-broke',
+          'acme/paid-2',
         ].map((id) => ({
           id,
           description:
@@ -457,7 +462,7 @@ const mock = http.createServer(async (req, res) => {
               ? 'A finance-focused mixture-of-experts model for investment research.'
               : 'A general purpose text model.',
           pricing:
-            id === 'mock-b'
+            id === 'mock-b' || id.startsWith('acme/paid-')
               ? { prompt: '0.000001', completion: '0.000001' }
               : { prompt: '0', completion: '0' },
           supported_parameters: ['tools', 'response_format'],
@@ -475,6 +480,12 @@ const mock = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (body.model === 'acme/paid-broke') {
+      paidBrokeRequests += 1;
+      res.writeHead(402, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Insufficient credits on this account.' } }));
+      return;
+    }
     const isEvaluation = body.messages?.some(
       (message) => typeof message.content === 'string' && message.content.includes('OX-RANK-7'),
     );
@@ -1061,6 +1072,9 @@ fs.writeFileSync(
         pricing: true,
         baseUrl: `http://127.0.0.1:${mockPort}/api/v1`,
         keyEnv: 'OPENROUTER_API_KEY',
+        // Two paid models: one the operator selected (callable when named) and
+        // one merely listed (404 unless it is selected).
+        selectedModels: ['mock-b', 'acme/paid-broke'],
       },
       tokenrouter: {
         baseUrl: `http://127.0.0.1:${tokenRouterPort}/api/v1`,
@@ -1108,9 +1122,7 @@ fs.writeFileSync(
     },
     discovery: {
       enabled: true,
-      provider: 'openrouter',
       intervalMs: 604800000,
-      route: 'test-route',
       stateFile: 'discovered-free-models.json',
       exclude: {
         textPatterns: ['\\b(finance|medicine)[\\s-]*focused\\b'],
@@ -1128,22 +1140,6 @@ fs.writeFileSync(
       retentionDays: 3,
       timezone: 'UTC',
       dailyLimits: { 'bai:glm-5.3-flash': 5, 'tokenrouter:*': 50 },
-    },
-    routes: {
-      'test-route': [
-        { provider: 'tokenrouter', model: 'z-ai/glm-5.3-free' },
-        { provider: 'bai', model: 'glm-5.3-flash' },
-        'mock-a',
-        'mock-b',
-        { provider: 'extra', model: 'extra-1' },
-        { provider: 'bai', model: 'glm-withdrawn' },
-        { provider: 'quotamock', model: 'no-free-tier' },
-        { provider: 'quotamock', model: 'daily-exhausted' },
-      ],
-      'tool-fallback': [
-        { provider: 'gemini', model: 'gemini-3.8-flash' },
-        { provider: 'gemini', model: 'gemini-3.7-flash' },
-      ],
     },
   }),
 );
@@ -1193,98 +1189,95 @@ async function waitForHealth() {
 }
 
 try {
-  const health = await waitForHealth();
+  let health = await waitForHealth();
+  // Probing runs in the background by design, so the model pool fills in after
+  // the discovery stamp. Wait for the probe result instead of assuming the
+  // first health response already has it.
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const verdicts = health.discovery?.modelVerdicts || {};
+    if (
+      verdicts['bai:models/glm-5.3-pro'] &&
+      verdicts['bai:models/glm-5.3-paid'] &&
+      verdicts['bai:models/glm-5.3-billed']
+    ) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    health = await fetch(`http://127.0.0.1:${routerPort}/health`).then((res) => res.json());
+  }
   assert.equal(health.version, PACKAGE_VERSION);
-  // mock-new came from the priced catalog; deepseek could not be evaluated so
-  // it keeps the static SWE-bench prior; glm-5.3-pro came from asking bai to
-  // serve a model its price-free catalog says nothing about.
-  assert.deepEqual(health.discovery.addedModels, [
-    'deepseek-v3.2:free',
-    'mock-new',
+  assert.equal(health.defaultModel, 'free-best');
+
+  const freeKeys = health.pool.free.map((entry) => `${entry.provider}:${entry.id}`);
+  const paidKeys = health.pool.paid.map((entry) => `${entry.provider}:${entry.id}`);
+  const entryFor = (key) => health.pool.free.find((entry) => `${entry.provider}:${entry.id}` === key);
+
+  // Free membership comes from the rules alone: catalog prices, provider
+  // verdicts, and each provider's allowlist. No route list exists any more.
+  assert.equal(freeKeys[0], 'tokenrouter:z-ai/glm-5.3-free', 'pinned models lead the pool');
+  assert.equal(freeKeys[1], 'bai:glm-5.3-flash');
+  for (const key of [
+    'openrouter:mock-a',
+    'openrouter:mock-new',
+    'openrouter:acme/extra-1:free',
+    'openrouter:deepseek-v3.2:free',
+    'extra:extra-1',
+    'gemini:gemini-3.8-flash',
+    'gemini:gemini-3.7-flash',
+    'quotamock:no-free-tier',
+    'quotamock:daily-exhausted',
     'bai:models/glm-5.3-pro',
-  ]);
+  ]) {
+    assert.ok(freeKeys.includes(key), `free pool must contain ${key}`);
+  }
+  // Selected paid models live in their own view and are never automatic
+  // fallback material. A paid model nobody selected is not even admitted.
+  assert.deepEqual(paidKeys.sort(), ['openrouter:acme/paid-broke', 'openrouter:mock-b']);
+  assert.equal(freeKeys.includes('openrouter:acme/paid-2'), false);
 
   const probeVerdicts = health.discovery.modelVerdicts;
   assert.equal(probeVerdicts['bai:models/glm-5.3-pro'].free, true);
   assert.match(probeVerdicts['bai:models/glm-5.3-pro'].reason, /served a free-tier request/);
-  // Answered 429 with every free-tier limit at zero, so it never enters a route.
+  // Answered 429 with every free-tier limit at zero, so it never enters the pool.
   assert.equal(probeVerdicts['bai:models/glm-5.3-paid'].free, false);
-  assert.equal(
-    health.routes['test-route'].some((entry) => entry.id.includes('glm-5.3-paid')),
-    false,
-  );
+  assert.equal(freeKeys.some((key) => key.includes('glm-5.3-paid')), false);
   // A 200 that reports a positive cost is paid, whatever the catalog said.
   assert.equal(probeVerdicts['bai:models/glm-5.3-billed'].free, false);
   assert.match(probeVerdicts['bai:models/glm-5.3-billed'].reason, /billing/);
   assert.equal(health.discovery.evaluations['glm-5.3-billed'], undefined);
-  assert.equal(
-    health.routes['test-route'].some((entry) => entry.id.includes('glm-5.3-billed')),
-    false,
-  );
+  assert.equal(freeKeys.some((key) => key.includes('glm-5.3-billed')), false);
   // Not a chat model, so it was filtered out before any request was spent on it.
   assert.equal(probeVerdicts['bai:models/glm-5.3-embed'], undefined);
   // Already configured under a bare id, so the prefixed catalog entry for the
-  // same model must not be probed again or added a second time.
+  // same model must not be probed again or admitted a second time.
   assert.equal(probeVerdicts['bai:models/glm-5.3-flash'], undefined);
-  assert.equal(
-    health.routes['test-route'].filter((entry) => entry.id.includes('glm-5.3-flash')).length,
-    1,
-  );
-  // A domain-tuned model is free and chat-capable, but must not be auto-routed
+  assert.equal(freeKeys.filter((key) => key.endsWith('glm-5.3-flash')).length, 1);
+  // A domain-tuned model is free and chat-capable, but must not join the pool
   // or spend an evaluation on it.
-  assert.deepEqual(health.discovery.excludedModels, ['mock-domain']);
+  assert.deepEqual(health.discovery.excludedModels, ['openrouter:mock-domain']);
   assert.equal(health.discovery.evaluations['mock-domain'], undefined);
-  assert.equal(
-    health.routes['test-route'].some((entry) => entry.id === 'mock-domain'),
-    false,
-  );
-  // mock-new aces the benchmark but the low latency weight no longer lets it
-  // leapfrog mock-a, whose configured anchor score is 90. The quotamock pair
-  // is still present here: nothing has asked them anything yet.
-  assert.deepEqual(
-    health.routes['test-route'].map((entry) => `${entry.provider}:${entry.id}`),
-    [
-      'tokenrouter:z-ai/glm-5.3-free',
-      'bai:glm-5.3-flash',
-      'openrouter:mock-a',
-      'openrouter:mock-new',
-      'extra:extra-1',
-      'openrouter:acme/extra-1:free',
-      'quotamock:no-free-tier',
-      'openrouter:deepseek-v3.2:free',
-      'quotamock:daily-exhausted',
-      'bai:models/glm-5.3-pro',
-    ],
-  );
+  assert.equal(freeKeys.includes('openrouter:mock-domain'), false);
+
   const mockNewEvaluation = health.discovery.evaluations['mock-new'];
   assert.equal(mockNewEvaluation.version, 2);
   assert.equal(mockNewEvaluation.benchmarkScore, 65);
   assert.equal(mockNewEvaluation.metadataScore, 12);
   assert.equal(mockNewEvaluation.latencyScore, 6);
-  // mock-a keeps its configured anchor (90) plus the capped capability
-  // portrait from its catalog entry (tools + structured + text = 12 -> +8).
-  const mockAEntry = health.routes['test-route'].find(
-    (entry) => `${entry.provider}:${entry.id}` === 'openrouter:mock-a',
-  );
-  assert.equal(mockAEntry.baseScore, 98);
-  assert.equal(mockAEntry.scoreSource, 'baseline');
+  // A free catalog model with no hand-written anchor is ranked by its
+  // evaluation, not by its position in a route.
+  const mockAEntry = entryFor('openrouter:mock-a');
+  assert.equal(mockAEntry.baseScore, 83);
+  assert.equal(mockAEntry.score, 83);
+  assert.equal(mockAEntry.scoreSource, 'evaluation');
   // Its evaluation failed, so ranking falls back to the shipped SWE-bench
   // prior instead of treating the model as unranked.
-  const sweEntry = health.routes['test-route'].find(
-    (entry) => `${entry.provider}:${entry.id}` === 'openrouter:deepseek-v3.2:free',
-  );
+  const sweEntry = entryFor('openrouter:deepseek-v3.2:free');
   assert.equal(sweEntry.baseScore, 73.1);
   assert.equal(sweEntry.score, 73.1);
   assert.equal(sweEntry.scoreSource, 'swe-bench');
-  assert.equal(
-    health.routes['test-route'].find(
-      (entry) => `${entry.provider}:${entry.id}` === 'openrouter:mock-new',
-    ).scoreSource,
-    'evaluation',
-  );
+  assert.equal(entryFor('openrouter:mock-new').scoreSource, 'evaluation');
   assert.equal(mockNewEvaluation.score, 83);
   assert.equal(health.defaultProvider, 'openrouter');
-  assert.equal(health.discovery.provider, 'openrouter');
   assert.equal(health.providers.openrouter.kind, 'catalog');
   assert.equal(health.providers.tokenrouter.kind, 'static');
   assert.equal(health.providers.extra.configured, true);
@@ -1299,54 +1292,48 @@ try {
   // difference must not read as a withdrawal.
   assert.deepEqual(health.providers.bai.unavailableModels, ['glm-withdrawn']);
   assert.deepEqual(health.discovery.unavailableModels, ['bai:glm-withdrawn']);
-  assert.equal(
-    health.routes['test-route'].some((entry) => entry.id === 'glm-withdrawn'),
-    false,
-  );
+  assert.equal(freeKeys.includes('bai:glm-withdrawn'), false);
   // An allowlisted model is free by configuration, so a catalog without prices
   // must not make it look paid.
-  assert.equal(
-    health.routes['test-route'].find((entry) => entry.id === 'glm-5.3-flash').zeroCost,
-    true,
-  );
+  assert.equal(entryFor('bai:glm-5.3-flash').free, true);
   // extra's catalog request fails, which must leave its allowlist authoritative
-  // instead of dropping the provider from the route.
+  // instead of dropping the provider from the pool.
   assert.equal(health.providers.extra.kind, 'static+catalog');
   assert.deepEqual(health.providers.extra.unavailableModels, []);
-  assert.equal(
-    health.routes['test-route'].some((entry) => entry.id === 'extra-1'),
-    true,
-  );
+  assert.ok(freeKeys.includes('extra:extra-1'));
   assert.ok(health.providers.extra.catalogError);
-  assert.deepEqual(health.discovery.removedModels, ['mock-b']);
+  // Priced catalog models never become removal news: they were never free.
+  assert.deepEqual(health.discovery.removedModels, []);
   assert.equal(health.discovery.evaluations['mock-new'].status, 'scored');
-  assert.equal(
-    JSON.parse(fs.readFileSync(path.join(tempDir, 'discovered-free-models.json'), 'utf8'))
-      .addedModels[0],
-    'deepseek-v3.2:free',
+  const persistedFree = JSON.parse(
+    fs.readFileSync(path.join(tempDir, 'discovered-free-models.json'), 'utf8'),
   );
+  assert.ok(persistedFree.freeModels.includes('openrouter:mock-a'));
+  assert.deepEqual(persistedFree.paymentBlocks, {});
   const modelsResponse = await fetch(`http://127.0.0.1:${routerPort}/v1/models`);
   assert.equal(modelsResponse.status, 200);
   const models = await modelsResponse.json();
-  // Exclusion only removes a model from automatic ranking. It stays listed and
-  // callable by explicit ID, since asking for it by name is a deliberate choice.
+  // The alias leads, then the free pool in routing order, then the paid models
+  // the operator selected. An excluded model is not advertised at all, and a
+  // paid model nobody selected stays out too.
   assert.deepEqual(
     models.data.map((model) => model.id),
     [
-      'test-route',
-      'tool-fallback',
+      'free-best',
       'z-ai/glm-5.3-free',
       'glm-5.3-flash',
-      'extra-1',
+      'acme/extra-1:free',
       'gemini-3.8-flash',
       'gemini-3.7-flash',
+      'extra-1',
       'no-free-tier',
       'daily-exhausted',
-      'acme/extra-1:free',
-      'deepseek-v3.2:free',
       'mock-a',
-      'mock-domain',
       'mock-new',
+      'deepseek-v3.2:free',
+      'models/glm-5.3-pro',
+      'mock-b',
+      'acme/paid-broke',
     ],
   );
   // Every listed entry carries the standard OpenAI model fields plus whatever
@@ -1383,8 +1370,62 @@ try {
   });
   assert.equal(oversized.status, 503);
   assert.equal((await oversized.json()).error.type, 'no_compatible_free_model');
+
+  // A paid model runs only when the request names it, and only when the
+  // operator selected it.
+  const paidNamed = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'mock-b', messages: [{ role: 'user', content: 'paid' }] }),
+  });
+  assert.equal(paidNamed.status, 200);
+  assert.equal(paidNamed.headers.get('x-free-router-provider'), 'openrouter');
+  const unselectedPaid = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'openrouter:acme/paid-2',
+      messages: [{ role: 'user', content: 'not selected' }],
+    }),
+  });
+  assert.equal(unselectedPaid.status, 404);
+  assert.equal((await unselectedPaid.json()).error.type, 'model_not_enabled');
+  const unknownModel = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'definitely-not-a-model', messages: [{ role: 'user', content: 'x' }] }),
+  });
+  assert.equal(unknownModel.status, 404);
+  assert.equal((await unknownModel.json()).error.type, 'model_not_found');
+
+  // Insufficient funds parks only that provider:model for 24h. The second
+  // call is answered locally, so the upstream sees the failure exactly once.
+  const brokeFirst = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'acme/paid-broke', messages: [{ role: 'user', content: 'x' }] }),
+  });
+  assert.equal(brokeFirst.status, 402);
+  const brokeBody = await brokeFirst.json();
+  assert.equal(brokeBody.error.type, 'insufficient_funds');
+  assert.ok(Number(brokeFirst.headers.get('retry-after')) > 3600);
+  const brokeSecond = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'acme/paid-broke', messages: [{ role: 'user', content: 'x' }] }),
+  });
+  assert.equal(brokeSecond.status, 402);
+  assert.equal(paidBrokeRequests, 1, 'a blocked paid model must not reach upstream again');
+  const blockedHealth = await fetch(`http://127.0.0.1:${routerPort}/health`).then((res) => res.json());
+  const blockUntil = Date.parse(blockedHealth.paymentBlocks['openrouter:acme/paid-broke']?.until);
+  assert.ok(blockUntil > Date.now(), 'the block must be persisted with its expiry');
+  const blockedEntry = blockedHealth.pool.paid.find((entry) => entry.id === 'acme/paid-broke');
+  assert.ok(blockedEntry.blockedUntil, 'the paid view must show the block');
+  // The free pool is untouched by a paid model's billing problem.
+  assert.ok(blockedHealth.pool.free.some((entry) => entry.id === 'mock-a'));
+  // No model at all: the alias means "best free model", and the pinned
+  // tokenrouter model fails over to the next pinned one.
   const request = {
-    model: 'test-route',
     messages: [{ role: 'user', content: 'force-token-failure' }],
   };
 
@@ -1560,7 +1601,7 @@ try {
   const updatedHealth = await fetch(`http://127.0.0.1:${routerPort}/health`).then((res) =>
     res.json(),
   );
-  assert.equal(updatedHealth.lastSelection.route, 'z-ai/glm-5.3-free');
+  assert.equal(updatedHealth.lastSelection.requested, 'z-ai/glm-5.3-free');
   assert.equal(updatedHealth.lastSelection.provider, 'tokenrouter');
   assert.equal(updatedHealth.lastSelection.model, 'z-ai/glm-5.3-free');
   const directBaiResponse = await fetch(
@@ -1719,7 +1760,7 @@ try {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'tool-fallback',
+      model: 'gemini:gemini-3.8-flash',
       messages: [
         { role: 'user', content: 'force-thought-signature-400' },
         {
@@ -1764,7 +1805,7 @@ try {
   assert.equal(verdicts['quotamock:no-free-tier'].free, false);
   assert.match(verdicts['quotamock:no-free-tier'].reason, /no free-tier allowance/);
   assert.equal(
-    quotaHealth.routes['test-route'].some((entry) => entry.id === 'no-free-tier'),
+    quotaHealth.pool.free.some((entry) => entry.id === 'no-free-tier'),
     false,
   );
 
@@ -1773,7 +1814,7 @@ try {
   // though no dailyLimits entry exists for it in config.
   assert.equal(verdicts['quotamock:daily-exhausted'].free, true);
   assert.equal(verdicts['quotamock:daily-exhausted'].dailyRequestLimit, 20);
-  const exhaustedEntry = quotaHealth.routes['test-route'].find(
+  const exhaustedEntry = quotaHealth.pool.free.find(
     (entry) => entry.id === 'daily-exhausted',
   );
   assert.equal(exhaustedEntry.usage.dailyLimit, 20);
@@ -1835,7 +1876,10 @@ try {
       'extra:extra-1',
       'gemini:gemini-3.8-flash',
       'openrouter:acme/extra-1:free',
+      'openrouter:acme/paid-broke',
       'openrouter:deepseek-v3.2:free',
+      'openrouter:mock-a',
+      'openrouter:mock-b',
       'openrouter:mock-new',
       'quotamock:daily-exhausted',
       'quotamock:no-free-tier',
@@ -1853,15 +1897,18 @@ try {
   assert.equal(usageByKey.get('gemini:gemini-3.8-flash').ok, 5);
   assert.equal(usageByKey.get('gemini:gemini-3.8-flash').fail, 1);
   assert.equal(usageByKey.has('gemini:gemini-3.7-flash'), false);
-  // Eight from routing, plus two served probes on bai (one free, one billed
-  // and therefore not routed), plus five Gemini tool-call round trips, plus
-  // three /v1/responses round trips on tokenrouter.
-  assert.equal(usage.days[0].ok, 18);
+  // Ten from routing (the alias pair, the direct calls, the failover, the
+  // selected paid call and the redaction probe), four catalog/allowlist
+  // evaluations, two served probes on bai (one free, one billed and therefore
+  // not routed), five Gemini tool-call round trips, and three /v1/responses
+  // round trips on tokenrouter.
+  assert.equal(usage.days[0].ok, 21);
   assert.equal(usageByKey.get('bai:models/glm-5.3-billed').ok, 1);
   // Three routing failures, the two deliberate quota rejections, the probe
   // that found glm-5.3-paid has no free allowance, the purposefully failed
-  // deepseek evaluation, and one forced Gemini thought-signature 400.
-  assert.equal(usage.days[0].fail, 8);
+  // deepseek evaluation, one forced Gemini thought-signature 400, and the
+  // paid model's 402.
+  assert.equal(usage.days[0].fail, 9);
   assert.equal(usage.days[0].topModel.key, 'gemini:gemini-3.8-flash');
 
   // A daily limit only counts attempts the provider actually served, so the
@@ -1877,21 +1924,22 @@ try {
   // A 429 never reaches the model, so it does not burn today's consumed count.
   assert.equal(usageByKey.get('quotamock:no-free-tier').today.consumed, 0);
 
-  const routeEntry = usageHealth.routes['test-route'].find(
+  const routeEntry = usageHealth.pool.free.find(
     (entry) => `${entry.provider}:${entry.id}` === 'bai:glm-5.3-flash',
   );
   assert.equal(routeEntry.usage.today.ok, 4);
   assert.equal(routeEntry.usage.remainingToday, 1);
 
   const routeByKey = new Map(
-    usageHealth.routes['test-route'].map((entry) => [`${entry.provider}:${entry.id}`, entry]),
+    usageHealth.pool.free.map((entry) => [`${entry.provider}:${entry.id}`, entry]),
   );
   // extra:extra-1 served 1 of 2 attempts, but the miss was a rateLimit
-  // (capacity, not model quality), so the quality score stays put.
+  // (capacity, not model quality), so the quality score stays put. Its anchor
+  // is now its position in the allowlist, not a route row.
   const extraEntry = routeByKey.get('extra:extra-1');
-  assert.equal(extraEntry.baseScore, 82);
+  assert.equal(extraEntry.baseScore, 94);
   assert.equal(extraEntry.scoreAdjustment, 0);
-  assert.equal(extraEntry.score, 82);
+  assert.equal(extraEntry.score, 94);
   assert.equal(extraEntry.scoreSource, 'baseline');
   assert.equal(routeByKey.get('openrouter:deepseek-v3.2:free').scoreSource, 'swe-bench');
   // Pinned models are exempt from reliability adjustment.
@@ -1899,23 +1947,25 @@ try {
   // Pinned sits above the 0-100 scale but stays finite (was +Infinity,
   // which serialized as null).
   assert.equal(routeByKey.get('bai:glm-5.3-flash').score, 150);
-  // A group is ranked by its best provider, so the sibling's clean record keeps
-  // the pair in place instead of the whole model sinking.
-  assert.equal(routeByKey.get('openrouter:acme/extra-1:free').scoreAdjustment, 0);
+  // A group is ranked by its best provider: the sibling served both of its
+  // attempts (the evaluation and the failover), so it earns the full bonus.
+  assert.equal(routeByKey.get('openrouter:acme/extra-1:free').scoreAdjustment, 12);
   // Both quotamock models answered 429 earlier, yet only the one with no free
   // allowance is gone. The exhausted one is still a free model and comes back
   // when its quota resets, so it keeps its place.
   assert.deepEqual(
-    usageHealth.routes['test-route'].map((entry) => `${entry.provider}:${entry.id}`),
+    usageHealth.pool.free.map((entry) => `${entry.provider}:${entry.id}`),
     [
       'tokenrouter:z-ai/glm-5.3-free',
       'bai:glm-5.3-flash',
+      'openrouter:acme/extra-1:free',
+      'gemini:gemini-3.8-flash',
+      'gemini:gemini-3.7-flash',
+      'extra:extra-1',
+      'quotamock:daily-exhausted',
       'openrouter:mock-a',
       'openrouter:mock-new',
-      'extra:extra-1',
-      'openrouter:acme/extra-1:free',
       'openrouter:deepseek-v3.2:free',
-      'quotamock:daily-exhausted',
       'bai:models/glm-5.3-pro',
     ],
   );
@@ -1945,7 +1995,9 @@ try {
   );
   const pageHtml = await pageResponse.text();
   assert.match(pageHtml, /Provider keys/);
-  assert.match(pageHtml, /Route priority/);
+  assert.match(pageHtml, /Pool priority/);
+  assert.doesNotMatch(pageHtml, /data-tab="routes"/);
+  assert.doesNotMatch(pageHtml, /data-tab="quota"/);
   assert.match(pageHtml, /<link rel="icon" type="image\/svg\+xml" href="\/favicon\.svg">/);
   // The icon belongs to the login screen, so it must load with no session, and
   // the page's own CSP forbids external assets — it has to come from here.
@@ -2017,7 +2069,9 @@ try {
   assert.equal(uiProviders.get('bai').maskedKey.includes('bai-test-key'), false);
   assert.equal(JSON.stringify(authedState).includes('bai-test-key'), false);
   assert.ok(authedState.usage.models.length > 0);
-  assert.ok(authedState.routes.length > 0);
+  assert.ok(authedState.pool.free.length > 0);
+  assert.equal(authedState.routes, undefined);
+  assert.equal(authedState.allRoutes, undefined);
 
   // The interface warns about a rejection only when it contradicts config.json.
   // quotamock:no-free-tier was written into the route by hand, so its refusal is
@@ -2119,29 +2173,15 @@ try {
     false,
   );
 
-  // Editable-config endpoints: routes, limits, discovery, settings, providers.
+  // Editable-config endpoints: limits, discovery, settings, providers. The
+  // route endpoint is gone, not merely hidden.
   assert.ok(afterClear.editable);
-  assert.ok(afterClear.allRoutes['test-route']);
-  const saveRoute = await fetch(`${base}/api/routes`, {
+  const routesGone = await fetch(`${base}/api/routes`, {
     method: 'POST',
     headers: uiHeaders,
-    body: JSON.stringify({ action: 'save', route: 'smoke-tmp', models: ['mock-a', 'tokenrouter:z-ai/glm-5.3-free'] }),
+    body: JSON.stringify({ action: 'save', route: 'smoke-tmp', models: ['mock-a'] }),
   });
-  assert.equal(saveRoute.status, 200);
-  const withRoute = await fetch(`${base}/api/state`, { headers: { Cookie: sessionCookie } }).then((res) => res.json());
-  assert.deepEqual(withRoute.editable.routes['smoke-tmp'], ['mock-a', 'tokenrouter:z-ai/glm-5.3-free']);
-  const badRoute = await fetch(`${base}/api/routes`, {
-    method: 'POST',
-    headers: uiHeaders,
-    body: JSON.stringify({ action: 'save', route: 'smoke-tmp', models: ['tokenrouter:'] }),
-  });
-  assert.equal(badRoute.status, 400);
-  const delRoute = await fetch(`${base}/api/routes`, {
-    method: 'POST',
-    headers: uiHeaders,
-    body: JSON.stringify({ action: 'delete', route: 'smoke-tmp' }),
-  });
-  assert.equal(delRoute.status, 200);
+  assert.equal(routesGone.status, 404);
 
   const setLimit = await fetch(`${base}/api/limits`, {
     method: 'POST',
@@ -2269,6 +2309,19 @@ try {
   // The probe flag applies to the live provider object, so no restart note and
   // no stale state.
   assert.equal((await providerFlags()).probeFreeTier, false);
+  // Explicit selection is deduplicated, trimmed, and mirrored into state, so
+  // the picker can show exactly what the operator enabled.
+  const selectModels = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({
+      action: 'update',
+      name: 'smokeprov',
+      selectedModels: ['smoke-paid', ' smoke-1 ', 'smoke-paid', ''],
+    }),
+  });
+  assert.equal(selectModels.status, 200);
+  assert.deepEqual((await providerFlags()).selectedModels, ['smoke-paid', 'smoke-1']);
   const dupProv = await fetch(`${base}/api/providers`, {
     method: 'POST',
     headers: uiHeaders,
@@ -2299,7 +2352,11 @@ try {
   assert.ok(Array.isArray(fetchedBody.models) && fetchedBody.models.length > 0);
   const byId = new Map(fetchedBody.models.map((m) => [m.id, m]));
   assert.equal(byId.get('mock-a')?.free, true);
+  assert.equal(byId.get('mock-a')?.paid, false);
+  // Priced listings are labelled paid; a listing that publishes no prices is
+  // unknown, which the UI must treat as billable until proven otherwise.
   assert.equal(byId.get('mock-b')?.free, false);
+  assert.equal(byId.get('mock-b')?.paid, true);
   const fetchBad = await fetch(`${base}/api/providers`, {
     method: 'POST',
     headers: uiHeaders,
@@ -2322,6 +2379,7 @@ try {
   assert.equal(keyedFetch.status, 200);
   const keyedBody = await keyedFetch.json();
   assert.deepEqual(keyedBody.models.map((m) => m.id), ['keyed-1']);
+  assert.equal(keyedBody.models[0].unknown, true);
   assert.equal(keyedCatalogAuth, 'Bearer keyed-secret');
   // An explicit base URL still wins, so an edited-but-unsaved URL can be
   // tried before it is saved.

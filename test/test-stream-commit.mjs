@@ -103,21 +103,15 @@ fs.writeFileSync(
       mock: {
         baseUrl: `http://127.0.0.1:${mockPort}`,
         keyEnv: 'STREAM_COMMIT_API_KEY',
-        freeModels: ['slow-think', 'slow-hollow', 'fast-empty', 'fallback-ok'],
+        // The automatic pool tries the list in this order, so the failing
+        // empty stream comes before the healthy fallback.
+        freeModels: ['fast-empty', 'fallback-ok', 'slow-think', 'slow-hollow'],
         chatPath: '/chat/completions',
       },
     },
     discovery: { enabled: false },
     cooldownMs: {},
     usage: { retentionDays: 3, timezone: 'UTC' },
-    routes: {
-      'stream-best': [{ provider: 'mock', model: 'slow-think' }],
-      'hollow-route': [{ provider: 'mock', model: 'slow-hollow' }],
-      'failover-route': [
-        { provider: 'mock', model: 'fast-empty' },
-        { provider: 'mock', model: 'fallback-ok' },
-      ],
-    },
     webui: { enabled: false },
     gateway: { requireAuth: false, keys: [] },
   }),
@@ -182,7 +176,7 @@ try {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'stream-best',
+        model: 'slow-think',
         messages: [{ role: 'user', content: 'hi' }],
         stream: true,
         stream_options: { include_usage: true },
@@ -196,13 +190,13 @@ try {
     assert.match(text, /thinking-/);
   }
 
-  // 2. Fast reasoning-only streams still fail over instead of committing.
+  // 2. Fast reasoning-only streams still fail over instead of committing. No
+  // model means the automatic free pool, which starts with the empty stream.
   {
     const response = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'failover-route',
         messages: [{ role: 'user', content: 'hi' }],
         stream: true,
       }),
@@ -220,7 +214,7 @@ try {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'hollow-route',
+        model: 'slow-hollow',
         messages: [{ role: 'user', content: 'hi' }],
         stream: true,
       }),
