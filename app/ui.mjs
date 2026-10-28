@@ -385,7 +385,7 @@ td.muted { color: var(--muted); }
 /* Wide tables scroll inside their card instead of widening the page: the
    model ids and provider URLs are wider than a phone viewport, and an
    auto-sized grid item would otherwise push the whole page sideways. */
-#usage, #routes, #providers, #limits-table, #gateway { overflow-x: auto; }
+#usage, #pool, #providers, #gateway { overflow-x: auto; }
 [data-pane], [data-pane] > section, .sec-body { min-width: 0; }
 
 /* ===== Pills ===== */
@@ -615,8 +615,6 @@ body[data-gate="1"] main#app { display: none; }
       <button data-tab="status" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg><span data-i18n="tab_status">Status</span></button>
       <button data-tab="access"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg><span data-i18n="tab_access">Access</span></button>
       <button data-tab="providers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h20v6H2zM2 15h20v6H2zM6 6h.01M6 18h.01"/></svg><span data-i18n="tab_providers">Providers</span></button>
-      <button data-tab="routes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 19a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 7a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM9 16h6a3 3 0 0 0 3-3V8"/></svg><span data-i18n="tab_routes">Routes</span></button>
-      <button data-tab="quota"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 14l4-4M3.34 19a10 10 0 1 1 17.32 0"/></svg><span data-i18n="tab_quota">Quota</span></button>
       <button data-tab="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg><span data-i18n="tab_settings">Settings</span></button>
     </nav>
     <div class="head-actions">
@@ -639,10 +637,10 @@ body[data-gate="1"] main#app { display: none; }
     </section>
     <section>
       <div class="sec-head">
-        <h2 data-i18n="route_priority">Route priority</h2>
-        <p id="routes-blurb"></p>
+        <h2 data-i18n="pool_priority">Pool priority</h2>
+        <p id="pool-blurb"></p>
       </div>
-      <div class="sec-body"><div id="routes"></div></div>
+      <div class="sec-body"><div id="pool"></div></div>
     </section>
   </div>
 
@@ -674,50 +672,6 @@ body[data-gate="1"] main#app { display: none; }
         <div id="providers"></div>
       </div>
     </section>
-  </div>
-
-  <div id="provider-modal" class="overlay" hidden>
-    <div class="modal" role="dialog" aria-modal="true">
-      <div class="row" style="justify-content:space-between;align-items:center">
-        <h3 id="provider-modal-title" style="margin:0"></h3>
-        <button class="icononly" id="provider-modal-x" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
-      </div>
-      <div id="provider-modal-body"></div>
-    </div>
-  </div>
-
-  <div data-pane="routes" hidden>
-    <section>
-      <div class="sec-head"><h2 data-i18n="routes_title">Routes</h2><p data-i18n="routes_blurb">Order the gateway tries models in. Entries are <span class="mono">provider:model</span> or plain model ids. Adding a model auto-allows it for price-free providers.</p></div>
-      <div class="sec-body">
-        <div class="row">
-          <label><span data-i18n="route_label">Route</span> <select id="route-select"></select></label>
-          <button id="route-new" data-i18n="route_new">New route</button>
-          <button class="quiet" id="route-del" data-i18n="route_del">Delete route</button>
-        </div>
-        <div id="route-entries"></div>
-        <div class="row">
-          <input id="route-add" class="mono" data-i18n-ph="route_add_ph" placeholder="provider:model or model id" style="flex:1;min-width:200px">
-          <button id="route-add-btn" data-i18n="route_add">Add</button>
-          <button class="primary" id="route-save" data-i18n="route_save">Save route</button>
-        </div>
-        <p class="note" id="route-note"></p>
-      </div>
-    </section>
-  </div>
-
-  <div data-pane="quota" hidden>
-    <section>
-      <div class="sec-head"><h2 data-i18n="limits_title">Daily limits</h2><p data-i18n="limits_blurb">Config quota per model. Limits reported by the provider itself stay authoritative.</p></div>
-      <div class="sec-body">
-        <div id="limits-table"></div>
-        <div class="row">
-          <input id="limit-key" class="mono" data-i18n-ph="limit_key_ph" placeholder="provider:model" style="max-width:260px">
-          <input id="limit-val" class="mono" data-i18n-ph="limit_val_ph" placeholder="requests/day" style="max-width:140px">
-          <button class="primary" id="limit-add" data-i18n="limit_add">Set limit</button>
-        </div>
-      </div>
-    </section>
     <section>
       <div class="sec-head"><h2 data-i18n="disc_title">Discovery</h2><p data-i18n="disc_blurb">Automatic free-model discovery and ranking.</p></div>
       <div class="sec-body">
@@ -731,16 +685,9 @@ body[data-gate="1"] main#app { display: none; }
         <div class="setrow">
           <div class="set-text">
             <div class="set-title" data-i18n="disc_eval">Model evaluation</div>
-            <div class="set-desc" data-i18n="disc_eval_desc">Benchmark new models once before they join routes.</div>
+            <div class="set-desc" data-i18n="disc_eval_desc">Benchmark new models once before they join the pool.</div>
           </div>
           <div class="set-ctl"><label class="switch"><input type="checkbox" id="disc-eval"><span class="slider"></span></label></div>
-        </div>
-        <div class="setrow">
-          <div class="set-text">
-            <div class="set-title" data-i18n="disc_provider">Provider</div>
-            <div class="set-desc" data-i18n="disc_provider_desc">Which catalog to discover from.</div>
-          </div>
-          <div class="set-ctl"><select id="disc-provider"></select></div>
         </div>
         <div class="setrow">
           <div class="set-text">
@@ -754,6 +701,7 @@ body[data-gate="1"] main#app { display: none; }
           <button id="disc-run" class="quiet" data-i18n="disc_run">Run now</button>
         </div>
         <p class="note" id="disc-note"></p>
+        <div id="disc-progress"></div>
         <div id="pinned-list"></div>
         <div class="row">
           <input id="pin-input" class="mono" data-i18n-ph="pin_ph" placeholder="pin model, e.g. gemini:gemini-3.8-flash" style="flex:1;min-width:200px">
@@ -761,6 +709,16 @@ body[data-gate="1"] main#app { display: none; }
         </div>
       </div>
     </section>
+  </div>
+
+  <div id="provider-modal" class="overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h3 id="provider-modal-title" style="margin:0"></h3>
+        <button class="icononly" id="provider-modal-x" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>
+      <div id="provider-modal-body"></div>
+    </div>
   </div>
 
   <div data-pane="settings" hidden>
@@ -1057,10 +1015,8 @@ function renderAll() {
   renderGateway();
   renderServer();
   renderProviders();
-  renderRoutes();
+  renderPool();
   renderUsage();
-  renderRouteEditor();
-  renderLimits();
   renderDiscovery();
   renderTuning();
   renderMigration();
@@ -1129,7 +1085,13 @@ function pill(text, kind) {
 
 function providerRowCounts(provider) {
   const q = (v) => (v === null || v === undefined ? '?' : v);
-  return { models: q(provider.modelCount), free: q(provider.freeCount) };
+  const pool = provider.poolCounts || {};
+  return {
+    models: q(provider.modelCount),
+    free: q(provider.freeCount),
+    paid: pool.paid ?? 0,
+    blocked: pool.blocked ?? 0,
+  };
 }
 
 let modalReturnFocus = null;
@@ -1177,7 +1139,7 @@ function renderProviders() {
   const tbl = document.createElement('table');
   const head = document.createElement('thead');
   const headRow = document.createElement('tr');
-  for (const key of ['pt_name', 'pt_url', 'pt_keys', 'pt_models', 'pt_free']) {
+  for (const key of ['pt_name', 'pt_url', 'pt_keys', 'pt_models', 'pt_free', 'pt_paid', 'pt_blocked']) {
     const th = document.createElement('th');
     th.textContent = t(key);
     headRow.appendChild(th);
@@ -1206,10 +1168,21 @@ function renderProviders() {
     const freeTd = document.createElement('td');
     freeTd.className = 'num';
     freeTd.textContent = counts.free;
+    const paidTd = document.createElement('td');
+    paidTd.className = 'num';
+    paidTd.textContent = counts.paid;
+    const blockedTd = document.createElement('td');
+    blockedTd.className = 'num';
+    blockedTd.textContent = counts.blocked;
     const opsTd = document.createElement('td');
+    const modelsBtn = document.createElement('button');
+    modelsBtn.className = 'quiet';
+    modelsBtn.textContent = t('prov_models_manage');
+    modelsBtn.onclick = () => openProviderModels(provider);
     const manage = document.createElement('button');
     manage.className = 'quiet';
     manage.textContent = t('prov_manage');
+    manage.onclick = () => openProviderKeys(provider);
     const del = document.createElement('button');
     del.className = 'quiet danger';
     del.textContent = t('del');
@@ -1226,24 +1199,35 @@ function renderProviders() {
         toast(String(error.message || error), 'err');
       }
     };
+    opsTd.appendChild(modelsBtn);
     opsTd.appendChild(manage);
     opsTd.appendChild(del);
-    tr.append(nameTd, urlTd, keysTd, modelsTd, freeTd, opsTd);
+    tr.append(nameTd, urlTd, keysTd, modelsTd, freeTd, paidTd, blockedTd, opsTd);
     body.appendChild(tr);
-    manage.onclick = () => {
-      openProviderModal('edit', provider);
-      const modalBody = el('provider-modal-body');
-      const curTitle = document.createElement('h4');
-      curTitle.textContent = t('prov_current_models');
-      modalBody.appendChild(curTitle);
-      modalBody.appendChild(buildProviderDetail(provider));
-      const addTitle = document.createElement('h4');
-      addTitle.textContent = t('prov_add_models');
-      modalBody.appendChild(addTitle);
-      modalBody.appendChild(buildModelPicker(provider));
-    };
   }
   el('keys-blurb').textContent = t('keys_blurb', { file: state.overlayFile, format: state.configFormat });
+}
+
+function openProviderKeys(provider) {
+  openProviderModal('edit', provider);
+  const body = el('provider-modal-body');
+  body.textContent = '';
+  body.appendChild(buildProviderDetail(provider));
+}
+
+// The model table is the one place free/paid membership is decided. It is
+// rebuilt after each save so the checkboxes and limits always show live state.
+function openProviderModels(provider) {
+  openProviderModal('edit', provider);
+  el('provider-modal-title').textContent = t('prov_modal_models', { p: provider.name });
+  const body = el('provider-modal-body');
+  const paint = () => {
+    const latest = (state.providers || []).find((entry) => entry.name === provider.name) || provider;
+    body.textContent = '';
+    body.appendChild(buildProviderDefaultLimit(latest, paint));
+    body.appendChild(buildModelTable(latest, paint));
+  };
+  paint();
 }
 
 // Static fallback for presets whose sibling provider is absent (deleted or
@@ -1261,7 +1245,7 @@ const PROVIDER_PRESETS = {
   huggingface: { baseUrl: 'https://router.huggingface.co/v1', catalog: true, pricing: false },
 };
 
-function renderModelList(box, ids, freeSet, truncated) {
+function renderModelList(box, ids, freeSet, truncated, classes) {
   box.textContent = '';
   if (!ids.length) {
     const p = document.createElement('p');
@@ -1281,10 +1265,13 @@ function renderModelList(box, ids, freeSet, truncated) {
     const boxEl = document.createElement('input');
     boxEl.type = 'checkbox';
     boxEl.dataset.model = id;
+    const cls = classes?.[id] || (freeSet.has(id) ? 'free' : 'paid');
+    boxEl.dataset.cls = cls;
     if (freeSet.has(id)) boxEl.checked = true;
     const text = document.createElement('span');
     text.className = 'mono';
-    text.textContent = id + (freeSet.has(id) ? '' : ' ' + t('prov_paid_tag'));
+    text.textContent =
+      id + (cls === 'free' ? '' : ' ' + (cls === 'unknown' ? t('prov_unknown_tag') : t('prov_paid_tag')));
     label.append(boxEl, text);
     box.appendChild(label);
   }
@@ -1359,11 +1346,13 @@ function buildProviderForm() {
         method: 'POST',
         body: JSON.stringify({ action: 'fetch-models', baseUrl, key: keyField.value.trim() }),
       });
+      const listed = result.models || [];
       renderModelList(
         modelsBox,
-        (result.models || []).map((m) => m.id),
-        new Set((result.models || []).filter((m) => m.free).map((m) => m.id)),
+        listed.map((m) => m.id),
+        new Set(listed.filter((m) => m.free).map((m) => m.id)),
         Boolean(result.truncated),
+        Object.fromEntries(listed.map((m) => [m.id, m.free ? 'free' : m.unknown ? 'unknown' : 'paid'])),
       );
       if (!result.models.length) toast(t('prov_no_catalog'), 'err');
     } catch (error) {
@@ -1445,7 +1434,13 @@ function buildProviderForm() {
       modelsBox.appendChild(p);
       return;
     }
-    renderModelList(modelsBox, ids, new Set(sibling.catalogFreeIds || []), Boolean(sibling.catalogTruncated));
+    renderModelList(
+      modelsBox,
+      ids,
+      new Set(sibling.catalogFreeIds || []),
+      Boolean(sibling.catalogTruncated),
+      sibling.catalogClasses || {},
+    );
   }
   function fillFromPreset() {
     const preset = presetSelect.value;
@@ -1466,11 +1461,31 @@ function buildProviderForm() {
     const name = nameField.value.trim().toLowerCase();
     const baseUrl = urlField.value.trim();
     if (!name || !baseUrl) { toast(t('np_need'), 'err'); return; }
-    const checked = [...modelsBox.querySelectorAll('input[type="checkbox"]:checked')]
-      .map((box) => box.dataset.model)
-      .filter(Boolean);
+    const picked = [...modelsBox.querySelectorAll('input[type="checkbox"]:checked')]
+      .map((box) => ({ id: box.dataset.model, cls: box.dataset.cls || 'unknown' }))
+      .filter((entry) => entry.id);
     const typed = modelsField.value.split(',').map((s) => s.trim()).filter(Boolean);
-    const freeModels = [...new Set([...checked, ...typed])];
+    // A priced catalog decides freeness itself, so a typed id there is an
+    // explicit selection (and may cost money); an unpriced provider treats it
+    // as an allowlist entry, which is what made it callable before.
+    const freeModels = [
+      ...new Set([
+        ...picked.filter((entry) => entry.cls === 'free').map((entry) => entry.id),
+        ...(pricingBox.checked ? [] : typed),
+      ]),
+    ];
+    const selectedModels = [
+      ...new Set([
+        ...picked.filter((entry) => entry.cls !== 'free').map((entry) => entry.id),
+        ...(pricingBox.checked ? typed : []),
+      ]),
+    ];
+    if (selectedModels.length) {
+      const warning = picked.some((entry) => entry.cls === 'unknown')
+        ? t('unknown_model_warning')
+        : t('paid_model_warning');
+      if (!confirm(warning + '\\n\\n' + selectedModels.join('\\n'))) return;
+    }
     save.disabled = true;
     try {
       await api('api/providers', {
@@ -1483,6 +1498,7 @@ function buildProviderForm() {
           pricing: pricingBox.checked,
           probeFreeTier: probeBox.checked,
           freeModels,
+          selectedModels,
         }),
       });
       const key = keyField.value.trim();
@@ -1671,96 +1687,250 @@ function buildProviderDetail(provider) {
   };
   probeRow.append(probeLabel, probeText);
   adv.appendChild(probeRow);
-
-  const fmWrap = document.createElement('div');
-  fmWrap.style.marginTop = '8px';
-  const fmLabel = document.createElement('div');
-  fmLabel.className = 'prov-hint';
-  fmLabel.textContent = detail.pricing ? t('fm_priced') : t('fm_allow');
-  fmWrap.appendChild(fmLabel);
-  for (const model of detail.freeModels || []) {
-    const chip = document.createElement('span');
-    chip.className = 'chip';
-    const id = document.createElement('span');
-    id.className = 'mono';
-    id.textContent = model;
-    const rm = document.createElement('button');
-    rm.className = 'danger';
-    rm.appendChild(svgIcon('x'));
-    rm.title = t('rm_model_title', { m: model });
-    rm.onclick = async () => {
-      try {
-        await api('api/providers', {
-          method: 'POST',
-          body: JSON.stringify({
-            action: 'update',
-            name: provider.name,
-            freeModels: (detail.freeModels || []).filter((entry) => entry !== model),
-          }),
-        });
-        toast(t('removed_model', { m: model }), 'good');
-        await load();
-      } catch (error) {
-        toast(String(error.message || error), 'err');
-      }
-    };
-    chip.appendChild(id);
-    chip.appendChild(rm);
-    fmWrap.appendChild(chip);
-  }
-  const fmRow = document.createElement('div');
-  fmRow.className = 'row';
-  const fmField = document.createElement('input');
-  fmField.className = 'mono';
-  fmField.placeholder = t('fm_add_ph');
-  fmField.style.maxWidth = '240px';
-  const fmAdd = document.createElement('button');
-  fmAdd.textContent = t('fm_add');
-  fmAdd.onclick = async () => {
-    const value = fmField.value.trim();
-    if (!value) return;
-    try {
-      await api('api/providers', {
-        method: 'POST',
-        body: JSON.stringify({
-          action: 'update',
-          name: provider.name,
-          freeModels: [...(detail.freeModels || []), value],
-        }),
-      });
-      toast(t('added_model', { m: value }), 'good');
-      await load();
-    } catch (error) {
-      toast(String(error.message || error), 'err');
-    }
-  };
-  fmRow.appendChild(fmField);
-  fmRow.appendChild(fmAdd);
-  fmWrap.appendChild(fmRow);
-  adv.appendChild(fmWrap);
   return fieldCell;
 }
 
-// Add-models picker for the edit modal: catalog checkbox list (shared
-// renderModelList) plus manual entry, saved via update {freeModels:[...]}.
-// Union-only: unchecking here never removes; removal stays on the × chips
-// in buildProviderDetail.
-function buildModelPicker(provider) {
+// Provider-wide default (provider:*) for requests/day. A per-model limit
+// below overrides it; the input is blank when the provider has no default.
+function buildProviderDefaultLimit(provider, refresh) {
   const wrap = document.createElement('div');
-  const box = document.createElement('div');
-  wrap.appendChild(box);
-  const detail = (state.editable && state.editable.providers || []).find((entry) => entry.name === provider.name) || {};
-  const current = new Set(detail.freeModels || []);
-  const paint = (ids, freeSet, truncated) => {
-    const checked = new Set(freeSet);
-    for (const id of current) if (ids.includes(id)) checked.add(id);
-    renderModelList(box, ids, checked, truncated);
+  wrap.className = 'setrow';
+  const text = document.createElement('div');
+  text.className = 'set-text';
+  const title = document.createElement('div');
+  title.className = 'set-title';
+  title.textContent = t('prov_default_limit', { key: provider.name + ':*' });
+  const desc = document.createElement('div');
+  desc.className = 'set-desc';
+  desc.textContent = t('prov_default_limit_desc');
+  text.append(title, desc);
+  const ctl = document.createElement('div');
+  ctl.className = 'set-ctl';
+  const input = document.createElement('input');
+  input.className = 'mono';
+  input.type = 'number';
+  input.min = '1';
+  input.style.maxWidth = '110px';
+  input.placeholder = t('pm_limit_ph');
+  const key = provider.name + ':*';
+  const configured = ((state.editable && state.editable.limits) || []).find((entry) => entry.key === key);
+  if (configured) input.value = configured.limit;
+  input.onchange = async () => {
+    input.disabled = true;
+    try {
+      if (!input.value.trim()) {
+        await api('api/limits', { method: 'POST', body: JSON.stringify({ action: 'delete', key }) });
+        toast(t('limit_deleted', { key }), 'good');
+      } else {
+        const limit = Number(input.value);
+        if (!Number.isFinite(limit) || limit <= 0) { toast(t('limit_need'), 'err'); return; }
+        await api('api/limits', { method: 'POST', body: JSON.stringify({ action: 'set', key, limit }) });
+        toast(t('limit_set', { key }), 'good');
+      }
+      await load();
+      refresh();
+    } catch (error) {
+      toast(String(error.message || error), 'err');
+    } finally {
+      input.disabled = false;
+    }
   };
-  paint(
-    Array.isArray(provider.catalogIds) ? provider.catalogIds : [],
-    new Set(provider.catalogFreeIds || []),
-    Boolean(provider.catalogTruncated),
-  );
+  ctl.appendChild(input);
+  wrap.append(text, ctl);
+  return wrap;
+}
+
+function modelWarning(cls) {
+  return cls === 'unknown' ? t('unknown_model_warning') : t('paid_model_warning');
+}
+
+function saveProviderModels(provider, { freeModels, selectedModels }, refresh) {
+  return api('api/providers', {
+    method: 'POST',
+    body: JSON.stringify({
+      action: 'update',
+      name: provider.name,
+      ...(freeModels === undefined ? {} : { freeModels }),
+      ...(selectedModels === undefined ? {} : { selectedModels }),
+    }),
+  }).then(async () => {
+    toast(t('saved'), 'good');
+    await load();
+    refresh();
+  });
+}
+
+// One table for every model of a provider: catalog rows plus explicitly
+// selected ids. Free rows decided by the rules are checked and locked; paid
+// and unknown rows need a confirmation before they join the pool.
+function buildModelTable(provider, refresh) {
+  const wrap = document.createElement('div');
+  wrap.id = 'prov-model-table';
+  const detail =
+    ((state.editable && state.editable.providers) || []).find((entry) => entry.name === provider.name) || {};
+  const priced = detail.pricing === true;
+  const members = new Map((provider.models || []).map((entry) => [entry.id, entry]));
+  const ids = [];
+  for (const id of provider.catalogIds || []) if (!ids.includes(id)) ids.push(id);
+  for (const id of provider.models || []) if (!ids.includes(id.id)) ids.push(id.id);
+  for (const id of detail.selectedModels || []) if (!ids.includes(id)) ids.push(id);
+
+  if (priced) {
+    const note = document.createElement('p');
+    note.className = 'note';
+    note.textContent = t('paid_model_warning');
+    wrap.appendChild(note);
+  }
+  if ((provider.models || []).some((entry) => entry.unknown) || (provider.catalogClasses && Object.values(provider.catalogClasses).includes('unknown'))) {
+    const note = document.createElement('p');
+    note.className = 'note';
+    note.textContent = t('unknown_model_warning');
+    wrap.appendChild(note);
+  }
+
+  const rows = ids.map((id) => {
+    const member = members.get(id);
+    const catalogClass = (provider.catalogClasses || {})[id];
+    // Without a usable key the provider contributes no pool entries, but the
+    // allowlist and selections are still configured and must show as such.
+    const configuredFree = !priced && (detail.freeModels || []).includes(id);
+    const configuredSelected = (detail.selectedModels || []).includes(id);
+    const sourceKind = member?.source || (configuredFree ? 'allowlist' : configuredSelected ? 'selected' : '');
+    // An id the pool did not admit is not known to be free, even when its
+    // catalog row claims zero: a probe or an exclusion kept it out.
+    const cls = member
+      ? member.free
+        ? 'free'
+        : member.unknown
+          ? 'unknown'
+          : 'paid'
+      : configuredFree
+        ? 'free'
+        : catalogClass === 'paid'
+          ? 'paid'
+          : 'unknown';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = Boolean(member) || configuredFree || configuredSelected;
+    const locked = Boolean(member && member.free && member.source === 'auto');
+    box.disabled = locked;
+    box.title = locked ? t('pm_locked_hint') : '';
+    box.onchange = async () => {
+      box.disabled = true;
+      const freeModels = [...(detail.freeModels || [])];
+      const selectedModels = [...(detail.selectedModels || [])];
+      try {
+        if (!box.checked) {
+          if (sourceKind === 'allowlist') {
+            await saveProviderModels(provider, { freeModels: freeModels.filter((entry) => entry !== id) }, refresh);
+          } else if (sourceKind === 'selected') {
+            await saveProviderModels(provider, { selectedModels: selectedModels.filter((entry) => entry !== id) }, refresh);
+          } else {
+            // A free model that was auto-discovered cannot be removed; the
+            // rules would put it straight back.
+            box.checked = true;
+          }
+        } else if (!priced && cls === 'free') {
+          await saveProviderModels(provider, { freeModels: [...new Set([...freeModels, id])] }, refresh);
+        } else {
+          if (!confirm(modelWarning(cls) + '\\n\\n' + provider.name + ':' + id)) {
+            box.checked = false;
+            return;
+          }
+          await saveProviderModels(provider, { selectedModels: [...new Set([...selectedModels, id])] }, refresh);
+        }
+      } catch (error) {
+        box.checked = !box.checked;
+        toast(String(error.message || error), 'err');
+      } finally {
+        box.disabled = locked;
+      }
+    };
+
+    const stateCell = document.createElement('span');
+    if (member?.blockedUntil) {
+      stateCell.appendChild(pill(t('st_blocked', { at: new Date(member.blockedUntil).toLocaleString(lang) }), 'bad'));
+    } else if (member?.cooldownSeconds > 0) {
+      stateCell.appendChild(pill(t('st_cooldown', { n: member.cooldownSeconds }), 'warn'));
+    } else if (!provider.configured) {
+      stateCell.appendChild(pill(t('st_nokey'), 'no'));
+    } else if (member) {
+      stateCell.appendChild(pill(t('st_ready'), 'ok'));
+    } else {
+      stateCell.appendChild(pill(t('st_not_selected'), 'no'));
+    }
+
+    const label =
+      cls === 'free' ? pill(t('st_free'), 'ok') : cls === 'paid' ? pill(t('st_paid'), 'warn') : pill(t('st_unknown'), 'no');
+    const source =
+      sourceKind === 'auto'
+        ? t('st_auto')
+        : sourceKind === 'allowlist'
+          ? t('st_allowlist')
+          : sourceKind === 'selected'
+            ? t('st_selected')
+            : '-';
+    const limit = document.createElement('input');
+    limit.className = 'mono';
+    limit.type = 'number';
+    limit.min = '1';
+    limit.style.maxWidth = '90px';
+    limit.placeholder = t('pm_limit_ph');
+    if (member?.dailyLimit) limit.value = member.dailyLimit;
+    limit.title = member?.dailyLimitSource ? t('score_source', { source: member.dailyLimitSource }) : '';
+    const limitKey = provider.name + ':' + id;
+    limit.onchange = async () => {
+      limit.disabled = true;
+      try {
+        if (!limit.value.trim()) {
+          await api('api/limits', { method: 'POST', body: JSON.stringify({ action: 'delete', key: limitKey }) });
+          toast(t('limit_deleted', { key: limitKey }), 'good');
+        } else {
+          const value = Number(limit.value);
+          if (!Number.isFinite(value) || value <= 0) { toast(t('limit_need'), 'err'); return; }
+          await api('api/limits', { method: 'POST', body: JSON.stringify({ action: 'set', key: limitKey, limit: value }) });
+          toast(t('limit_set', { key: limitKey }), 'good');
+        }
+        await load();
+        refresh();
+      } catch (error) {
+        toast(String(error.message || error), 'err');
+      } finally {
+        limit.disabled = false;
+      }
+    };
+
+    return [
+      td(box),
+      td(id, 'mono'),
+      td(label),
+      td(source, 'muted'),
+      td(stateCell),
+      td(limit),
+    ];
+  });
+
+  if (ids.length) {
+    wrap.appendChild(
+      table(
+        [
+          { label: t('pm_on') },
+          { label: t('pm_model') },
+          { label: t('pm_label') },
+          { label: t('pm_source') },
+          { label: t('pm_state') },
+          { label: t('pm_limit') },
+        ],
+        rows,
+      ),
+    );
+  } else {
+    const empty = document.createElement('p');
+    empty.className = 'note';
+    empty.textContent = t('prov_no_catalog');
+    wrap.appendChild(empty);
+  }
+
   const row = document.createElement('div');
   row.className = 'row';
   const field = document.createElement('input');
@@ -1780,43 +1950,53 @@ function buildModelPicker(provider) {
         method: 'POST',
         body: JSON.stringify({ action: 'fetch-models', provider: provider.name }),
       });
-      paint(
-        (result.models || []).map((m) => m.id),
-        new Set((result.models || []).filter((m) => m.free).map((m) => m.id)),
-        Boolean(result.truncated),
-      );
       if (!result.models.length) toast(t('prov_no_catalog'), 'err');
+      await load();
+      refresh();
     } catch (error) {
       toast(String(error.message || error), 'err');
     } finally {
       fetchBtn.disabled = false;
     }
   };
-  const save = document.createElement('button');
-  save.className = 'primary';
-  save.textContent = t('fm_add');
-  save.onclick = async () => {
-    const checked = [...box.querySelectorAll('input[type="checkbox"]:checked')]
-      .map((item) => item.dataset.model)
-      .filter(Boolean);
+  const add = document.createElement('button');
+  add.className = 'primary';
+  add.textContent = t('fm_add');
+  add.onclick = async () => {
     const typed = field.value.split(',').map((s) => s.trim()).filter(Boolean);
-    const freeModels = [...new Set([...(detail.freeModels || []), ...checked, ...typed])];
-    if (!freeModels.length) return;
-    save.disabled = true;
-    try {
-      await api('api/providers', {
-        method: 'POST',
-        body: JSON.stringify({ action: 'update', name: provider.name, freeModels }),
-      });
-      toast(t('saved'), 'good');
-      await load();
-      closeProviderModal();
-    } catch (error) {
-      toast(String(error.message || error), 'err');
-      save.disabled = false;
+    if (!typed.length) return;
+    if (priced) {
+      if (!confirm(modelWarning('unknown') + '\\n\\n' + typed.join('\\n'))) return;
+      add.disabled = true;
+      try {
+        await saveProviderModels(
+          provider,
+          { selectedModels: [...new Set([...(detail.selectedModels || []), ...typed])] },
+          refresh,
+        );
+        field.value = '';
+      } catch (error) {
+        toast(String(error.message || error), 'err');
+      } finally {
+        add.disabled = false;
+      }
+    } else {
+      add.disabled = true;
+      try {
+        await saveProviderModels(
+          provider,
+          { freeModels: [...new Set([...(detail.freeModels || []), ...typed])] },
+          refresh,
+        );
+        field.value = '';
+      } catch (error) {
+        toast(String(error.message || error), 'err');
+      } finally {
+        add.disabled = false;
+      }
     }
   };
-  row.append(field, fetchBtn, save);
+  row.append(field, fetchBtn, add);
   wrap.appendChild(row);
   return wrap;
 }
@@ -1914,8 +2094,6 @@ function renderServer() {
 }
 
 let activeTab = 'status';
-let draftRoute = '';
-let draftEntries = [];
 
 function switchTab(name) {
   activeTab = name;
@@ -2051,165 +2229,128 @@ function renderUsage() {
   ));
 }
 
-function routeStatusFor(routeName, modelString) {
-  const entries = (state.allRoutes && state.allRoutes[routeName]) || [];
-  const match = (entry) => {
-    const id = entry.id || '';
-    if (modelString.includes(':') && entry.provider) {
-      return entry.provider + ':' + id === modelString;
-    }
-    return id === modelString || ('openrouter:' + id) === modelString;
-  };
-  return entries.find(match) || null;
+
+// The pool is the whole routing truth now: free models in ranking order, then
+// the paid models that only a request naming them can use.
+function poolTable(entries) {
+  return table(
+    [
+      { label: t('th_num'), num: true },
+      { label: t('th_status') },
+      { label: t('th_provider') },
+      { label: t('th_model') },
+      { label: t('th_score'), num: true },
+      { label: t('th_used'), num: true },
+    ],
+    entries.map((entry) => {
+      let status = t('st_ready');
+      let kind = 'ok';
+      if (entry.blockedUntil) {
+        status = t('st_blocked', { at: new Date(entry.blockedUntil).toLocaleString(lang) });
+        kind = 'bad';
+      } else if (entry.cooldownSeconds > 0) {
+        status = t('st_cooldown', { n: entry.cooldownSeconds });
+        kind = 'warn';
+      }
+      const used = entry.usage ? entry.usage.today.consumed : 0;
+      const scoreCell = td(
+        Number.isFinite(entry.score) && entry.score >= 0 ? String(entry.score) : '-',
+        'num',
+      );
+      scoreCell.title = t('score_source', { source: entry.scoreSource });
+      return [
+        td(String(entry.priority), 'num'),
+        td(pill(status, kind)),
+        td(entry.provider, 'muted'),
+        td(entry.id + (entry.pinned ? '  *' : ''), 'mono'),
+        scoreCell,
+        td(used || '-', 'num'),
+      ];
+    }),
+  );
 }
 
-function renderRouteEditor() {
-  const select = el('route-select');
-  const names = Object.keys(state.editable.routes || {});
-  const current = names.includes(draftRoute) ? draftRoute : (state.route || names[0]);
-  select.textContent = '';
-  for (const name of names) {
-    const option = document.createElement('option');
-    option.value = name;
-    option.textContent = name + (name === state.route ? t('route_disc_suffix') : '');
-    select.appendChild(option);
-  }
-  select.value = current;
-  if (draftRoute !== current) {
-    draftRoute = current;
-    draftEntries = [...(state.editable.routes[current] || [])];
-  }
-  const host = el('route-entries');
+function renderPool() {
+  const host = el('pool');
   host.textContent = '';
-  draftEntries.forEach((modelString, index) => {
-    const line = document.createElement('div');
-    line.className = 'entry';
-    const num = document.createElement('span');
-    num.className = 'idx';
-    num.textContent = '#' + (index + 1);
+  el('pool-blurb').textContent = t('pool_blurb', {
+    today: state.usage.today,
+    tz: state.usage.timezone,
+  });
+  const pool = state.pool || { free: [], paid: [] };
+  host.appendChild(poolTable(pool.free || []));
+
+  const paidTitle = document.createElement('h4');
+  paidTitle.textContent = t('pool_paid_title');
+  host.appendChild(paidTitle);
+  const paidNote = document.createElement('p');
+  paidNote.className = 'note';
+  paidNote.textContent = t('pool_paid_note');
+  host.appendChild(paidNote);
+  if ((pool.paid || []).length) {
+    host.appendChild(poolTable(pool.paid));
+  } else {
+    const empty = document.createElement('p');
+    empty.className = 'note';
+    empty.style.margin = '0';
+    empty.textContent = t('pool_paid_empty');
+    host.appendChild(empty);
+  }
+
+  const note = document.createElement('p');
+  note.className = 'note';
+  note.textContent = t('pinned_note');
+  host.appendChild(note);
+
+  if (state.unavailableModels && state.unavailableModels.length) {
+    const gone = document.createElement('p');
+    gone.className = 'note';
+    gone.appendChild(pill(t('withdrawn'), 'warn'));
+    gone.appendChild(document.createTextNode(' ' + t('withdrawn_note') + ' '));
+    const ids = document.createElement('span');
+    ids.className = 'mono';
+    ids.textContent = state.unavailableModels.join(', ');
+    gone.appendChild(ids);
+    host.appendChild(gone);
+  }
+
+  for (const entry of state.excludedByProvider || []) {
+    const line = document.createElement('p');
+    line.className = 'note';
+    line.appendChild(pill(t('notfree_badge'), 'bad'));
+    line.appendChild(document.createTextNode(' '));
     const id = document.createElement('span');
     id.className = 'mono';
-    id.textContent = modelString;
-    const st = document.createElement('span');
-    st.className = 'st';
-    const status = routeStatusFor(current, modelString);
-    if (!status) st.textContent = t('st_unsaved');
-    else if (!status.providerConfigured) st.textContent = t('st_nokey');
-    else if (status.zeroCost === false) st.textContent = t('st_paid');
-    else if (status.cooldownSeconds > 0) st.textContent = t('st_cooldown', { n: status.cooldownSeconds });
-    else st.textContent = t('st_ready');
-    const up = document.createElement('button');
-    up.appendChild(svgIcon('up'));
-    up.title = t('route_move_up');
-    up.disabled = index === 0;
-    up.onclick = () => {
-      draftEntries.splice(index - 1, 0, draftEntries.splice(index, 1)[0]);
-      renderRouteEditor();
-    };
-    const down = document.createElement('button');
-    down.appendChild(svgIcon('down'));
-    down.title = t('route_move_down');
-    down.disabled = index === draftEntries.length - 1;
-    down.onclick = () => {
-      draftEntries.splice(index + 1, 0, draftEntries.splice(index, 1)[0]);
-      renderRouteEditor();
-    };
-    const rm = document.createElement('button');
-    rm.className = 'danger';
-    rm.appendChild(svgIcon('x'));
-    rm.title = t('route_remove');
-    rm.onclick = () => {
-      draftEntries.splice(index, 1);
-      renderRouteEditor();
-    };
-    line.appendChild(num);
+    id.textContent = entry.key;
     line.appendChild(id);
-    line.appendChild(st);
-    line.appendChild(up);
-    line.appendChild(down);
-    line.appendChild(rm);
+    line.appendChild(document.createTextNode(' ' + t('notfree_mid') + ' ' + entry.reason + t('notfree_end')));
     host.appendChild(line);
-  });
-  // An empty discovery route has nothing to edit, so offer the live ranking it
-  // would have: one click seeds the draft with a discovered model.
-  const live = current === state.route ? state.routes || [] : [];
-  if (!draftEntries.length && live.length) {
-    const hint = document.createElement('p');
-    hint.className = 'note';
-    hint.textContent = t('route_suggestions');
-    host.appendChild(hint);
-    for (const entry of live.slice(0, 12)) {
-      const modelString = entry.provider + ':' + entry.model;
-      const line = document.createElement('div');
-      line.className = 'entry';
-      const id = document.createElement('span');
-      id.className = 'mono';
-      id.textContent = modelString;
-      const st = document.createElement('span');
-      st.className = 'st';
-      st.textContent =
-        Number.isFinite(entry.score) && entry.score >= 0 ? String(entry.score) : '-';
-      const add = document.createElement('button');
-      add.textContent = '+';
-      add.title = t('route_add');
-      add.onclick = () => {
-        draftEntries.push(modelString);
-        renderRouteEditor();
-      };
-      line.append(id, st, add);
-      host.appendChild(line);
-    }
   }
-  el('route-note').textContent = draftEntries.length ? t('route_unsaved_note') : t('route_empty');
-}
-
-function renderLimits() {
-  const host = el('limits-table');
-  host.textContent = '';
-  const limits = (state.editable && state.editable.limits) || [];
-  if (!limits.length) {
-    const p = document.createElement('p');
-    p.className = 'note';
-    p.style.margin = '0';
-    p.textContent = t('limits_empty');
-    host.appendChild(p);
-    return;
-  }
-  host.appendChild(table(
-    [{ label: t('th_model') }, { label: t('th_limit_day'), num: true }, { label: t('th_source') }, { label: '' }],
-    limits.map((entry) => {
-      const del = document.createElement('button');
-      del.className = 'quiet danger';
-      del.textContent = t('del');
-      del.onclick = async () => {
-        try {
-          await api('api/limits', { method: 'POST', body: JSON.stringify({ action: 'delete', key: entry.key }) });
-          toast(t('limit_deleted', { key: entry.key }), 'good');
-          await load();
-        } catch (error) {
-          toast(String(error.message || error), 'err');
-        }
-      };
-      return [td(entry.key, 'mono'), td(String(entry.limit), 'num'), td(entry.source), td(del)];
-    }),
-  ));
 }
 
 function renderDiscovery() {
-  const disc = state.editable.discovery;
+  const disc = state.editable.discovery || {};
   el('disc-enabled').checked = Boolean(disc.enabled);
   el('disc-eval').checked = Boolean(disc.evaluationEnabled);
-  const providerSelect = el('disc-provider');
-  providerSelect.textContent = '';
-  for (const provider of state.providers) {
-    const option = document.createElement('option');
-    option.value = provider.name;
-    option.textContent = provider.name;
-    providerSelect.appendChild(option);
-  }
-  providerSelect.value = disc.provider;
   el('disc-interval').value = disc.intervalHours;
-  el('disc-note').innerHTML = t('disc_note', { route: disc.route });
+  el('disc-note').textContent = t('disc_note');
+
+  const progress = el('disc-progress');
+  progress.textContent = '';
+  const probing = (state.providers || []).filter(
+    (provider) => provider.probing || (provider.probePending || 0) > 0,
+  );
+  if (probing.length) {
+    const line = document.createElement('p');
+    line.className = 'note';
+    line.style.margin = '0';
+    const pending = probing.reduce((sum, provider) => sum + (provider.probePending || 0), 0);
+    line.textContent =
+      t('disc_probing', { p: probing.map((provider) => provider.name).join(', ') }) +
+      (pending ? ' ' + t('disc_probe_pending', { n: pending }) : '');
+    progress.appendChild(line);
+  }
+
   const host = el('pinned-list');
   host.textContent = '';
   for (const model of disc.pinnedModels || []) {
@@ -2718,71 +2859,6 @@ function bindOnce() {
   el('login-pass').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') doLogin();
   });
-  el('route-select').onchange = () => {
-    draftRoute = el('route-select').value;
-    draftEntries = [...(state.editable.routes[draftRoute] || [])];
-    renderRouteEditor();
-  };
-  el('route-add-btn').onclick = () => {
-    const value = el('route-add').value.trim();
-    if (!value) return;
-    if (draftEntries.includes(value)) { toast(t('route_in_list'), 'err'); return; }
-    draftEntries.push(value);
-    el('route-add').value = '';
-    renderRouteEditor();
-  };
-  el('route-save').onclick = async () => {
-    try {
-      const result = await api('api/routes', {
-        method: 'POST',
-        body: JSON.stringify({ action: 'save', route: draftRoute, models: draftEntries }),
-      });
-      if ((result.notes || []).length) toast(result.notes.join(' '), 'good');
-      toast(t('route_saved', { r: draftRoute, n: result.count }), 'good');
-      await load();
-    } catch (error) {
-      toast(String(error.message || error), 'err');
-    }
-  };
-  el('route-new').onclick = async () => {
-    const name = prompt(t('route_new_prompt'), 'my-route');
-    if (!name) return;
-    try {
-      await api('api/routes', { method: 'POST', body: JSON.stringify({ action: 'save', route: name.trim(), models: [] }) });
-      draftRoute = name.trim();
-      draftEntries = [];
-      toast(t('route_created', { r: draftRoute }), 'good');
-      await load();
-    } catch (error) {
-      toast(String(error.message || error), 'err');
-    }
-  };
-  el('route-del').onclick = async () => {
-    if (!confirm(t('route_confirm_del', { r: draftRoute }))) return;
-    try {
-      await api('api/routes', { method: 'POST', body: JSON.stringify({ action: 'delete', route: draftRoute }) });
-      draftRoute = '';
-      draftEntries = [];
-      toast(t('route_deleted'), 'good');
-      await load();
-    } catch (error) {
-      toast(String(error.message || error), 'err');
-    }
-  };
-  el('limit-add').onclick = async () => {
-    const key = el('limit-key').value.trim();
-    const limit = Number(el('limit-val').value);
-    if (!key || !Number.isFinite(limit)) { toast(t('limit_need'), 'err'); return; }
-    try {
-      await api('api/limits', { method: 'POST', body: JSON.stringify({ action: 'set', key, limit }) });
-      el('limit-key').value = '';
-      el('limit-val').value = '';
-      toast(t('limit_set', { key }), 'good');
-      await load();
-    } catch (error) {
-      toast(String(error.message || error), 'err');
-    }
-  };
   el('disc-save').onclick = async () => {
     try {
       const result = await api('api/discovery', {
@@ -2790,7 +2866,6 @@ function bindOnce() {
         body: JSON.stringify({
           enabled: el('disc-enabled').checked,
           evaluationEnabled: el('disc-eval').checked,
-          provider: el('disc-provider').value,
           intervalHours: Number(el('disc-interval').value),
         }),
       });
@@ -2891,77 +2966,11 @@ async function load() {
   renderAll();
 }
 
-function renderRoutes() {
-  const host = el('routes');
-  host.textContent = '';
-  el('routes-blurb').innerHTML = t('routes_blurb', { today: state.usage.today, tz: state.usage.timezone });
-  const rows = state.routes.map((entry) => {
-    let status = t('st_ready');
-    let kind = 'ok';
-    if (!entry.providerConfigured) { status = t('st_nokey'); kind = 'no'; }
-    else if (entry.zeroCost === false) { status = t('st_paid'); kind = 'bad'; }
-    else if (entry.cooldownSeconds > 0) { status = t('st_cooldown', { n: entry.cooldownSeconds }); kind = 'warn'; }
-    const used = entry.usage ? entry.usage.today.consumed : 0;
-    const scoreCell = td(
-      Number.isFinite(entry.score) && entry.score >= 0 ? String(entry.score) : '-',
-      'num',
-    );
-    scoreCell.title = t('score_source', { source: entry.scoreSource });
-    return [
-      td(String(entry.priority), 'num'),
-      td(pill(status, kind)),
-      td(entry.provider, 'muted'),
-      td(entry.model + (entry.pinned ? '  *' : ''), 'mono'),
-      scoreCell,
-      td(used || '-', 'num'),
-    ];
-  });
-  host.appendChild(table(
-    [
-      { label: t('th_num'), num: true },
-      { label: t('th_status') },
-      { label: t('th_provider') },
-      { label: t('th_model') },
-      { label: t('th_score'), num: true },
-      { label: t('th_used'), num: true },
-    ],
-    rows,
-  ));
-  const note = document.createElement('p');
-  note.className = 'note';
-  note.textContent = t('pinned_note');
-  host.appendChild(note);
-
-  if (state.unavailableModels && state.unavailableModels.length) {
-    const gone = document.createElement('p');
-    gone.className = 'note';
-    gone.appendChild(pill(t('withdrawn'), 'warn'));
-    gone.appendChild(document.createTextNode(' ' + t('withdrawn_note') + ' '));
-    const ids = document.createElement('span');
-    ids.className = 'mono';
-    ids.textContent = state.unavailableModels.join(', ');
-    gone.appendChild(ids);
-    host.appendChild(gone);
-  }
-
-  for (const entry of state.excludedByProvider || []) {
-    const line = document.createElement('p');
-    line.className = 'note';
-    line.appendChild(pill(t('notfree_badge'), 'bad'));
-    line.appendChild(document.createTextNode(' '));
-    const id = document.createElement('span');
-    id.className = 'mono';
-    id.textContent = entry.key;
-    line.appendChild(id);
-    line.appendChild(document.createTextNode(' ' + t('notfree_mid') + ' ' + entry.reason + t('notfree_end')));
-    host.appendChild(line);
-  }
-}
 
 // Status tab auto-refresh: poll /api/state every 5s while the status pane
-// is visible. Skips when another tab is active (so route drafts and form
-// inputs elsewhere are never clobbered), when the page is hidden, when
-// logged out, or when a previous poll is still in flight.
+// is visible. Skips when another tab is active (so form inputs elsewhere are
+// never clobbered), when the page is hidden, when logged out, or when a
+// previous poll is still in flight.
 const STATUS_REFRESH_MS = 5000;
 let statusRefreshing = false;
 function startStatusAutoRefresh() {
@@ -2980,10 +2989,37 @@ function startStatusAutoRefresh() {
   }, STATUS_REFRESH_MS);
 }
 
+// Background probing is deliberately non-blocking: a newly added provider
+// drains its catalog over several batches. While it does, keep the Providers
+// tab live so discovered free models appear without a reload. The modal is
+// left alone; only the page state refreshes.
+const PROVIDERS_REFRESH_MS = 3000;
+let providersRefreshing = false;
+function startProvidersAutoRefresh() {
+  if (startProvidersAutoRefresh.done) return;
+  startProvidersAutoRefresh.done = true;
+  setInterval(async () => {
+    if (activeTab !== 'providers' || document.hidden || !state || providersRefreshing) return;
+    const probing = (state.providers || []).some(
+      (provider) => provider.probing || (provider.probePending || 0) > 0,
+    );
+    if (!probing) return;
+    providersRefreshing = true;
+    try {
+      await load();
+    } catch (error) {
+      // load() already surfaces login/toast feedback.
+    } finally {
+      providersRefreshing = false;
+    }
+  }, PROVIDERS_REFRESH_MS);
+}
+
 // Bind buttons before the first load: an unauthenticated visit fails
 // /api/state and returns early, which must not leave the login button dead.
 bindOnce();
 startStatusAutoRefresh();
+startProvidersAutoRefresh();
 load().catch((error) => toast(String(error.message || error), 'err'));
 </script>
 </body>

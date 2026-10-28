@@ -17,12 +17,13 @@ assert.match(page, /id="theme-btn"/, 'theme toggle button');
 assert.match(page, /THEME_ORDER\s*=\s*\[/, 'three-state cycle');
 assert.match(page, /prefers-color-scheme: dark/, 'system preference respected');
 
-// Navigation: six tabs, each with an inline SVG icon (no character icons).
+// Navigation: four tabs (Routes and Quota were folded into the pool and
+// Providers), each with an inline SVG icon (no character icons).
 const navStart = page.indexOf('id="tabs"');
 const navEnd = page.indexOf('</nav>', navStart);
 assert.ok(navStart !== -1 && navEnd > navStart, 'header nav present');
 const nav = page.slice(navStart, navEnd);
-assert.equal((nav.match(/<svg/g) || []).length, 6, 'six nav icons');
+assert.equal((nav.match(/<svg/g) || []).length, 4, 'four nav icons');
 assert.doesNotMatch(nav, /⧉|▦|⚙|●|○|▸|▾/, 'no character icons in nav');
 
 // Login gate hides the app chrome until auth succeeds.
@@ -31,10 +32,10 @@ assert.match(page, /body\[data-gate="1"\] header/, 'gate hides topbar');
 assert.match(page, /document\.body\.dataset\.gate/, 'JS toggles gate');
 
 // Structure the rest of the page/tests depend on survives.
-for (const id of ['usage', 'routes', 'providers', 'gateway', 'tabs', 'login', 'toast']) {
+for (const id of ['usage', 'pool', 'providers', 'gateway', 'tabs', 'login', 'toast']) {
   assert.ok(page.includes(`id="${id}"`), `#${id} still present`);
 }
-assert.ok(page.indexOf('id="usage"') < page.indexOf('id="routes"'), 'usage before routes');
+assert.ok(page.indexOf('id="usage"') < page.indexOf('id="pool"'), 'usage before pool');
 
 // Inline scripts must parse as one program. This catches duplicate top-level
 // declarations across <script> blocks, which node --check cannot see and which
@@ -44,14 +45,15 @@ assert.equal(inline.length >= 2, true, 'page has boot and runtime scripts');
 assert.doesNotThrow(() => new Function(inline.join('\n')), 'inline scripts must parse together');
 
 // Provider/discovery controls: verified presets, a probe toggle, a manual run,
-// and live suggestions when the discovery route is empty.
+// and the paid-model warning in the model table.
 for (const preset of ['groq', 'cerebras', 'mistral', 'huggingface']) {
   assert.match(page, new RegExp(`${preset}:\\s*\\{ baseUrl:`), `${preset} preset missing`);
 }
 assert.match(page, /np-probe/, 'probe-free-tier toggle missing from provider form');
 assert.match(page, /id="disc-run"/, 'manual discovery button missing');
 assert.match(page, /runNow:\s*true/, 'manual discovery must send runNow');
-assert.match(page, /route_suggestions/, 'empty-route live ranking hint missing');
+assert.match(page, /paid_model_warning/, 'paid-model warning missing from the model table');
+assert.match(page, /buildModelTable/, 'provider model table missing');
 
 // Favicon: served by the gateway (CSP forbids external assets), declared with
 // an explicit type, and not a data: URI the browser would have to re-parse.
