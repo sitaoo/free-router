@@ -1771,13 +1771,14 @@ function buildModelPicker(provider) {
   const fetchBtn = document.createElement('button');
   fetchBtn.textContent = t('prov_fetch');
   fetchBtn.onclick = async () => {
-    const baseUrl = (provider.baseUrl || '').trim();
-    if (!baseUrl) { toast(t('np_need'), 'err'); return; }
+    // The provider is already registered, so the server uses its stored keys:
+    // a listing endpoint that requires auth would otherwise answer 401 to a
+    // request carrying only a base URL.
     fetchBtn.disabled = true;
     try {
       const result = await api('api/providers', {
         method: 'POST',
-        body: JSON.stringify({ action: 'fetch-models', baseUrl }),
+        body: JSON.stringify({ action: 'fetch-models', provider: provider.name }),
       });
       paint(
         (result.models || []).map((m) => m.id),

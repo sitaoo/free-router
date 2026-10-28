@@ -32,6 +32,7 @@ tags are cut here. Dates are commit dates (`YYYY-MM-DD`).
 
 ### Changed
 
+- The edit modal's **Fetch models** button now names the provider instead of sending only its base URL, so the listing runs with the keys already stored for that provider and its own auth header. HashNeuron answers `401` to an anonymous `/models`, which made the button fail on a provider whose key was saved and working; a pasted key is still tried first, a rejected one falls back to the stored keys, and a rejected credential now says so rather than reporting `catalog HTTP 401` alone.
 - Structured layout: code in `app/`, ops in `script/`, tests in `test/`, packaging in `docker/`, single writable `data/` dir.
 - `.env` files are a first-boot seed only; once an overlay exists they are ignored so UI edits always stick. Explicit process environment still wins.
 - Runtime state (overlay, discovery, logs) lives under `data/`; legacy root files auto-move on boot; pid/log paths live in `data/`.

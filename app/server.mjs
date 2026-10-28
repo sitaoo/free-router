@@ -2881,33 +2881,65 @@ async function handleProviders(req, res) {
   const name = String(body.name || '').trim();
 
   if (action === 'fetch-models') {
-    // List models from a not-yet-registered provider so the add form can
-    // offer checkboxes instead of manual typing. Free flags come straight
-    // from catalog pricing; anything else is for the user (or discovery)
-    // to decide.
-    const baseUrl = String(body.baseUrl || '').trim().replace(/\/+$/, '');
+    // List models from a provider so the add and edit forms can offer
+    // checkboxes instead of manual typing. Free flags come straight from
+    // catalog pricing; anything else is for the user (or discovery) to decide.
+    // A registered provider contributes its stored keys and auth header, so
+    // the edit modal never has to make the operator re-paste a key it already
+    // holds; a pasted key is tried first, and a rejected one falls back to the
+    // stored keys rather than failing the listing outright.
+    const providerName = String(body.provider || '').trim();
+    const known = providerName ? PROVIDERS.get(providerName) : null;
+    if (providerName && !known) {
+      return sendJson(res, 404, { error: { message: `unknown provider: ${providerName}`, type: 'not_found' } });
+    }
+    const baseUrl = String((body.baseUrl !== undefined ? body.baseUrl : known?.baseUrl) || '')
+      .trim()
+      .replace(/\/+$/, '');
     if (!validHttpUrl(baseUrl)) {
       return sendJson(res, 400, { error: { message: 'baseUrl must be an http(s) URL', type: 'invalid_request_error' } });
     }
-    const key = typeof body.key === 'string' ? body.key.trim() : '';
+    const pasted = typeof body.key === 'string' ? body.key.trim() : '';
+    const keyCandidates = [pasted, ...(known?.apiKeys || []).map((entry) => entry.key)].filter(Boolean);
+    if (!keyCandidates.length) keyCandidates.push('');
     const catalogUrl = /\/models$/i.test(baseUrl) ? baseUrl : `${baseUrl}/models`;
+    const authHeaders = (key) => {
+      if (!key) return {};
+      // A catalog on its own auth scheme (Google's x-goog-api-key) still needs
+      // that header when the listing URL is passed in explicitly.
+      if (known?.modelsKeyHeader) return { [known.modelsKeyHeader]: key };
+      return { Authorization: `Bearer ${key}` };
+    };
     let payload;
-    try {
-      const response = await fetch(catalogUrl, {
-        signal: AbortSignal.timeout(15000),
-        headers: {
-          Accept: 'application/json',
-          ...(key ? { Authorization: `Bearer ${key}` } : {}),
-        },
-      });
-      if (!response.ok) {
-        return sendJson(res, 502, { error: { message: `catalog HTTP ${response.status}`, type: 'upstream_error' } });
+    let status = 0;
+    let lastError = '';
+    for (const key of keyCandidates) {
+      try {
+        const response = await fetch(catalogUrl, {
+          signal: AbortSignal.timeout(15000),
+          headers: { Accept: 'application/json', ...authHeaders(key) },
+        });
+        status = response.status;
+        if (!response.ok) {
+          lastError = `catalog HTTP ${response.status}`;
+          // Only a rejected credential is worth retrying with the next key.
+          if (response.status !== 401 && response.status !== 403) break;
+          continue;
+        }
+        payload = await response.json();
+        lastError = '';
+        break;
+      } catch (error) {
+        lastError = `catalog fetch failed: ${error instanceof Error ? error.message : String(error)}`;
+        break;
       }
-      payload = await response.json();
-    } catch (error) {
-      return sendJson(res, 502, {
-        error: { message: `catalog fetch failed: ${error instanceof Error ? error.message : String(error)}`, type: 'upstream_error' },
-      });
+    }
+    if (!payload) {
+      const hint =
+        status === 401 || status === 403
+          ? ' — the provider rejected every key configured for it; save a working key first'
+          : '';
+      return sendJson(res, 502, { error: { message: `${lastError || 'catalog fetch failed'}${hint}`, type: 'upstream_error' } });
     }
     const entries = Array.isArray(payload?.data) ? payload.data : [];
     const models = [];

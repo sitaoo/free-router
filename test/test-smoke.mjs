@@ -984,6 +984,30 @@ function quotaRejection(limit) {
   };
 }
 
+// A price-free catalog that insists on a bearer key, the way HashNeuron's
+// listing does. The key lives in the overlay, so a listing request that sends
+// only a base URL gets 401 no matter how well the provider is configured.
+let keyedCatalogAuth = '';
+const keyedMock = http.createServer((req, res) => {
+  if (req.method === 'GET' && req.url === '/v1/models') {
+    keyedCatalogAuth = req.headers.authorization || '';
+    if (keyedCatalogAuth !== 'Bearer keyed-secret') {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'invalid api key' } }));
+      return;
+    }
+    res.setHeader('Content-Type', 'application/json');
+    res.end(
+      JSON.stringify({
+        object: 'list',
+        data: [{ id: 'keyed-1', object: 'model', owned_by: 'keyed' }],
+      }),
+    );
+    return;
+  }
+  res.writeHead(404).end();
+});
+
 let quotaRequests = 0;
 const quotaMock = http.createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/v1/chat/completions') {
@@ -1008,6 +1032,8 @@ await listen(baiMock);
 const baiPort = baiMock.address().port;
 await listen(extraMock);
 const extraPort = extraMock.address().port;
+await listen(keyedMock);
+const keyedPort = keyedMock.address().port;
 await listen(geminiMock);
 const geminiPort = geminiMock.address().port;
 
@@ -1055,6 +1081,13 @@ fs.writeFileSync(
         baseUrl: `http://127.0.0.1:${extraPort}/v1`,
         keyEnv: 'EXTRA_API_KEY',
         freeModels: ['extra-1'],
+      },
+      keyed: {
+        catalog: true,
+        pricing: false,
+        baseUrl: `http://127.0.0.1:${keyedPort}/v1`,
+        keyEnv: 'KEYED_API_KEY',
+        freeModels: [],
       },
       gemini: {
         catalog: true,
@@ -1259,7 +1292,7 @@ try {
   // Priced catalogs and probeFreeTier catalogs both add models; a catalog that
   // neither prices nor probes only exists to notice withdrawals.
   assert.deepEqual(health.discovery.addsFrom, ['openrouter', 'bai']);
-  assert.deepEqual(health.discovery.availabilityOnly, ['extra', 'gemini']);
+  assert.deepEqual(health.discovery.availabilityOnly, ['extra', 'keyed', 'gemini']);
   assert.equal(health.providers.bai.kind, 'static+catalog');
 
   // glm-5.3-flash is listed upstream as "models/glm-5.3-flash": a spelling
@@ -2273,6 +2306,46 @@ try {
     body: JSON.stringify({ action: 'fetch-models', baseUrl: 'not-a-url' }),
   });
   assert.equal(fetchBad.status, 400);
+  // The edit modal lists a registered provider's catalog without the operator
+  // re-pasting a key: the key already stored for that provider is used.
+  const keyedSet = await fetch(`${base}/api/keys`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ provider: 'keyed', name: 'key-1', key: 'keyed-secret' }),
+  });
+  assert.equal(keyedSet.status, 200);
+  const keyedFetch = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ action: 'fetch-models', provider: 'keyed' }),
+  });
+  assert.equal(keyedFetch.status, 200);
+  const keyedBody = await keyedFetch.json();
+  assert.deepEqual(keyedBody.models.map((m) => m.id), ['keyed-1']);
+  assert.equal(keyedCatalogAuth, 'Bearer keyed-secret');
+  // An explicit base URL still wins, so an edited-but-unsaved URL can be
+  // tried before it is saved.
+  const keyedFetchOverride = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ action: 'fetch-models', provider: 'keyed', baseUrl: `http://127.0.0.1:${keyedPort}/v1` }),
+  });
+  assert.equal(keyedFetchOverride.status, 200);
+  // A pasted key is tried first, but a rejected one falls back to the stored
+  // keys instead of failing the whole listing.
+  const keyedFetchWrong = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ action: 'fetch-models', provider: 'keyed', key: 'wrong-key' }),
+  });
+  assert.equal(keyedFetchWrong.status, 200);
+  // Without a provider name and without a URL there is nothing to fetch.
+  const fetchNothing = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ action: 'fetch-models' }),
+  });
+  assert.equal(fetchNothing.status, 400);
 
   // Session TTL, free-model counts, env migration record, logout.
   const ttlBad = await fetch(`${base}/api/settings`, {
@@ -2403,6 +2476,7 @@ try {
   await close(tokenRouterMock);
   await close(baiMock);
   await close(extraMock);
+  await close(keyedMock);
   await close(quotaMock);
   await close(geminiMock);
   fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 3 });

@@ -323,6 +323,8 @@ OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers
 
 目录拉失败、返回空、或者渠道没 Key，都不改变现状：`freeModels` 照旧说了算。删条目必须看到一份**真正拉到的**目录，上游一抖不会清空路由。
 
+编辑弹窗里的 **获取模型** 按钮改成只报渠道名（`{ "action": "fetch-models", "provider": "name" }`），不再只发 Base URL。服务端用它已保存的 Key 和该渠道自己的鉴权头（`modelsKeyHeader`）去拉 `/models`，所以要求凭证的列表接口——HashNeuron 对匿名请求直接回 `401`——不会逼人重贴一个早就存过的 Key。表单里现填的 Key 会先试；它被 `401`/`403` 拒绝时再退回已保存的 Key，而不是整次拉取失败。显式传 `baseUrl` 仍然覆盖保存值，方便在保存前先试改过的地址。凭证被拒时错误信息会直接说明这一点，不再只显示 `catalog HTTP 401`。
+
 模型 ID 按 slug 比对，所以 Gemini 的 `models/gemini-3.8-flash` 对上配置的 `gemini-3.8-flash` 不算下架。
 
 `/health` 在 `discovery.addsFrom`、`discovery.availabilityOnly`、`discovery.unavailableModels` 里报这些；Web UI 在所属渠道旁边标下架模型。

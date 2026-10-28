@@ -329,6 +329,8 @@ Only OpenRouter publishes prices, so only OpenRouter can add unknown models from
 
 A catalog that fails to load, returns nothing, or belongs to a provider with no key changes nothing: `freeModels` stays authoritative. Removal requires a catalog that actually loaded, so an upstream outage cannot empty a route.
 
+The edit modal's **Fetch models** button names the provider (`{ "action": "fetch-models", "provider": "name" }`) instead of sending only a base URL. The server then lists `/models` with the keys already stored for that provider and its own auth header (`modelsKeyHeader`), so a listing that requires credentials — HashNeuron's answers `401` to an anonymous request — does not force the operator to paste a key that is already saved. A key typed into the form is tried first; a `401`/`403` on it falls back to the stored keys rather than failing the listing. An explicit `baseUrl` still overrides the saved one, so an edited URL can be tried before it is saved. When the failure is a rejected credential, the error says so instead of only `catalog HTTP 401`.
+
 Model IDs are matched by slug, so Gemini listing `models/gemini-3.8-flash` against a configured `gemini-3.8-flash` is not read as a withdrawal.
 
 `/health` reports this under `discovery.addsFrom`, `discovery.availabilityOnly`, and `discovery.unavailableModels`; the web UI shows withdrawn models next to the owning provider.
