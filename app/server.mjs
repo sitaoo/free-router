@@ -41,6 +41,7 @@ import {
 } from './responses.mjs';
 import { loadSweBenchScores, sweBenchScoreFor } from './swe-bench.mjs';
 import { describeLanAccess, lanGuard, loginLockout, recordLoginFailure } from './net.mjs';
+import { normalizeTimeZone } from './timezones.mjs';
 import { PINNED_SCORE, USAGE_KINDS, classifyFailure, compareByScarcity, ewmaLatency, isCredentialFault, latencyAdjustment, metadataBonus, metadataScore, normalizeScore, pickExplorationTarget, qualityTotals } from './ranking.mjs';
 import {
   createStreamSignatureExtractor,
@@ -2831,7 +2832,11 @@ function editableConfigState() {
       socksFirstHosts: config.socksFirstHosts || [],
       defaultProvider: registry.defaultProvider,
       retentionDays: USAGE_RETENTION_DAYS,
-      timezone: USAGE_TIMEZONE || '',
+      // The configured zone, not the one in effect: `USAGE_TIMEZONE` is fixed at
+      // boot, so reporting it here would bounce the operator's fresh pick back to
+      // the old value on the reload that follows every save. `usage.timezone` in
+      // the status payload is the one actually in effect.
+      timezone: String(config.usage?.timezone || ''),
     },
   };
 }
@@ -3257,8 +3262,17 @@ async function handleSettings(req, res) {
     notes.push('retentionDays saved; restart to take effect');
   }
   if (body.timezone !== undefined) {
-    setOverlayValue(['usage', 'timezone'], String(body.timezone || ''));
-    notes.push('timezone saved; restart to take effect');
+    // Refuse an unknown zone here rather than storing it: the runtime can only
+    // fall back to local dates after a restart, which silently moves the quota
+    // day boundary. Empty stays legal and means "this machine's timezone".
+    const zone = normalizeTimeZone(body.timezone);
+    if (zone === null) {
+      return sendJson(res, 400, {
+        error: { message: `unknown timezone: ${String(body.timezone)}`, type: 'invalid_request_error' },
+      });
+    }
+    setOverlayValue(['usage', 'timezone'], zone);
+    notes.push(`timezone ${zone || '(local)'} saved; restart to take effect`);
   }
   if (body.sessionTtlHours !== undefined) {
     const value = Number(body.sessionTtlHours);

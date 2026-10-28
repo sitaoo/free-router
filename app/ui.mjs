@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import { LANGS, STRINGS } from './i18n.mjs';
+import { listTimeZones } from './timezones.mjs';
 
 const MAX_SECRET_LENGTH = 500;
 
@@ -8,6 +9,10 @@ const MAX_SECRET_LENGTH = 500;
 // browser needs no module loader. `</script>` can never appear in it: values
 // only use <span> markup (verified in tests via renderPage snapshot).
 const I18N_PAYLOAD = JSON.stringify({ langs: LANGS, strings: STRINGS });
+
+// The timezone picker gets the same treatment as the dictionary: shipped with
+// the page so the dropdown can never offer a zone the server would reject.
+const TZ_PAYLOAD = JSON.stringify({ zones: listTimeZones() });
 
 // Keeps the operator's username out of the interface and the log file, which
 // both get shared or screenshotted more often than they get read locally.
@@ -451,6 +456,39 @@ td.muted { color: var(--muted); }
 .setrow .set-ctl { flex: none; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .setrow .set-ctl .switch { margin-top: 0; }
 .setrow input.mono { text-align: right; }
+/* Searchable select: the timezone list is ~420 entries, so it is a combobox
+   over a filtered listbox rather than a <select> nobody can scan. */
+.combo { position: relative; display: block; }
+.combo input { width: 220px; padding-right: 26px; }
+/* Zone ids stay left-to-right even in an RTL interface: they are identifiers,
+   and a reversed "Asia/Shanghai" reads as a different string. */
+.setrow .combo input { direction: ltr; text-align: left; font-family: var(--mono); }
+.combo::after {
+  content: ""; position: absolute; top: 50%; inset-inline-end: 11px;
+  width: 6px; height: 6px; margin-top: -5px; pointer-events: none;
+  border-right: 1.6px solid var(--faint); border-bottom: 1.6px solid var(--faint);
+  transform: rotate(45deg);
+}
+.combo-list {
+  position: absolute; z-index: 30; inset-inline-start: 0; top: calc(100% + 4px);
+  width: max(100%, 260px); max-height: 260px; overflow-y: auto;
+  margin: 0; padding: 4px; list-style: none;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: var(--shadow-pop);
+}
+.combo-list[hidden] { display: none; }
+.combo-list li {
+  padding: 7px 9px; border-radius: 7px; font-size: 12.5px; cursor: pointer;
+  font-family: var(--mono); direction: ltr; text-align: left;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.combo-list li .off { color: var(--faint); font-family: var(--font-display); }
+.combo-list li[aria-selected="true"] { background: var(--accent-soft); color: var(--accent-strong); }
+/* aria-selected marks the committed value; data-active is the keyboard cursor,
+   which must stay visibly distinct from it while arrowing through the list. */
+.combo-list li[data-active="true"] { background: var(--hover); }
+.combo-list li[data-active="true"][aria-selected="true"] { background: var(--accent-soft); }
+.combo-list li.empty { color: var(--muted); font-family: var(--font-display); cursor: default; }
 .setrow-full { padding: 12px 0; }
 .setrow-full + .setrow-full { border-top: 1px solid var(--line-soft); }
 .head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
@@ -803,7 +841,12 @@ body[data-gate="1"] main#app { display: none; }
             <div class="set-title" data-i18n="tun_timezone">Timezone</div>
             <div class="set-desc" data-i18n="tun_timezone_desc">Daily quota boundaries, e.g. America/Los_Angeles.</div>
           </div>
-          <div class="set-ctl"><input id="set-timezone" class="mono" data-i18n-ph="tun_timezone_ph" placeholder="America/Los_Angeles" style="max-width:200px"></div>
+          <div class="set-ctl">
+            <div class="combo" id="set-timezone-combo">
+              <input id="set-timezone" class="mono" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="set-timezone-list" autocomplete="off" spellcheck="false" data-i18n-ph="tun_timezone_ph" placeholder="America/Los_Angeles">
+              <ul id="set-timezone-list" class="combo-list" role="listbox" hidden></ul>
+            </div>
+          </div>
         </div>
         <div class="row">
           <button class="primary" id="set-save" data-i18n="tun_save">Save tuning</button>
@@ -857,6 +900,7 @@ body[data-gate="1"] main#app { display: none; }
 </div>
 <div id="toast"></div>
 <script>window.FR_I18N = ${I18N_PAYLOAD};</script>
+<script>window.FR_TZ = ${TZ_PAYLOAD};</script>
 <script>
 const el = (id) => document.getElementById(id);
 let state = null;
@@ -2265,6 +2309,261 @@ function renderSession() {
     : t('admin_pw_never');
 }
 
+/* ===== Timezone combobox =====
+   A plain <select> of ~420 IANA zones is unusable by scrolling, and a free-text
+   box let typos through to the config where they only surfaced in the log after
+   a restart. Type to filter, arrows to move, Enter to commit. The value only
+   has to be a zone the server accepts, so an uncommitted filter text never
+   counts as a choice — Esc or blur puts the stored zone back. */
+const FR_TZ = (window.FR_TZ && window.FR_TZ.zones) || ['UTC'];
+let tzActive = -1;
+let tzMatches = [];
+let tzCommitted = '';
+// Formatters are the expensive part of an offset label, and a zone's offset
+// only changes at a DST boundary. One formatter per zone, built on demand.
+const tzFormatters = new Map();
+
+function tzOffsetLabel(zone) {
+  if (zone === 'UTC') return 'UTC';
+  try {
+    let formatter = tzFormatters.get(zone);
+    if (!formatter) {
+      formatter = new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: 'shortOffset' });
+      tzFormatters.set(zone, formatter);
+    }
+    const parts = formatter.formatToParts(new Date());
+    return parts.find((part) => part.type === 'timeZoneName').value || '';
+  } catch (error) {
+    return '';
+  }
+}
+
+// Lowercased, and with "/" and "_" collapsed to a space so "los angel" finds
+// America/Los_Angeles as readily as "america/".
+function tzFold(text) {
+  return String(text).toLowerCase().replace(/[/_]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Both the label styling and the per-keystroke filter use these, so they are
+// folded once rather than on every render.
+function tzOptions() {
+  if (tzOptions.cache) return tzOptions.cache;
+  tzOptions.cache = [
+    // Empty is a real setting — "use this machine's dates" — so it needs an
+    // entry of its own, or the picker would make that choice unreachable. The
+    // English words ride along in the search field: zone ids are English, so
+    // typing "local" must find it even when the label is shown in Chinese.
+    { zone: '', label: t('tz_local'), search: 'server local time' },
+    ...FR_TZ.map((zone) => ({ zone, label: zone, search: tzFold(zone) })),
+  ];
+  return tzOptions.cache;
+}
+
+function tzRender(query) {
+  const list = el('set-timezone-list');
+  const needle = tzFold(query);
+  tzMatches = tzOptions().filter((option) =>
+    !needle || option.search.indexOf(needle) !== -1 || tzFold(option.label).indexOf(needle) !== -1);
+  // A zone filtered out by a stale query must not swallow the keyboard cursor.
+  tzActive = tzMatches.length ? 0 : -1;
+  list.textContent = '';
+  if (!tzMatches.length) {
+    const empty = document.createElement('li');
+    empty.className = 'empty';
+    empty.textContent = t('tz_none', { q: query });
+    list.appendChild(empty);
+    el('set-timezone').removeAttribute('aria-activedescendant');
+    return;
+  }
+  // One fragment, one reflow: appending 420 options one at a time is the
+  // difference between an instant popup and a visible stall.
+  const fragment = document.createDocumentFragment();
+  tzMatches.forEach((option, index) => {
+    const item = document.createElement('li');
+    item.id = 'set-timezone-opt-' + index;
+    item.setAttribute('role', 'option');
+    item.setAttribute('aria-selected', option.zone === tzCommitted ? 'true' : 'false');
+    item.dataset.zone = option.zone;
+    item.textContent = option.zone ? option.zone : option.label;
+    // The offset follows DST, so it is read when the row is drawn rather than
+    // baked into the list — see tzFillOffsets.
+    if (option.zone) item.dataset.offset = '1';
+    fragment.appendChild(item);
+  });
+  list.appendChild(fragment);
+  tzScheduleOffsets(list);
+  tzMarkActive();
+}
+
+// The first render of the full list costs ~200ms, almost all of it building the
+// formatters behind the offset labels. Paint the zone ids immediately and let
+// the offsets arrive a frame later: the list is usable in the meantime.
+function tzScheduleOffsets(list) {
+  if (tzScheduleOffsets.pending) return;
+  tzScheduleOffsets.pending = requestAnimationFrame(() => {
+    tzScheduleOffsets.pending = 0;
+    if (!list.hidden) tzFillOffsets(list);
+  });
+}
+
+// Building a formatter per zone costs ~150ms for the full list, which is a
+// visible stall when the picker opens. Only rows near the visible window get
+// one, so the work is proportional to what the operator can actually see.
+const TZ_OFFSET_MARGIN = 20;
+function tzFillOffsets(list) {
+  const items = list.children;
+  const rowHeight = items.length ? items[0].getBoundingClientRect().height || 30 : 30;
+  if (!rowHeight) return;
+  // Rows only need a label once they are near the visible window, including
+  // the part that is one scroll away.
+  const top = Math.max(0, Math.floor(list.scrollTop / rowHeight) - TZ_OFFSET_MARGIN);
+  const visible = Math.ceil((list.clientHeight || 260) / rowHeight) + TZ_OFFSET_MARGIN * 2;
+  for (let index = top; index < Math.min(items.length, top + visible); index += 1) {
+    const item = items[index];
+    if (!item || !item.dataset.offset || item.querySelector('.off')) continue;
+    const offset = tzOffsetLabel(item.dataset.zone);
+    if (!offset || offset === item.dataset.zone) continue;
+    const tag = document.createElement('span');
+    tag.className = 'off';
+    tag.textContent = '  ' + offset;
+    item.appendChild(tag);
+  }
+}
+
+// Only ever called on a list that has entries: tzRender clears the attribute
+// when it renders the "no match" row.
+function tzMarkActive() {
+  const list = el('set-timezone-list');
+  [...list.children].forEach((item, index) => {
+    const on = index === tzActive;
+    if (on) item.dataset.active = 'true'; else delete item.dataset.active;
+  });
+  const input = el('set-timezone');
+  if (tzActive >= 0 && tzMatches[tzActive]) {
+    input.setAttribute('aria-activedescendant', 'set-timezone-opt-' + tzActive);
+    const item = list.children[tzActive];
+    if (item && item.scrollIntoView) item.scrollIntoView({ block: 'nearest' });
+  } else {
+    input.removeAttribute('aria-activedescendant');
+  }
+}
+
+function tzOpen() {
+  const list = el('set-timezone-list');
+  if (!list) return;
+  if (list.hidden) list.hidden = false;
+  el('set-timezone').setAttribute('aria-expanded', 'true');
+  // Fit on every open, not only the first: the page may have been resized or
+  // flipped to RTL since, and a popup that fit then can overflow now.
+  tzFit();
+}
+
+// The popup is wider than its input, so in a narrow pane — or on the RTL side
+// of one — growing from the inline start would push it off screen. Flip it to
+// the input's other edge before shrinking it: a 400-entry list is not worth
+// reading at half width.
+function tzFit() {
+  const list = el('set-timezone-list');
+  const margin = 8;
+  list.style.maxWidth = '';
+  list.style.insetInlineStart = '';
+  list.style.insetInlineEnd = '';
+  const first = list.getBoundingClientRect();
+  if (first.left >= margin && first.right <= window.innerWidth - margin) return;
+  list.style.insetInlineStart = 'auto';
+  list.style.insetInlineEnd = '0';
+  const flipped = list.getBoundingClientRect();
+  if (flipped.left >= margin && flipped.right <= window.innerWidth - margin) return;
+  // Neither edge fits: anchor as before and let it scroll internally.
+  list.style.insetInlineStart = '0';
+  list.style.insetInlineEnd = 'auto';
+  list.style.maxWidth = Math.max(160, window.innerWidth - margin * 2) + 'px';
+}
+
+function tzClose() {
+  const list = el('set-timezone-list');
+  if (!list) return;
+  list.hidden = true;
+  el('set-timezone').setAttribute('aria-expanded', 'false');
+  el('set-timezone').removeAttribute('aria-activedescendant');
+}
+
+function tzChoose(zone) {
+  tzCommitted = zone;
+  tzShowCommitted();
+  tzClose();
+}
+
+// Empty means "this machine", and there is no IANA id to show for it, so the
+// empty state has to be named somewhere or it just looks unset.
+function tzShowCommitted() {
+  const input = el('set-timezone');
+  input.value = tzCommitted;
+  input.placeholder = tzCommitted ? t('tun_timezone_ph') : t('tz_local');
+}
+
+function tzBind() {
+  const input = el('set-timezone');
+  const list = el('set-timezone-list');
+  if (!input || !list || tzBind.done) return;
+  tzBind.done = true;
+  input.onfocus = () => {
+    input.select();
+    tzRender('');
+    tzOpen();
+  };  input.oninput = () => {
+    tzRender(input.value);
+    tzOpen();
+  };
+  input.onkeydown = (event) => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (list.hidden) { tzRender(input.value); tzOpen(); }
+      if (!tzMatches.length) return;
+      event.preventDefault();
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      tzActive = (tzActive + step + tzMatches.length) % tzMatches.length;
+      tzMarkActive();
+      return;
+    }
+    if (event.key === 'Enter') {
+      if (list.hidden || tzActive < 0 || !tzMatches[tzActive]) return;
+      event.preventDefault();
+      tzChoose(tzMatches[tzActive].zone);
+      return;
+    }
+    if (event.key === 'Escape' && !list.hidden) {
+      // Undo the filter without touching the stored setting.
+      event.preventDefault();
+      tzShowCommitted();
+      tzClose();
+    }
+  };
+  // mousedown, not click: the input's blur fires first and would close the
+  // list out from under the pointer.
+  list.onmousedown = (event) => {
+    const item = event.target.closest('li[data-zone]');
+    if (!item) return;
+    event.preventDefault();
+    tzChoose(item.dataset.zone);
+  };
+  // Scrolling a fresh part of the list into view is what asks for its offsets.
+  list.onscroll = () => tzFillOffsets(list);
+  // A reopened list may have scrolled or resized since its offsets were filled.
+  list.onscrollend = () => tzFillOffsets(list);
+  input.onblur = () => {
+    // A half-typed filter is not a setting: restore what is actually stored.
+    tzShowCommitted();
+    tzClose();
+  };
+  // Clicking anywhere else is also a dismiss, including the rest of the page.
+  document.addEventListener('mousedown', (event) => {
+    if (list.hidden) return;
+    if (event.target === input || list.contains(event.target)) return;
+    tzShowCommitted();
+    tzClose();
+  });
+}
+
 function renderTuning() {
   const general = state.editable.general;
   el('set-timeout').value = general.attemptTimeoutMs;
@@ -2281,7 +2580,13 @@ function renderTuning() {
   }
   select.value = general.defaultProvider;
   el('set-retention').value = general.retentionDays;
-  el('set-timezone').value = general.timezone || '';
+  // The stored zone may be empty (meaning "this machine") or a zone the
+  // shipped list does not carry; both must show as-is rather than as a blank
+  // box that looks unset.
+  tzCommitted = general.timezone || '';
+  tzBind();
+  tzShowCommitted();
+  tzClose();
 }
 
 function bindOnce() {
@@ -2535,7 +2840,8 @@ function bindOnce() {
           defaultProvider: el('set-default').value,
           socksFirstHosts: el('set-socks').value.split(',').map((s) => s.trim()).filter(Boolean),
           retentionDays: Number(el('set-retention').value),
-          timezone: el('set-timezone').value.trim(),
+          // The committed choice, not whatever half-typed filter is in the box.
+          timezone: tzCommitted,
         }),
       });
       toast(t('saved') + ((result.notes || []).length ? ' ' + result.notes.join(' ') : ''), 'good');

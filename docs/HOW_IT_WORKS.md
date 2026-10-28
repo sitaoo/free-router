@@ -470,7 +470,7 @@ Every upstream attempt is counted per day and per `provider:model`, so you can s
 ```
 
 - `timezone` decides when the day rolls over. Gemini free-tier request-per-day
-counters reset at midnight Pacific, so keep it at `America/Los_Angeles` even if the host runs elsewhere. Omit the field to use the host's local date.
+counters reset at midnight Pacific, so keep it at `America/Los_Angeles` even if the host runs elsewhere. Omit the field to use the host's local date. In the web UI it is a searchable dropdown — the input is the filter — fed from the runtime's own IANA list plus `UTC`, so the picker can never offer a zone the server would reject. Saving canonicalises aliases (`Asia/Kolkata` is stored as `Asia/Calcutta`, case does not matter) and refuses an unknown zone with a 400 instead of writing it to the config, where a typo would otherwise only show up in the log after a restart and leave the day boundary quietly wrong. A change needs a restart, which the save note says.
 - `dailyLimits` keys are matched as `provider:model`, then bare `model`, then
 `provider:*`. Limits are informational only; the router does not stop sending once a limit is reached, because the numbers are hand-maintained.
 - The `today` column and `remainingToday` count only quota-consuming attempts.

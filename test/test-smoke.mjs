@@ -2149,6 +2149,42 @@ try {
   const settingsState = await fetch(`${base}/api/state`, { headers: { Cookie: sessionCookie } }).then((res) => res.json());
   assert.equal(settingsState.editable.general.attemptTimeoutMs, 6000);
 
+  // Timezone: an alias is canonicalised on save, and an unknown zone is refused
+  // here rather than stored and only noticed in the log after a restart.
+  // `/api/state` reports the zone in effect (this process started with UTC and a
+  // change only applies after a restart), so the check reads the overlay.
+  const overlayTz = () =>
+    JSON.parse(fs.readFileSync(path.join(tempDir, 'config.local.json'), 'utf8')).usage?.timezone;
+  const tzLower = await fetch(`${base}/api/settings`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ timezone: 'asia/shanghai' }),
+  });
+  assert.equal(tzLower.status, 200);
+  assert.ok((await tzLower.json()).notes.includes('timezone Asia/Shanghai saved; restart to take effect'));
+  assert.equal(overlayTz(), 'Asia/Shanghai', 'alias must be stored canonical');
+  const tzBad = await fetch(`${base}/api/settings`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ timezone: 'Mars/Olympus_Mons' }),
+  });
+  assert.equal(tzBad.status, 400, 'unknown timezone must be refused');
+  assert.equal(overlayTz(), 'Asia/Shanghai', 'a rejected save must not change the value');
+  // Clearing is legal and means "this machine's dates".
+  const tzClear = await fetch(`${base}/api/settings`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ timezone: '' }),
+  });
+  assert.equal(tzClear.status, 200);
+  assert.equal(overlayTz(), '');
+  // Restore what the rest of the run expects.
+  await fetch(`${base}/api/settings`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ timezone: 'UTC' }),
+  });
+
   const addProv = await fetch(`${base}/api/providers`, {
     method: 'POST',
     headers: uiHeaders,
