@@ -83,10 +83,11 @@ docker compose -f docker/compose.yaml up -d --build
 node app/server.mjs
 ```
 
-看当前 `free-best` 优先级（就是网关尝试模型的顺序）：
+看当前模型池（免费模型在前，就是网关尝试的顺序；`--paid` 连已选付费模型一起列）：
 
 ```bash
 ./script/models.sh
+./script/models.sh --paid
 ./script/models.sh --ready-only
 npm run models -- --json
 ```
@@ -99,7 +100,7 @@ npm run models -- --json
 
 ## Web 界面
 
-打开 <http://127.0.0.1:8787/> 并登录（默认密码 `admin123`，去设置 →管理里改）。界面有状态、访问、渠道、路由、配额、设置几个标签页，跟随浏览器语言，每处修改都立即对运行中的进程生效——除了 host、端口和少数标了"需重启"的设置（Save 旁边有重启按钮，Docker 下 supervisor 会把服务拉起来）。顶栏的主题按钮在跟随系统、浅色、深色之间切换，选择记在这个浏览器的本地存储里。
+打开 <http://127.0.0.1:8787/> 并登录（默认密码 `admin123`，去设置 →管理里改）。界面有状态、访问、渠道、设置四个标签页：状态页看实时模型池优先级，渠道页管 Key、每个渠道的模型表（免费/付费成员与每日限额）和发现（Discovery）。跟随浏览器语言，每处修改都立即对运行中的进程生效——除了 host、端口和少数标了"需重启"的设置（Save 旁边有重启按钮，Docker 下 supervisor 会把服务拉起来）。顶栏的主题按钮在跟随系统、浅色、深色之间切换，选择记在这个浏览器的本地存储里。
 
 ```json
 "webui": {
@@ -165,8 +166,8 @@ tab）。一个网关 Key 都没有时，`/v1` 保持开放，方便本地用。
 几个推论，提前说清楚：
 
 - `git pull` 永远冲不掉你的设置，你的设置也永远进不了提交。
-- 路由/渠道的**删除**记成墓碑（`_removedRoutes/_removedProviders`），
-上游加回来也不会复活你删掉的东西。
+- 渠道的**删除**记成墓碑（`_removedProviders`），上游加回来也不会复活
+你删掉的东西；旧版本留下的路由墓碑由 schema 迁移清掉。
 - 以后的结构性新增走加法式 schema 迁移（只补缺的骨架键，用户的值
 一个不动），盖着 `_schemaVersion` 戳。
 - 完整优先级（从高到低）：显式进程环境变量 →
@@ -223,7 +224,7 @@ custom_providers:
 
 ## Responses API
 
-`POST /v1/responses` 开箱即用，走的是和 `/v1/chat/completions` 同一套路由、Key 轮换、配额、冷静期和用量计数。网关背后的渠道几乎只会 Chat Completions，所以这里不是透传而是双向翻译：`input`、`instructions`、`tools`、`tool_choice`、`max_output_tokens`、`text.format`、`reasoning.effort` 翻成 chat 请求，chat 的答案（或它的 SSE 增量）再翻回 `response` 对象（或 `response.*` 事件流）。
+`POST /v1/responses` 开箱即用，走的是和 `/v1/chat/completions` 同一套模型池、Key 轮换、配额、冷静期和用量计数。网关背后的渠道几乎只会 Chat Completions，所以这里不是透传而是双向翻译：`input`、`instructions`、`tools`、`tool_choice`、`max_output_tokens`、`text.format`、`reasoning.effort` 翻成 chat 请求，chat 的答案（或它的 SSE 增量）再翻回 `response` 对象（或 `response.*` 事件流）。
 
 ```bash
 curl -s http://127.0.0.1:8787/v1/responses \
@@ -255,9 +256,8 @@ GET  /api/state              完整 UI 状态（要会话）
 POST /api/keys               provider Key：{ "provider", "name"?, "key" }
 POST /api/gateway-keys       网关 Key：{ "action": "create|delete|setRequireAuth", ... }
 POST /api/providers          { "action": "create|update|delete", ... }
-POST /api/routes             { "action": "save|delete", "route", "models" }
 POST /api/limits             每日限额：{ "action": "set|delete", "key", "limit" }
-POST /api/discovery          发现开关、渠道、间隔、置顶
+POST /api/discovery          发现开关、间隔、置顶
 POST /api/settings           调优参数、会话 TTL、迁移提示
 POST /api/webui-password     { "password": "..." }（存哈希，吊销所有会话）
 POST /api/server             { "host", "port" }（重启生效）
@@ -265,12 +265,12 @@ POST /api/restart            退出等 supervisor 重启（要会话）
 GET  /health
 GET  /v1/models              开了鉴权就要网关 Key
 POST /v1/chat/completions    开了鉴权就要网关 Key
-POST /v1/responses           同一套路由，Responses 方言
+POST /v1/responses           同一套模型池，Responses 方言
 ```
 
 `GET /health` 报 `package.json` 的 `version`（当前 `1.0.0`），发版用`v1.0.0` 这种 git tag。
 
-`GET /v1/models` 返回路由别名、各 static 渠道的 `freeModels`，以及catalog 渠道当前免费的文本模型。直接点名具体模型 ID 也行，网关会把当前提供同一模型的每个渠道都试一遍；`provider:` 前缀强制只用一家。
+`GET /v1/models` 依次返回 `free-best` 别名、池里全部免费文本模型、以及显式选中的付费模型。免费模型用裸 ID 列出（跨渠道去重）；当已选付费模型与某个免费条目同名时，它改以 `provider:model` 出现。点名免费模型会试当前提供同一 slug 的每家渠道；点名付费模型只用被选中的那一个 `provider:model`。
 
 每个条目都带 OpenAI 标准的四个字段（`id`、`object`、`created`、`owned_by`），外加各家目录里真正公布的信息：`context_length`、`max_output_tokens`、`name`、`description`、`supported_parameters`、`input_modalities`、`output_modalities`、`pricing`、`expiration_date`、`provider`、`free`。元数据按模型跨渠道合并，因为各家口径不一样：Google 原生列表给 `inputTokenLimit`/`outputTokenLimit` 却没有发布日期，OpenRouter 有 `created` 和 `top_provider.max_completion_tokens`。一家没给的字段用另一家同一模型的补上；`pricing` 例外，价格是按渠道算的，绝不外借。真正不知道的保持 `0`（或干脆不出现），不编。
 
@@ -278,25 +278,39 @@ POST /v1/responses           同一套路由，Responses 方言
 curl -s http://127.0.0.1:8787/health | jq
 ```
 
-## 路由
+## 模型池
 
-- `free-best`：一个排好序的模型表；同一模型可以由多家提供
+只有一个隐式模型池，没有需要维护的路由表。每个渠道贡献两类成员：
 
-去 Web UI（路由 tab）里排序、增删，别直接改文件。`provider:model` 格式写进 `discovery.evaluation.pinnedModels` 置顶。没 Key、或已经不免费的模型直接跳过。只差 org 前缀或 `:free` 后缀的 ID 算同一个模型（比如`gemini-3.8-flash` 和 `google/gemini-3.8-flash:free`）。发现路由为空时，编辑器会直接列出它此刻按发现结果会生成的排序，点 `+` 就把该模型放进草稿。
+- **规则能证明的免费模型。** 公布价格的目录里，`pricing.prompt` 和 `pricing.completion` 都为 0 的聊天模型自动入池；没有价格的渠道用 `freeModels` 当白名单；探活给出正面结论也入池。负面结论（计费、没有免费额度、永久拒绝）则挡在自动路由之外。
+- **操作员在「渠道 → 模型」里显式选中的模型。** 选中只代表"进池"，不代表免费：证据决定它标免费、付费还是价格未知；添加付费或未知价模型会先弹警示确认。
+
+`free-best` 仍保留为「免费池、按分数排」的别名，也是请求省略 `model` 时的默认值。付费模型永不参与自动回退：只有请求点名时才使用，可以是裸 ID（同名免费模型排在前面），也可以是 `provider:model`。已知但未启用的模型返回 `404 model_not_enabled`，完全不认识的 ID 返回 `404 model_not_found`。
+
+池成员跟着目录走：免费模型下架或变付费，下一次目录检查就离开池。被选中的模型即使探活判定为付费也仍然保留，负面结论只影响它的免费标签。没有可用 Key 的渠道在 UI 里可见，但不参与路由。只差 org 前缀或 `:free` 后缀的 ID 算同一个模型（比如 `gemini-3.8-flash` 和 `google/gemini-3.8-flash:free`）。
+
+### 付费模型与资金不足
+
+在「渠道 → 模型」勾选付费模型时会提示「付费模型可能会消耗你的费用，请谨慎添加」。加入后它出现在 `/v1/models`，并在状态页的付费池单列，标注为仅在点名时使用。
+
+付费调用因资金不足被拒时，只把该 `provider:model` 停用 `cooldownMs.insufficientFunds`（默认 24 小时），渠道、它的 Key 和免费模型都不受影响。判定条件是：`402` 一律算；`400`/`403` 且错误文本提到资金、额度、余额或账单才算；`429` 永远不算。封锁期内点名该模型，网关不请求上游，直接返回 `402`，响应体带 `error.type = "insufficient_funds"`、`retry_after_seconds`，并附 `Retry-After` 头。封锁写进状态文件，重启不会忘，到期自动失效，不需要定时器。
 
 ## 加新渠道
 
 OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers.mjs`的注册表加载 `config.json` 里 `providers` 下的每一块。最省事的是 Web UI（渠道 tab → 添加渠道）：预设菜单会填好 Gemini、OpenRouter、TokenRouter、B.AI、HashNeuron、Groq、Cerebras、Mistral、Hugging Face 的地址和发现开关，其他服务选 Custom。预设只是快捷方式，Key 仍要自己贴。手改的话：
 
 1. 加一个 provider 对象。有 `GET /models` 就 `"catalog": true`；返回体
-带逐 token 价格才加 `"pricing": true`，否则 `freeModels` 当白名单（见下）。
-2. 把 `{ "provider": "<name>", "model": "<id>" }` 插进 `routes.free-best`
-想排的位置。裸字符串归 `defaultProvider`。
-3. 可选：`discovery.evaluation.pinnedModels` 里 `name:model` 置顶。
-4. `.env` 或 `~/.hermes/.env` 里设 `<NAME>_API_KEY`；URL 不一样用
+带逐 token 价格才加 `"pricing": true`。服务端会按真正拉到的行重新判定，
+所以标了 `pricing` 但目录里没有价格字段的渠道会自动转为探活。
+2. 入池不用再写别的：带价格的目录自动贡献零价聊天模型；无价格目录在有
+Key 后由后台探活补上。完全没有目录的渠道，把免费 ID 写进 `freeModels`（见下）。
+3. 要启用付费或价格未知的模型，把它加进该渠道的 `selectedModels`
+（「渠道 → 模型」会做这件事，并先给警示）。
+4. 可选：`discovery.evaluation.pinnedModels` 里 `name:model` 置顶。
+5. `.env` 或 `~/.hermes/.env` 里设 `<NAME>_API_KEY`；URL 不一样用
 `<NAME>_BASE_URL` 覆盖。
-5. 只有改了要重启的开关（`catalog`、`pricing`）才重启；Key、地址、
-白名单、`probeFreeTier` 都是即时生效。
+6. 只有改了要重启的开关（`catalog`、`pricing`）才重启；Key、地址、
+白名单、选中列表、`probeFreeTier` 都是即时生效。
 
 ```json
 "newvendor": {
@@ -319,9 +333,11 @@ OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers
 | `static+catalog` | `catalog: true, pricing: false` | `freeModels`，外加实际能免费服务的 | 只管减；`probeFreeTier` 开了也能加 |
 | `static` | 都不设 | `freeModels` | 无 |
 
-只有 OpenRouter 公布价格，所以只有它能光看目录加新模型。Gemini、TokenRouter、B.AI、HashNeuron 的 `/models` 没有 `pricing` 字段，免费收费混在一起，按列表自动加可能把流量引到计费模型上。它们改成探活（下面的 `probeFreeTier`），四家默认都开。它们的目录照样拉，用来拿掉已下线的 `freeModels` 条目，以及给探活提供候选。下架的模型一回来就自动恢复。
+公布逐 token 价格的目录才能只靠列表加入未知模型。Gemini、TokenRouter、B.AI、HashNeuron 的 `/models` 没有 `pricing` 字段，免费收费混在一起，按列表自动加可能把流量引到计费模型上。它们改成探活（下面的 `probeFreeTier`），四家默认都开。它们的目录照样拉，用来拿掉已下线的 `freeModels` 条目，以及给探活提供候选。下架的模型一回来就自动恢复。
 
-目录拉失败、返回空、或者渠道没 Key，都不改变现状：`freeModels` 照旧说了算。删条目必须看到一份**真正拉到的**目录，上游一抖不会清空路由。
+新增或修改渠道、保存 Key 都会在后台立即跑一批探活，不等待、不用重启；每批结果出来就进池。「渠道」页在 `probing` 为真或 `probePending` 大于 0 时自动轮询刷新。`discovery.evaluation.probeBatchSize`（默认 3）是每批模型数，`probeBatchDelayMs`（默认 2000）是批次间隔，`probeMaxPerProvider`（默认 100）限制单渠道每轮最多探多少。关掉 `evaluation.enabled` 就完全停止探活。
+
+目录拉失败、返回空、或者渠道没 Key，都不改变现状：原来的价格语义和 `freeModels` 照旧生效。删条目必须看到一份**真正拉到的**目录，上游一抖不会清空模型池。
 
 编辑弹窗里的 **获取模型** 按钮改成只报渠道名（`{ "action": "fetch-models", "provider": "name" }`），不再只发 Base URL。服务端用它已保存的 Key 和该渠道自己的鉴权头（`modelsKeyHeader`）去拉 `/models`，所以要求凭证的列表接口——HashNeuron 对匿名请求直接回 `401`——不会逼人重贴一个早就存过的 Key。表单里现填的 Key 会先试；它被 `401`/`403` 拒绝时再退回已保存的 Key，而不是整次拉取失败。显式传 `baseUrl` 仍然覆盖保存值，方便在保存前先试改过的地址。凭证被拒时错误信息会直接说明这一点，不再只显示 `catalog HTTP 401`。
 
@@ -331,7 +347,7 @@ OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers
 
 ## 免费模型发现
 
-路由器每 `discovery.intervalMs`（当前每 2 天）扫一遍带价格目录和开了 `probeFreeTier` 的目录渠道，看有没有新的免费文本模型。发现 tab 的 **立即运行** 会跳过这个间隔、在后台启动一轮，运维不用等定时器，也不用重启服务。每个新模型得一次缓存的混合评测：确定性推理/指令题、延迟、上下文长度、工具和结构化输出支持，分数决定它插进 `free-best` 的位置。
+路由器每 `discovery.intervalMs`（当前每 2 天）扫一遍带价格目录和开了 `probeFreeTier` 的目录渠道，看有没有新的免费文本模型。「渠道 → 发现」里的 **立即运行** 会跳过这个间隔、在后台启动一轮，运维不用等定时器，也不用重启服务。每个新模型得一次缓存的混合评测：确定性推理/指令题、延迟、上下文长度、工具和结构化输出支持，分数决定它在池中的位置。
 
 分数三部分封顶，单项带不动全局：
 
@@ -341,7 +357,7 @@ OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers
 | metadata | 20 | 工具、结构化输出、上下文长度、模态、新鲜度 |
 | latency | 6 | 一次冷采样，故意只做小权重平局裁决 |
 
-分数缺失、还是 `pending`、或是老 benchmark 版本产的，都会重评。不然单次评测撞上 429 的模型会永远背着 `-1` 的 fallback 分垫底——它已经在跟踪名单里，再也不会被当新模型看。每轮最多评 `evaluation.maxPerRun` 个。没有配置锚点、没有 `baselineScores`、也还没评测分时，路由器改用随包携带的 SWE-bench Verified 先验（`app/data/swe-bench.json`，与上游发布的是同一份非官方快照），而不是直接给 `-1`。`/health` 每条用 `scoreSource` 报告分数来源：`baseline`、`evaluation`、`swe-bench` 或 `unranked`；Web UI 路由表把来源放在评分格的提示里。
+分数缺失、还是 `pending`、或是老 benchmark 版本产的，都会重评。不然单次评测撞上 429 的模型会永远背着 `-1` 的 fallback 分垫底——它已经在跟踪名单里，再也不会被当新模型看。每轮最多评 `evaluation.maxPerRun` 个。没有配置锚点、没有 `baselineScores`、也还没评测分时，路由器改用随包携带的 SWE-bench Verified 先验（`app/data/swe-bench.json`，与上游发布的是同一份非官方快照），而不是直接给 `-1`。`/health` 每条用 `scoreSource` 报告分数来源：`baseline`、`evaluation`、`swe-bench` 或 `unranked`；Web UI 状态页的模型池表把来源放在评分格的提示里。
 
 排名还会跟着真实流量走。单个模型在用量窗口攒够`evaluation.usageMinRequests` 次尝试后，成功率按`evaluation.usageWeight` 上下调分：100% 加满，80% 不动，60% 及以下扣满。置顶模型豁免。同一模型多家提供时按最好的一家排名，一家拉胯不连累模型。`./script/models.sh` 的 `score`、`source`、`rank+-` 三列分别看当前分数、来源和偏移，`/health` 里每条有`baseScore` 和 `scoreAdjustment`。
 
@@ -366,19 +382,19 @@ OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers
 
 | 回复 | 含义 | 效果 |
 |---|---|---|
-| `200`，无计费字段 | 这把 Key 能 serve | 免费；带评测分进路由 |
-| `200`，`usage.cost` / `credits` 大于 0 | serve 了，但计费 | 不免费；移出路由 |
-| `429`，免费配额全 `limit: 0` | 根本没有免费档 | 移出路由 |
+| `200`，无计费字段 | 这把 Key 能 serve | 免费；带评测分进池 |
+| `200`，`usage.cost` / `credits` 大于 0 | serve 了，但计费 | 不免费；不进自动路由 |
+| `429`，免费配额全 `limit: 0` | 根本没有免费档 | 不免费 |
 | `429`，有 `limit` 大于 `0` | 免费，但今天花完了 | 留下；数字变每日限额 |
-| `404` | 不接，或下架了 | 移出路由 |
-| `400` "only supports Interactions API" | 不是聊天模型 | 移出路由 |
+| `404` | 不接，或下架了 | 不免费 |
+| `400` "only supports Interactions API" | 不是聊天模型 | 从候选里去掉 |
 | 超时、`5xx` | 说明不了问题 | 无 verdict，下轮再探 |
 
-响应里的正数账单压过状态码和目录：请求确实跑了，但不是免费的，就不能进零成本路由。仍然建议用无账单的 Key，因为不报 `cost` 的计费网关用这招看不出来。
+响应里的正数账单压过状态码和目录：请求确实跑了，但不是免费的，就不能进自动路由。被选中的付费模型不受负面结论影响，结论只改它的免费标签。仍然建议用无账单的 Key，因为不报 `cost` 的计费网关用这招看不出来。
 
 每个 verdict 缓存进状态文件，一个模型一辈子只花一次探路钱，`evaluation.maxPerRun` 卡单轮上限。"不免费"的 verdict 过`discovery.verdictRetryMs`（默认等于发现间隔）过期，provider 抖一下不会永久退役模型；"免费"的不过期，反正正常流量天天 revisit，翻车了后来的拒绝会覆盖。
 
-免费 verdict 不跟着发现条目一起丢。状态迁移或手改只留下了 verdict、丢了条目时，下一轮目录刷新会把模型补回路由，不再花一次探路请求。
+免费 verdict 不跟着发现条目一起丢。状态迁移或手改只留下了 verdict、丢了条目时，下一轮目录刷新会把模型补回池，不再花一次探路请求。
 
 verdict 双向压过 `freeModels`，这就是意义所在：`config.json` 的白名单只是你对别人定价的猜，配额数字是 provider 亲口报的价。
 
@@ -392,32 +408,30 @@ verdict 双向压过 `freeModels`，这就是意义所在：`config.json` 的白
 
 ### 排除领域专用模型
 
-窄领域调优的模型刷通用 benchmark 分很高，但当默认路由很烂。`discovery.exclude` 管这个：
+窄领域调优的模型刷通用 benchmark 分很高，但当默认模型很烂。`discovery.exclude` 管这个：
 
 - `modelPatterns`：模型 ID 的大小写不敏感正则。
 - `textPatterns`：目录 `name` + `description` 的大小写不敏感正则。这个更
 经久，因为厂商改名换后缀，描述里讲它是干嘛的可一直都在。
 
-两条红线是故意的：`config.json` 路由里写了的豁免，显式声明永远赢过滤器；排除只拿掉自动排名，被点名的 ID 照调不误（`GET /v1/models` 里留着，精确 ID 可调），点名即 deliberate。
+两条红线是故意的：`freeModels` 或 `selectedModels` 里写了的豁免，显式声明永远赢过滤器；排除只作用于自动发现的免费模型，不会把已选模型移出 `GET /v1/models`，精确 ID 照样可调，点名即 deliberate。
 
-过滤建路由和收集时都生效，所以新 pattern 重启即生效，不用等下一轮收集。`/health` 在 `discovery.excludedModels` 里列当前命中。
+过滤建池和收集时都生效，所以新 pattern 重启即生效，不用等下一轮收集。`/health` 在 `discovery.excludedModels` 里列当前命中。
 
 `evaluation.baselineScores` 直接覆盖分数（钳制在 0-100 内），按 `provider:model` 或裸模型ID 找。发现的和配置的都管，优先于评测分，适合埋掉那些自动打分虚高的模型。
 
-catalog 模型变付费、下架、不再符合文本聊天，下一轮目录检查自动移出所有效路由。它留在 `config.json` 里当排名历史，目录哪天又标免费就恢复。
+自动发现的 catalog 模型变付费、下架、不再符合文本聊天，下一轮目录检查自动移出模型池。目录哪天又标免费就恢复。
 
-`static` 渠道的候选，有 `freeModels` 又有 Key 就一直在；`static+catalog`的还得出现在拉到的目录里，不在的进 `discovery.unavailableModels` 报备。
+`static` 渠道的候选，有 `freeModels` 又有 Key 就一直在；`static+catalog`的还得出现在拉到的目录里，不在的进 `discovery.unavailableModels` 报备。写进 `selectedModels` 的模型只要有可用 Key 就留在池里，不受目录影响。
 
 发现和评测状态存 `discovered-free-models.json`，重启不丢，那文件是gitignored 的。
 
-排期和目标路由配在 `config.json`：
+排期和探活配在 `config.json`：
 
 ```json
 "discovery": {
   "enabled": true,
-  "provider": "openrouter",
   "intervalMs": 172800000,
-  "route": "free-best",
   "stateFile": "discovered-free-models.json",
   "exclude": {
     "modelPatterns": [],
@@ -431,6 +445,9 @@ catalog 模型变付费、下架、不再符合文本聊天，下一轮目录检
     "maxPerRun": 8,
     "usageWeight": 12,
     "usageMinRequests": 20,
+    "probeBatchSize": 3,
+    "probeBatchDelayMs": 2000,
+    "probeMaxPerProvider": 100,
     "pinnedModels": [
       "gemini:gemini-3.8-flash",
       "gemini:gemini-3.7-flash",
@@ -441,7 +458,7 @@ catalog 模型变付费、下架、不再符合文本聊天，下一轮目录检
 }
 ```
 
-`/health` 报上次收集时间、见过的免费模型、分数、路由优先级、以及因为不免费被拿掉的模型。现路由位置当 baseline 锚，从 94 起每位减 4，地板 30。
+`/health` 报上次收集时间、见过的免费模型、分数、免费池与付费池、以及因为不免费被拿掉的模型。每个渠道 `freeModels`、`selectedModels` 里的位置当种子锚，从 94 起每位减 4，地板 30；置顶、baseline、评测和 SWE-bench 分排在它上面。
 
 评测请求和普通请求一样计用量，因为烧的是同一份 provider 配额。
 
@@ -475,7 +492,7 @@ provider 在跑模型前就拒了，不算。
 - 失败桶有 `rateLimit`、`timeout`、`serverError`、`empty`、
 `notFound`、`forbidden`、`aborted`、`other`——请求掉到低优先级模型的*原因* 看得见。
 
-`GET /health` 的 `usage` 里是同一份数据，每条路由条目自带 `usage` 块。
+`GET /health` 的 `usage` 里是同一份数据，每条池条目自带 `usage` 块。
 
 ## systemd 用户服务
 
@@ -493,23 +510,26 @@ journalctl --user -u free-router -f
 
 ## 路由行为
 
-1. `free-best` 里按**模型**排名。置顶按配置顺序打头，其余跟 baseline
-和发现分数；同一 `provider:model` 各自成组排名。
-2. 每个模型，把当前标免费文本聊天的每家都试一遍。配置的渠道先行，
-同 slug 别家跟上。目录 ID 先剥 org 前缀和 `:free` 尾巴再比对，所以OpenRouter 后出的 Google/B.AI 同款免费版会紧跟原版试，而不是另起一行。
-3. 一把可用 Key 都没有的渠道跳过。
-4. catalog 渠道每 15 分钟刷新。
-5. 每 `discovery.intervalMs` 收集新免费目录文本模型、评测、按分插进
-`free-best`。目录里撞见已在排名的模型，挂到那条下当多渠道，不当新模型评。
-6. 变付费、下架、不再符合文本聊天的目录模型，移出有效路由。
-7. 缺请求要的能力（工具、图片输入等）的模型去掉。
-8. 剩下按统一顺序试。
-9. 限流、超时、服务端错、空成功回复走 provider/model/Key 三级冷却；
+1. 按**模型**给免费池排名。置顶按配置顺序打头，其余跟 baseline、
+发现分数和渠道种子顺序；同一 `provider:model` 各自成组排名。
+2. 付费池只在请求点名已选中的付费模型时使用，永不进入自动回退或
+探索抽签。
+3. 每个模型，把当前提供它的免费渠道都试一遍。在
+`freeModels`/`selectedModels` 里写了它的渠道先行，同 slug 别家跟上。目录 ID 先剥 org 前缀和 `:free` 尾巴再比对，所以 OpenRouter 后出的 Google/B.AI 同款免费版会紧跟原版试，而不是另起一行。
+4. 一把可用 Key 都没有的渠道跳过。
+5. catalog 渠道每 15 分钟刷新。
+6. 每 `discovery.intervalMs` 收集新免费目录文本模型、评测，由分数决定
+它在池中的位置。目录里撞见已知模型，挂到那条下当多渠道，不当新模型评。
+7. 自动发现的目录模型变付费、下架、不再符合文本聊天，移出模型池。
+8. 缺请求要的能力（工具、图片输入等）的模型去掉。
+9. 剩下按统一顺序试；全冷却兜底只放行容量类失败，`payment`、
+`notFound`、`forbidden` 永不重试，处于资金不足封锁期的条目也不放行。
+10. 限流、超时、服务端错、空成功回复走 provider/model/Key 三级冷却；
 `401` 只退役那把 Key。
-10. 发上游前，把本地环境里 `*_API_KEY` / `*_TOKEN` / `*_SECRET` /
+11. 发上游前，把本地环境里 `*_API_KEY` / `*_TOKEN` / `*_SECRET` /
 `*_PASSWORD` 的值（含 provider Key、网关 Key、管理密码）以及这些名字的 `NAME=...` 赋值行都脱敏。这拦不住 Hermes 在本地读 `.env`，只保证这些值不进 OpenRouter、TokenRouter、B.AI 的请求体。
-11. 推理专用的流 chunk 先攒着，模型吐出正文或工具调用才往客户端发，空模型照样能被换掉。等待有上限 `streamCommitGraceMs`（默认 10 秒，`FREE_ROUTER_STREAM_COMMIT_GRACE_MS` 环境变量优先）：超时就把已攒的前缀先发出去、剩下实时透传，浏览器和代理永远不会卡在无头连接上。这样提交了却始终没有正文的流，客户端照旧拿到 200，但记账按 `empty` 算、永不记 `ok`。
-12. Gemini 工具调用续聊，把 OpenAI 客户端丢掉的
+12. 推理专用的流 chunk 先攒着，模型吐出正文或工具调用才往客户端发，空模型照样能被换掉。等待有上限 `streamCommitGraceMs`（默认 10 秒，`FREE_ROUTER_STREAM_COMMIT_GRACE_MS` 环境变量优先）：超时就把已攒的前缀先发出去、剩下实时透传，浏览器和代理永远不会卡在无头连接上。这样提交了却始终没有正文的流，客户端照旧拿到 200，但记账按 `empty` 算、永不记 `ok`。
+13. Gemini 工具调用续聊，把 OpenAI 客户端丢掉的
 `extra_content.google.thought_signature` 贴回去。优先用上次 Gemini回包缓存的签名，不然用 Google 的 `skip_thought_signature_validator`哨兵，省一次烧配额的 400。还 400 就跳过同请求的剩下 Gemini 模型。
 
-点名具体模型 ID 而不是路由别名，网关把当前提供同一模型的每家都试一遍。`provider:model` 强制只用一家。
+省略 `model` 或发 `free-best` 走免费池；点名免费模型 ID 会试当前提供同一模型的每家渠道；点名已启用的付费模型只用该选中项。`provider:model` 强制只用一家。

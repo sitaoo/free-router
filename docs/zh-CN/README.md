@@ -10,8 +10,9 @@
 
 - **零依赖**：纯 Node 标准库，没有 `npm install`，没有供应链包袱。
 - **开箱即用**：首次启动自己生成默认配置，打开浏览器就能配。
+- **免费自动、付费点名**：添加渠道后，程序能证明的免费模型自动启用（目录价格、白名单或实测探活）；付费模型需手动勾选并确认警示，且只在请求点名时使用。
 - **Key 自由**：同一渠道多 Key 自动轮换，401 只退役坏的那一把。
-- **额度透明**：免费配额按天跟踪，烧完的模型自动让路，第二天回来。
+- **额度透明**：免费配额按天跟踪，烧完的模型自动让路，第二天回来；付费模型报告资金不足时只停用该模型 24 小时，到期自动恢复。
 - **局域网就绪**：一键开关 + 网关鉴权，手机、平板、家里其他机器都能用。
 - **讲你的语言**：12 种界面语言，跟随浏览器自动切换。
 - **明暗双主题**：默认跟随系统，也可在顶栏锁定浅色或深色。
@@ -56,7 +57,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
   -d '{"model": "free-best", "messages": [{"role": "user", "content": "hi"}]}'
 ```
 
-通了。路由排序、配额、局域网、网关 Key，剩下的全在 UI 里点。`./ctl.sh stop` 停止，`./ctl.sh status` 看状态。
+通了。模型池、每日限额、局域网、网关 Key，剩下的全在 UI 里点。`./ctl.sh stop` 停止，`./ctl.sh status` 看状态。
 
 同一个网关也认 OpenAI 的 **Responses API**，自动翻成各家都懂的 chat 方言：
 
@@ -99,8 +100,8 @@ mkdir -p data && cp .env.example data/.env
 
 ## 它在背后做什么
 
-- **每两天自动发现**：扫描各渠道目录，新出现的免费模型先做一套能力实测，够格才进榜。也可以随时到发现 tab 点 **立即运行**。
-- **每次请求现场排名**：配置顺序定起跑线，真实成功率、冷静期、日限额实时加权，pinned 模型永远先上。
+- **每两天自动发现**：扫描各渠道目录，新出现的免费模型先做一套能力实测，够格才进池；无价格目录在有 Key 后立即后台探活。也可以随时到「渠道 → 发现」点 **立即运行**。
+- **每次请求现场排名**：白名单和选中列表的顺序定起跑线，真实成功率、冷静期、日限额实时加权，pinned 模型永远先上，付费模型永不参与自动回退。
 - **0-100 打分尺度**：画像加成、稀缺让路、实时延迟微调排序；没有本地分数的模型用随包 SWE-bench 先验，明显装不下上下文窗口的请求直接跳过该模型，百分之几的流量探冷模型。详见[打分尺度与实时信号](HOW_IT_WORKS.md#打分尺度与实时信号)。
 - **坏 Key 不连坐**：401 只退役当前 Key，限流只冷却当前 Key，从不给模型记黑账。
 - **配置丢不了**：出厂默认和你的改动分文件存放，`git pull` 永远冲不掉设置。
@@ -109,13 +110,14 @@ mkdir -p data && cp .env.example data/.env
 ## 进阶
 
 ```bash
-./script/models.sh          # 当前 free-best 实时榜
+./script/models.sh          # 当前免费模型池，按分数排序
+./script/models.sh --paid   # 连已选付费模型一起列
 ./script/models.sh --usage  # 谁烧了多少配额
 ./ctl.sh docker --dev       # Docker 开发模式（代码热挂载）
 ```
 
 - 局域网：设置 → **允许局域网访问**，按页面的地址列表连，记得先建网关 Key、改密码。网关只提供 HTTP，有公网 IP 时别开，远程访问请在前面加一层 HTTPS 反向代理。
-- 加新渠道：Web UI 里选预设（Gemini、OpenRouter、TokenRouter、B.AI、HashNeuron、Groq、Cerebras、Mistral、Hugging Face）或填任意 OpenAI 兼容端点，或往 `app/config/config.json` 加一段。
+- 加新渠道：Web UI 里选预设（Gemini、OpenRouter、TokenRouter、B.AI、HashNeuron、Groq、Cerebras、Mistral、Hugging Face）或填任意 OpenAI 兼容端点，或往 `app/config/config.json` 加一段。免费模型一旦被确认就自动进入可调用池；付费模型在「渠道 → 模型」里按渠道勾选。
 - 原理与配置分层：[工作原理](HOW_IT_WORKS.md)。
 
 ## Key 去哪领

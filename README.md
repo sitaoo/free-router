@@ -10,8 +10,9 @@ Turn scattered **free-tier models** into one **inexhaustible OpenAI endpoint**. 
 
 - **Zero dependencies**: pure Node standard library. No `npm install`, no supply-chain baggage.
 - **Works out of the box**: generates its own default config on first boot. Open the browser and configure.
+- **Free by rule, paid by name**: adding a provider auto-enables the free models it can prove (catalog prices, allowlist, or a live probe). Paid models are opt-in with a warning, and only used when a request names them.
 - **Key freedom**: multiple keys per provider rotate automatically. A `401` retires only the bad one.
-- **Transparent quotas**: free allowances tracked per day. Exhausted models step aside and return tomorrow.
+- **Transparent quotas**: free allowances tracked per day. Exhausted models step aside and return tomorrow. A paid model that reports insufficient funds is parked for 24 hours and recovers by itself.
 - **LAN ready**: one switch plus gateway auth. Phones, tablets, and other machines at home can use it.
 - **Speaks your language**: 12 UI languages, following the browser automatically.
 - **Light and dark themes**: follow the system, or lock light/dark from the top bar.
@@ -56,7 +57,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
   -d '{"model": "free-best", "messages": [{"role": "user", "content": "hi"}]}'
 ```
 
-That is it. Route order, quotas, LAN access, gateway keys — the rest is all point-and-click in the UI. `./ctl.sh stop` stops it, `./ctl.sh status` checks it.
+That is it. Model pool, daily limits, LAN access, gateway keys — the rest is all point-and-click in the UI. `./ctl.sh stop` stops it, `./ctl.sh status` checks it.
 
 The same gateway also answers the OpenAI **Responses API**, translated to the chat dialect every provider understands:
 
@@ -99,8 +100,8 @@ Detailed notes: [Run with Docker](docs/HOW_IT_WORKS.md#run-with-docker).
 
 ## What it does behind the scenes
 
-- **Discovers every two days**: scans provider catalogs. New free models pass a capability exam before joining the ranking. Trigger a scan immediately from Discovery → **Run now**.
-- **Ranks live on every request**: config order sets the baseline. Real success rates, cooldowns, and daily limits weigh in. Pinned models always go first.
+- **Discovers every two days**: scans provider catalogs. New free models pass a capability exam before joining the pool, and price-free catalogs are probed in the background as soon as a key exists. Trigger a scan immediately from Providers → Discovery → **Run now**.
+- **Ranks live on every request**: allowlist and selection order set the baseline. Real success rates, cooldowns, and daily limits weigh in. Pinned models always go first, and paid models never join an automatic fallback.
 - **Scores on a 0-100 scale**: capability portrait, scarcity, and live latency refine the order; models with no local score use a shipped SWE-bench prior, and a request that clearly exceeds a model's published context window skips it. A few percent of traffic samples cold models. Details: [Scoring scale and live signals](docs/HOW_IT_WORKS.md#scoring-scale-and-live-signals).
 - **Bad keys do not implicate anyone**: a `401` retires only the current key. Rate limits only cool down the current key. The model record stays clean.
 - **Settings never get lost**: factory defaults and your changes live in separate files. `git pull` can never clobber them.
@@ -109,13 +110,14 @@ Detailed notes: [Run with Docker](docs/HOW_IT_WORKS.md#run-with-docker).
 ## Going further
 
 ```bash
-./script/models.sh          # live free-best ranking
+./script/models.sh          # live free pool, best first
+./script/models.sh --paid   # also list selected paid models
 ./script/models.sh --usage  # who burned how much quota
 ./ctl.sh docker --dev       # Docker dev mode (live code mount)
 ```
 
 - LAN: Settings → **Allow LAN access**. It lists the exact addresses. Create a gateway key and change the password first. The gateway serves plain HTTP only, so keep it off a public IP and put an HTTPS reverse proxy in front for remote access.
-- New provider: pick a preset (Gemini, OpenRouter, TokenRouter, B.AI, HashNeuron, Groq, Cerebras, Mistral, Hugging Face) or enter any OpenAI-compatible endpoint in the web UI, or add a block in `app/config/config.json`.
+- New provider: pick a preset (Gemini, OpenRouter, TokenRouter, B.AI, HashNeuron, Groq, Cerebras, Mistral, Hugging Face) or enter any OpenAI-compatible endpoint in the web UI, or add a block in `app/config/config.json`. Its free models join the callable pool as soon as they are known; select paid ones per provider under Providers → Models.
 - Design and config layers: [How it works](docs/HOW_IT_WORKS.md).
 
 ## Where to get keys
