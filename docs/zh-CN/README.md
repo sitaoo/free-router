@@ -58,6 +58,14 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 通了。路由排序、配额、局域网、网关 Key，剩下的全在 UI 里点。`./ctl.sh stop` 停止，`./ctl.sh status` 看状态。
 
+同一个网关也认 OpenAI 的 **Responses API**，自动翻成各家都懂的 chat 方言：
+
+```bash
+curl http://127.0.0.1:8787/v1/responses \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "free-best", "input": "hi"}'
+```
+
 ## Docker 部署
 
 仓库自带 Compose 配置，应用镜像直接从源码构建，不需要拉预构建的应用镜像；基础镜像 `node:20-slim` 来自 Docker Hub。

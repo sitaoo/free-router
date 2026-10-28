@@ -1795,7 +1795,7 @@ function renderGateway() {
   }
   el('gw-require').checked = Boolean(state.gateway && state.gateway.requireAuth);
   el('gw-note').textContent = keys.length
-    ? 'Clients call: curl -H "Authorization: Bearer <key>" ' + gatewayEndpoint() + '/chat/completions'
+    ? 'Clients call: curl -H "Authorization: Bearer <key>" ' + gatewayEndpoint() + '/chat/completions' + ' (or /responses)'
     : '';
 }
 

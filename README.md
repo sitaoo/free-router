@@ -58,6 +58,14 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 That is it. Route order, quotas, LAN access, gateway keys — the rest is all point-and-click in the UI. `./ctl.sh stop` stops it, `./ctl.sh status` checks it.
 
+The same gateway also answers the OpenAI **Responses API**, translated to the chat dialect every provider understands:
+
+```bash
+curl http://127.0.0.1:8787/v1/responses \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "free-best", "input": "hi"}'
+```
+
 ## Docker
 
 The repo ships a Compose file that builds the application image from source; there is no prebuilt application image to pull. The `node:20-slim` base comes from Docker Hub.

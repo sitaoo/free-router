@@ -33,6 +33,12 @@ import { estimateRequestTokens, fitsContext } from './context.mjs';
 import { installUpstreamProxy } from './proxy.mjs';
 import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
 import { createSecretRedactor } from './redact.mjs';
+import {
+  createStreamTranslator,
+  sseEvent,
+  toChatRequest,
+  toResponsesPayload,
+} from './responses.mjs';
 import { loadSweBenchScores, sweBenchScoreFor } from './swe-bench.mjs';
 import { describeLanAccess, lanGuard, loginLockout, recordLoginFailure } from './net.mjs';
 import { PINNED_SCORE, USAGE_KINDS, classifyFailure, compareByScarcity, ewmaLatency, isCredentialFault, latencyAdjustment, metadataBonus, metadataScore, normalizeScore, pickExplorationTarget, qualityTotals } from './ranking.mjs';
@@ -1921,7 +1927,8 @@ async function attemptJson(candidate, body, clientSignal, slot) {
   };
 }
 
-async function attemptStream(candidate, body, res, clientSignal, slot) {
+async function attemptStream(candidate, body, res, clientSignal, slot, options = {}) {
+  const translator = options.translator || null;
   let response;
   let cleanup = () => {};
   try {
@@ -1967,12 +1974,20 @@ async function attemptStream(candidate, body, res, clientSignal, slot) {
   const decoder = new TextDecoder();
   const extractor = geminiStreamExtractor(candidate);
   const bufferedChunks = [];
+  const bufferedEvents = [];
   const graceMs = streamCommitGraceMs();
   const streamStartedAt = Date.now();
   let parserBuffer = '';
   let committed = false;
   let sawUseful = false;
   let finishReason = '';
+
+  function emitEvents(events) {
+    if (!events.length) return;
+    const text = events.map(sseEvent).join('');
+    if (committed) res.write(text);
+    else bufferedEvents.push(text);
+  }
 
   function commitStream() {
     res.writeHead(200, {
@@ -1982,10 +1997,25 @@ async function attemptStream(candidate, body, res, clientSignal, slot) {
       'X-Free-Router-Model': candidate.model,
       'X-Free-Router-Provider': candidate.provider,
     });
+    // The response object has to exist before anything refers to its id, so
+    // response.created always leads the flushed backlog.
+    if (translator) res.write(translator.created().map(sseEvent).join(''));
+    for (const chunk of bufferedEvents) res.write(chunk);
+    bufferedEvents.length = 0;
     for (const chunk of bufferedChunks) res.write(chunk);
     bufferedChunks.length = 0;
     committed = true;
     log(`selected ${candidateKey(candidate)} (stream)`);
+  }
+
+  function finishStream(reason) {
+    if (translator) {
+      res.write(translator.finish({ finishReason: reason }).map(sseEvent).join(''));
+      // OpenAI SDKs stop on [DONE]; Responses clients stop on the terminal
+      // event. Both terminators keep every client happy.
+      res.write('data: [DONE]\n\n');
+    }
+    res.end();
   }
 
   while (true) {
@@ -1996,6 +2026,7 @@ async function attemptStream(candidate, body, res, clientSignal, slot) {
       extractor?.flush();
       cleanup();
       if (committed) {
+        if (translator) res.write(translator.fail(String(error)).map(sseEvent).join(''));
         res.end();
         return { ok: true, candidate, interrupted: true };
       }
@@ -2008,7 +2039,10 @@ async function attemptStream(candidate, body, res, clientSignal, slot) {
     const bytes = Buffer.from(read.value);
     const text = decoder.decode(read.value, { stream: true });
     extractor?.push(text);
-    if (committed) {
+    if (translator) {
+      // Translated output is generated from parsed payloads below, never from
+      // the provider's own bytes. Nothing to forward here.
+    } else if (committed) {
       res.write(bytes);
     } else {
       bufferedChunks.push(bytes);
@@ -2028,18 +2062,23 @@ async function attemptStream(candidate, body, res, clientSignal, slot) {
         const payload = JSON.parse(data);
         const finish = payload?.choices?.[0]?.finish_reason;
         if (finish) finishReason = finish;
+        if (translator) emitEvents(translator.push(payload));
         if (usefulDelta(payload)) {
           sawUseful = true;
           if (!committed) {
             commitStream();
-            break;
+            // The chat branch forwards the provider's own bytes, which are
+            // already in the commit backlog, so the rest of this read needs no
+            // scanning. Translated output is generated per event, so every
+            // remaining line in this read still has to be converted.
+            if (!translator) break;
           }
         }
       } catch {
         // Ignore keepalives and malformed provider-specific event lines.
       }
     }
-    if (!committed && bufferedChunks.length && Date.now() - streamStartedAt >= graceMs) {
+    if (!committed && Date.now() - streamStartedAt >= graceMs && (bufferedChunks.length || bufferedEvents.length)) {
       commitStream();
     }
   }
@@ -2048,12 +2087,20 @@ async function attemptStream(candidate, body, res, clientSignal, slot) {
   if (committed) {
     cleanup();
     if (!sawUseful) {
+      if (translator) {
+        res.write(
+          translator
+            .fail(`reasoning only or empty stream (finish_reason=${finishReason || 'unknown'})`)
+            .map(sseEvent)
+            .join(''),
+        );
+      }
       res.end();
       const reason = `reasoning only or empty stream (finish_reason=${finishReason || 'unknown'})`;
       setCooldown(candidate, 'empty', reason, 0, slot);
       return { ok: true, candidate, hollow: true };
     }
-    res.end();
+    finishStream(finishReason);
     return { ok: true, candidate };
   }
   cleanup();
@@ -2135,7 +2182,7 @@ function routeStatus() {
   return routes;
 }
 
-async function handleChat(req, res) {
+async function handleChat(req, res, options = {}) {
   let body;
   try {
     body = await readJson(req);
@@ -2145,6 +2192,18 @@ async function handleChat(req, res) {
     });
   }
 
+  // /v1/responses is served by translating to chat shape, running the same
+  // routing pipeline, and translating back: routing, quota, cooldown, key
+  // rotation, and usage accounting all stay identical for both dialects.
+  let responses = null;
+  if (options.dialect === 'responses') {
+    const translated = toChatRequest(body);
+    if (!translated.ok) {
+      return sendJson(res, translated.status, { error: translated.error });
+    }
+    responses = { request: body, customTools: translated.customTools };
+    body = translated.body;
+  }
   const requestedModel = String(body.model || 'free-best');
   await refreshCatalog();
   const candidates = candidateModels(requestedModel, body);
@@ -2213,8 +2272,15 @@ async function handleChat(req, res) {
       const slotLabel = slot ? ` [${slot.name}]` : '';
       log(`trying ${candidateKey(candidate)}${slotLabel} for ${requestedModel}`);
       const attemptStartedAt = Date.now();
+      const translator = responses
+        ? createStreamTranslator({
+            model: requestedModel,
+            request: responses.request,
+            customTools: responses.customTools,
+          })
+        : null;
       const result = body.stream
-        ? await attemptStream(candidate, body, res, clientController.signal, slot)
+        ? await attemptStream(candidate, body, res, clientController.signal, slot, { translator })
         : await attemptJson(candidate, body, clientController.signal, slot);
 
       if (result.ok) {
@@ -2233,7 +2299,14 @@ async function handleChat(req, res) {
         }
         if (!body.stream) {
           log(`selected ${candidateKey(candidate)}${slotLabel}`);
-          return sendJson(res, 200, result.payload, {
+          const payload = responses
+            ? toResponsesPayload(result.payload, {
+                model: requestedModel,
+                request: responses.request,
+                customTools: responses.customTools,
+              })
+            : result.payload;
+          return sendJson(res, 200, payload, {
             'X-Free-Router-Model': candidate.model,
             'X-Free-Router-Provider': candidate.provider,
           });
@@ -3462,6 +3535,13 @@ async function handler(req, res) {
       return sendJson(res, 401, { error: { message: gatewayFailure, type: 'unauthorized' } });
     }
     return handleChat(req, res);
+  }
+  if (req.method === 'POST' && url.pathname === '/v1/responses') {
+    const gatewayFailure = gatewayGuardFailure(req);
+    if (gatewayFailure) {
+      return sendJson(res, 401, { error: { message: gatewayFailure, type: 'unauthorized' } });
+    }
+    return handleChat(req, res, { dialect: 'responses' });
   }
   return sendJson(res, 404, {
     error: { message: `Unknown endpoint: ${req.method} ${url.pathname}`, type: 'not_found' },

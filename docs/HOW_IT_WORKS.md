@@ -149,7 +149,7 @@ The admin password is stored as a salted scrypt hash, never plaintext. `FREE_ROU
 
 ## Gateway API keys
 
-Named client credentials (`sk-fr-…`, shown once at creation) for anything calling `/v1/*`. Creating the first key enables auth; deleting the last one disables it again (or flip the switch in the Access title row — it refuses to enable with zero keys). Keys are checked on `/v1/models` and `/v1/chat/completions`; `/health` stays open for container probes.
+Named client credentials (`sk-fr-…`, shown once at creation) for anything calling `/v1/*`. Creating the first key enables auth; deleting the last one disables it again (or flip the switch in the Access title row — it refuses to enable with zero keys). Keys are checked on `/v1/models`, `/v1/chat/completions`, and `/v1/responses`; `/health` stays open for container probes.
 
 ## Provider keys (multi-account)
 
@@ -221,6 +221,31 @@ Or add a `model_aliases.free-best` entry and switch with `/model free-best`.
 
 The selected upstream is returned in `X-Free-Router-Provider` and `X-Free-Router-Model`, plus the provider's normal `model` field.
 
+## Responses API
+
+`POST /v1/responses` is served out of the box, on the same route, key rotation, quota, cooldown, and usage counters as `/v1/chat/completions`. Almost every provider behind the gateway speaks only Chat Completions, so the gateway translates in both directions instead of proxying: `input`, `instructions`, `tools`, `tool_choice`, `max_output_tokens`, `text.format`, and `reasoning.effort` become a chat request, and the chat answer (or its SSE deltas) becomes a `response` object (or the `response.*` event stream).
+
+```bash
+curl -s http://127.0.0.1:8787/v1/responses \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer sk-fr-...' \
+  -d '{"model": "free-best", "input": "Reply with exactly: router-ok"}'
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8787/v1", api_key="local")
+print(client.responses.create(model="free-best", input="Hello").output_text)
+```
+
+What the translation keeps: `instructions` (as the system message), string and item-array `input`, `input_image`, `function_call`/`function_call_output` history, function tools, `text.format` (as `response_format`), reasoning effort, and streaming. Custom (free-form) tools are offered upstream as a function taking one string and returned as `custom_tool_call`, so Codex-style clients keep their raw tool input.
+
+What it refuses with `400 invalid_request_error`, because a stateless fan-out cannot honour it: `store: true`, `previous_response_id`, `conversation`, `background: true`, `prompt` templates, and `item_reference` items. Hosted tools (`web_search`, `file_search`, …) need provider-side execution, so they are dropped rather than forwarded.
+
+Streams emit the standard sequence (`response.created` → `output_item.added` → `content_part.added` → `output_text.delta` … → `response.completed`, or `response.incomplete`/`response.failed`) with contiguous `sequence_number`s, then a final `data: [DONE]` for OpenAI SDKs that wait on it.
+
+
 ## Endpoints
 
 ```text
@@ -241,6 +266,7 @@ POST /api/restart            exit for supervisor restart (session required)
 GET  /health
 GET  /v1/models              gateway key required once auth is on
 POST /v1/chat/completions    gateway key required once auth is on
+POST /v1/responses           same routing, translated Responses dialect
 ```
 
 `GET /health` reports `version` from `package.json` (currently `1.0.0`). Releases are git tags of the form `v1.0.0`.

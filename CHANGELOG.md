@@ -8,6 +8,7 @@ tags are cut here. Dates are commit dates (`YYYY-MM-DD`).
 
 ### Added
 
+- `POST /v1/responses`: the gateway now speaks the OpenAI Responses API on the same routes, keys, quota, cooldown, and usage counters as chat completions. Requests and answers are translated in both directions (`input`, `instructions`, `tools`, `text.format`, `reasoning.effort`, `max_output_tokens`), streaming emits the standard `response.*` event sequence, and custom tools round-trip as `custom_tool_call`. Stateful fields (`store`, `previous_response_id`, `conversation`, `background`, `prompt`, `item_reference`) are refused with a 400 instead of being ignored.
 - Free-tier probing now runs for every price-free catalog by default (Gemini, TokenRouter, B.AI) and a new HashNeuron provider is shipped; a probe that returns a positive `usage.cost`/`credits` is treated as billed and kept out of routes.
 - Cached free verdicts are re-adopted into discovery after a state-file loss, without spending another probe.
 - Context-window pre-filter: estimated input plus requested output skips a candidate only when its published `context_length` is clearly too small; unknown limits and inline media keep it.

@@ -559,18 +559,110 @@ const mock = http.createServer(async (req, res) => {
 });
 
 let tokenRouterRequests = 0;
+let lastTokenRouterBody = null;
 const tokenRouterMock = http.createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/api/v1/chat/completions') {
     tokenRouterRequests += 1;
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    lastTokenRouterBody = body;
     const shouldFail = body.messages?.some(
       (message) => message.content === 'force-token-failure',
     );
     if (shouldFail) {
       res.writeHead(429, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: { message: 'tokenrouter rate limited' } }));
+      return;
+    }
+    const wantsTools = body.messages?.some((message) => message.content === 'responses-tools');
+    if (wantsTools) {
+      if (body.stream) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.write(
+          `data: ${JSON.stringify({
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'call_r1',
+                      type: 'function',
+                      function: { name: 'lookup', arguments: '{"q":' },
+                    },
+                  ],
+                },
+              },
+            ],
+          })}\n\n`,
+        );
+        res.write(
+          `data: ${JSON.stringify({
+            choices: [
+              {
+                delta: {
+                  tool_calls: [{ index: 0, function: { arguments: '"x"}' } }],
+                },
+              },
+            ],
+          })}\n\n`,
+        );
+        res.write(
+          `data: ${JSON.stringify({
+            choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+          })}\n\n`,
+        );
+        res.end('data: [DONE]\n\n');
+        return;
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(
+        JSON.stringify({
+          model: body.model,
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: null,
+                tool_calls: [
+                  {
+                    id: 'call_r1',
+                    type: 'function',
+                    function: { name: 'lookup', arguments: '{"q":"x"}' },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: {
+            prompt_tokens: 11,
+            completion_tokens: 4,
+            total_tokens: 15,
+            prompt_tokens_details: { cached_tokens: 2 },
+          },
+        }),
+      );
+      return;
+    }
+    if (body.stream) {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'token-' } }] })}\n\n`,
+      );
+      res.write(
+        `data: ${JSON.stringify({
+          choices: [{ delta: { content: 'router-ok' } }],
+          usage: { prompt_tokens: 11, completion_tokens: 4, total_tokens: 15 },
+        })}\n\n`,
+      );
+      res.write(
+        `data: ${JSON.stringify({
+          choices: [{ delta: {}, finish_reason: 'stop' }],
+        })}\n\n`,
+      );
+      res.end('data: [DONE]\n\n');
       return;
     }
     res.setHeader('Content-Type', 'application/json');
@@ -1256,6 +1348,124 @@ try {
     'tokenrouter-ok',
   );
 
+  // /v1/responses is translated to chat for the upstream and back for the
+  // client, so the same route, key, and quota machinery serves both dialects.
+  const responsesJson = await fetch(`http://127.0.0.1:${routerPort}/v1/responses`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'z-ai/glm-5.3-free',
+      instructions: 'be terse',
+      input: 'responses-tools',
+      tools: [
+        {
+          type: 'function',
+          name: 'lookup',
+          description: 'Look something up.',
+          parameters: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] },
+        },
+      ],
+      tool_choice: 'auto',
+    }),
+  });
+  assert.equal(responsesJson.status, 200);
+  assert.equal(responsesJson.headers.get('x-free-router-provider'), 'tokenrouter');
+  const responsesPayload = await responsesJson.json();
+  assert.equal(responsesPayload.object, 'response');
+  assert.equal(responsesPayload.status, 'completed');
+  assert.equal(responsesPayload.model, 'z-ai/glm-5.3-free');
+  assert.match(responsesPayload.id, /^resp_/);
+  assert.deepEqual(responsesPayload.output.map((item) => item.type), ['function_call']);
+  assert.equal(responsesPayload.output[0].call_id, 'call_r1');
+  assert.equal(responsesPayload.output[0].name, 'lookup');
+  assert.equal(responsesPayload.output[0].arguments, '{"q":"x"}');
+  assert.equal(responsesPayload.output[0].status, 'completed');
+  assert.deepEqual(responsesPayload.usage, {
+    input_tokens: 11,
+    input_tokens_details: { cached_tokens: 2, cache_write_tokens: 0 },
+    output_tokens: 4,
+    output_tokens_details: { reasoning_tokens: 0 },
+    total_tokens: 15,
+  });
+  // The upstream saw a chat request: instructions folded into a system
+  // message and the Responses tool flattened to the chat shape.
+  assert.equal(lastTokenRouterBody.messages[0].role, 'system');
+  assert.equal(lastTokenRouterBody.messages[0].content, 'be terse');
+  assert.equal(lastTokenRouterBody.messages[1].content, 'responses-tools');
+  assert.equal(lastTokenRouterBody.tools[0].function.name, 'lookup');
+  assert.equal(lastTokenRouterBody.stream, false);
+
+  const responsesStream = await fetch(`http://127.0.0.1:${routerPort}/v1/responses`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'z-ai/glm-5.3-free',
+      input: 'hello',
+      stream: true,
+    }),
+  });
+  assert.equal(responsesStream.status, 200);
+  assert.equal(responsesStream.headers.get('x-free-router-provider'), 'tokenrouter');
+  const responsesSse = await responsesStream.text();
+  const eventNames = [...responsesSse.matchAll(/^event: (.+)$/gm)].map((match) => match[1]);
+  assert.equal(eventNames[0], 'response.created');
+  assert.ok(eventNames.includes('response.output_text.delta'));
+  assert.ok(eventNames.includes('response.output_text.done'));
+  assert.equal(eventNames.at(-1), 'response.completed');
+  // A chat client's terminator is still what an OpenAI SDK waits for.
+  assert.match(responsesSse, /data: \[DONE\]/);
+  const deltaText = [...responsesSse.matchAll(/^data: (.+)$/gm)]
+    .map((match) => match[1])
+    .filter((data) => data !== '[DONE]')
+    .map((data) => JSON.parse(data))
+    .filter((event) => event.type === 'response.output_text.delta')
+    .map((event) => event.delta)
+    .join('');
+  assert.equal(deltaText, 'token-router-ok');
+  const completedEvent = [...responsesSse.matchAll(/^data: (.+)$/gm)]
+    .map((match) => match[1])
+    .filter((data) => data !== '[DONE]')
+    .map((data) => JSON.parse(data))
+    .find((event) => event.type === 'response.completed');
+  assert.equal(completedEvent.response.output[0].content[0].text, 'token-router-ok');
+  assert.equal(completedEvent.response.usage.input_tokens, 11);
+  // Sequence numbers drive client-side ordering; a gap or repeat breaks it.
+  const waves = [...responsesSse.matchAll(/^data: (.+)$/gm)]
+    .map((match) => match[1])
+    .filter((data) => data !== '[DONE]')
+    .map((data) => JSON.parse(data).sequence_number);
+  assert.deepEqual(
+    waves,
+    Array.from({ length: waves.length }, (_, index) => index),
+  );
+
+  const responsesStreamTools = await fetch(`http://127.0.0.1:${routerPort}/v1/responses`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'z-ai/glm-5.3-free',
+      input: 'responses-tools',
+      stream: true,
+      tools: [{ type: 'function', name: 'lookup', parameters: { type: 'object', properties: {} } }],
+    }),
+  });
+  assert.equal(responsesStreamTools.status, 200);
+  const toolSse = await responsesStreamTools.text();
+  assert.match(toolSse, /response\.function_call_arguments\.delta/);
+  assert.match(toolSse, /"arguments":"\{\\"q\\":\\"x\\"\}"/);
+  assert.match(toolSse, /response\.completed/);
+
+  // Stateful features cannot be honoured by a stateless fan-out. Saying so is
+  // better than accepting them and quietly returning something that ignores
+  // the previous turn.
+  const stateful = await fetch(`http://127.0.0.1:${routerPort}/v1/responses`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'z-ai/glm-5.3-free', input: 'hi', store: true }),
+  });
+  assert.equal(stateful.status, 400);
+  assert.match((await stateful.json()).error.message, /store is not supported/);
+
   const updatedHealth = await fetch(`http://127.0.0.1:${routerPort}/health`).then((res) =>
     res.json(),
   );
@@ -1546,15 +1756,16 @@ try {
   assert.equal(usageByKey.get('openrouter:deepseek-v3.2:free').fail, 1);
   assert.equal(usageByKey.get('bai:glm-5.3-flash').ok, 4);
   assert.equal(usageByKey.get('bai:glm-5.3-flash').fail, 0);
-  assert.equal(usageByKey.get('tokenrouter:z-ai/glm-5.3-free').ok, 1);
+  assert.equal(usageByKey.get('tokenrouter:z-ai/glm-5.3-free').ok, 4);
   assert.equal(usageByKey.get('tokenrouter:z-ai/glm-5.3-free').counts.rateLimit, 2);
   assert.equal(usageByKey.get('extra:extra-1').counts.rateLimit, 1);
   assert.equal(usageByKey.get('gemini:gemini-3.8-flash').ok, 5);
   assert.equal(usageByKey.get('gemini:gemini-3.8-flash').fail, 1);
   assert.equal(usageByKey.has('gemini:gemini-3.7-flash'), false);
   // Eight from routing, plus two served probes on bai (one free, one billed
-  // and therefore not routed), plus five Gemini tool-call round trips.
-  assert.equal(usage.days[0].ok, 15);
+  // and therefore not routed), plus five Gemini tool-call round trips, plus
+  // three /v1/responses round trips on tokenrouter.
+  assert.equal(usage.days[0].ok, 18);
   assert.equal(usageByKey.get('bai:models/glm-5.3-billed').ok, 1);
   // Three routing failures, the two deliberate quota rejections, the probe
   // that found glm-5.3-paid has no free allowance, the purposefully failed
@@ -1568,7 +1779,8 @@ try {
   assert.equal(usageByKey.get('bai:glm-5.3-flash').dailyLimitSource, 'config');
   assert.equal(usageByKey.get('bai:glm-5.3-flash').remainingToday, 1);
   assert.equal(usageByKey.get('tokenrouter:z-ai/glm-5.3-free').dailyLimit, 50);
-  assert.equal(usageByKey.get('tokenrouter:z-ai/glm-5.3-free').remainingToday, 49);
+  // Three more served /v1/responses round trips spend three more of the 50.
+  assert.equal(usageByKey.get('tokenrouter:z-ai/glm-5.3-free').remainingToday, 46);
   assert.equal(usageByKey.get('extra:extra-1').dailyLimit, null);
   assert.equal(usageByKey.get('extra:extra-1').remainingToday, null);
   // A 429 never reaches the model, so it does not burn today's consumed count.

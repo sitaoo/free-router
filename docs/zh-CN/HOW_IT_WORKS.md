@@ -146,7 +146,7 @@ tab）。一个网关 Key 都没有时，`/v1` 保持开放，方便本地用。
 
 ## 网关 API Key
 
-给调 `/v1/*` 的客户端用的命名凭证（`sk-fr-…`，只在创建时显示一次）。建第一个 Key 即启用鉴权；删光即关闭（访问标题行的开关零 Key 时拒绝打开）。`/v1/models` 和 `/v1/chat/completions` 都校验；`/health` 保持开放，给容器探活用。
+给调 `/v1/*` 的客户端用的命名凭证（`sk-fr-…`，只在创建时显示一次）。建第一个 Key 即启用鉴权；删光即关闭（访问标题行的开关零 Key 时拒绝打开）。`/v1/models`、`/v1/chat/completions` 和 `/v1/responses` 都校验；`/health` 保持开放，给容器探活用。
 
 ## Provider Key（多账号）
 
@@ -217,6 +217,30 @@ custom_providers:
 
 选中的上游从 `X-Free-Router-Provider` 和 `X-Free-Router-Model` 返回，外加 provider 自己的 `model` 字段。
 
+## Responses API
+
+`POST /v1/responses` 开箱即用，走的是和 `/v1/chat/completions` 同一套路由、Key 轮换、配额、冷静期和用量计数。网关背后的渠道几乎只会 Chat Completions，所以这里不是透传而是双向翻译：`input`、`instructions`、`tools`、`tool_choice`、`max_output_tokens`、`text.format`、`reasoning.effort` 翻成 chat 请求，chat 的答案（或它的 SSE 增量）再翻回 `response` 对象（或 `response.*` 事件流）。
+
+```bash
+curl -s http://127.0.0.1:8787/v1/responses \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer sk-fr-...' \
+  -d '{"model": "free-best", "input": "Reply with exactly: router-ok"}'
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8787/v1", api_key="local")
+print(client.responses.create(model="free-best", input="Hello").output_text)
+```
+
+翻译保留的东西：`instructions`（变成 system 消息）、字符串和条目数组两种 `input`、`input_image`、`function_call`/`function_call_output` 历史、function 工具、`text.format`（变成 `response_format`）、推理强度，以及流式。自定义（自由格式）工具会以"只收一个字符串的函数"发给上游，回来时还原成 `custom_tool_call`，Codex 这类客户端拿到的仍是原始工具输入。
+
+无状态扇出做不到的，一律回 `400 invalid_request_error` 而不是悄悄忽略：`store: true`、`previous_response_id`、`conversation`、`background: true`、`prompt` 模板和 `item_reference` 条目。托管工具（`web_search`、`file_search` 等）要在渠道侧执行，直接丢弃不转发。
+
+流式按标准事件序列发（`response.created` → `output_item.added` → `content_part.added` → `output_text.delta` … → `response.completed`，或 `response.incomplete`/`response.failed`），`sequence_number` 连续，最后补一个 `data: [DONE]` 给等它的 OpenAI SDK。
+
 ## 接口
 
 ```text
@@ -237,6 +261,7 @@ POST /api/restart            退出等 supervisor 重启（要会话）
 GET  /health
 GET  /v1/models              开了鉴权就要网关 Key
 POST /v1/chat/completions    开了鉴权就要网关 Key
+POST /v1/responses           同一套路由，Responses 方言
 ```
 
 `GET /health` 报 `package.json` 的 `version`（当前 `1.0.0`），发版用`v1.0.0` 这种 git tag。
