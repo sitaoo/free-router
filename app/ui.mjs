@@ -91,8 +91,8 @@ const PAGE = `<!doctype html>
 <meta name="referrer" content="no-referrer">
 <title>Free Router</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="mask-icon" href="/favicon.svg" color="#0b62d6">
-<link rel="apple-touch-icon" href="/favicon.svg">
+<link rel="mask-icon" href="/mask-icon.svg" color="#0b62d6">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
 <meta name="theme-color" content="#0b62d6" id="theme-color-light">
 <meta name="theme-color" content="#0f1729" id="theme-color-dark">
 <script>
@@ -2993,15 +2993,3 @@ export function renderPage() {
   return PAGE;
 }
 
-// The favicon repeats the page's own brand mark — the accent tile with the
-// heartbeat line from the top bar and login card — rather than inventing a
-// second symbol. Inline SVG keeps it crisp at 16px, and drawing the tile (not
-// a transparent glyph) keeps it legible on light and dark tab strips alike.
-export const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Free Router">
-<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-<stop offset="0" stop-color="#3b93ff"/><stop offset="1" stop-color="#0b62d6"/>
-</linearGradient></defs>
-<rect width="32" height="32" rx="8" fill="url(#g)"/>
-<path d="M4.5 17h4.6l3.2-8.6 4.6 15.6 3.2-7.4h6.4" fill="none" stroke="#ffffff" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>
-`;

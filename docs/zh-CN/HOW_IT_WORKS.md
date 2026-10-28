@@ -121,6 +121,8 @@ tab）。一个网关 Key 都没有时，`/v1` 保持开放，方便本地用。
 
 鉴权之外，浏览器侧的滥用照样过滤：跨站请求按 `Sec-Fetch-Site` 拒绝；`Host` 指向公网域名的（DNS rebind）拒绝，loopback、局域网、`.local`放行。纯 `curl` 不带这两个头，照常用。
 
+页面自带 `Content-Security-Policy`：`default-src 'none'`，放开内联脚本与样式、`connect-src 'self'`、`img-src 'self'`。其中 `img-src` 不是装饰：标签图标是页面自己声明的图片，没有显式 `img-src` 时会回落到 `default-src 'none'`，浏览器连请求都不发，标签栏就静默地什么都没有。图标分三种格式，因为各自的规格不同——`/favicon.svg` 给标签页，`/mask-icon.svg` 给 Safari 固定标签（Safari 只用 alpha 通道、颜色由 `color` 属性给，所以必须是 16×16 viewBox 下的单层纯黑透明图形），`/apple-touch-icon.png` 给 iOS 主屏（Apple 只文档化 PNG，且 iOS 自己加圆角遮罩，所以图形要满幅）。PNG 在进程内生成而不是入库，仓库里不留二进制文件。实现见 `app/icons.mjs`。
+
 ### 写 Key 接口为什么要小心
 
 `script/start.sh` 用 `set -a` source env 文件，能往里面写任意变量就等于下次启动时代码执行。所以写入路径是受限的：

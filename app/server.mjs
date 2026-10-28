@@ -51,7 +51,8 @@ import {
   providerNeedsThoughtSignatures,
   rememberSignaturesFromPayload,
 } from './thought-signature.mjs';
-import { displayPath, maskSecret, renderPage, updateEnvFile, validateSecret, FAVICON_SVG } from './ui.mjs';
+import { displayPath, maskSecret, renderPage, updateEnvFile, validateSecret } from './ui.mjs';
+import { FAVICON_SVG, MASK_ICON_SVG, appleTouchIconPng } from './icons.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const LAYOUT = resolveLayout({
@@ -3376,8 +3377,11 @@ async function handler(req, res) {
       'Content-Type': 'text/html; charset=utf-8',
       'Content-Length': Buffer.byteLength(page),
       'Cache-Control': 'no-store',
+      // img-src is not decoration: the favicon is an image the page declares,
+      // and `default-src 'none'` blocks it before the request is even made, so
+      // the tab silently shows no icon. Anything else stays forbidden.
       'Content-Security-Policy':
-        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'none'; base-uri 'none'",
+        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; form-action 'none'; base-uri 'none'",
       'Referrer-Policy': 'no-referrer',
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'DENY',
@@ -3403,8 +3407,10 @@ async function handler(req, res) {
       return sendJson(res, 401, { error: { message: authFailure, type: 'unauthorized' } });
     }
   }
-  // The icon is part of the login page, so it cannot sit behind the session.
-  // Browsers request it without credentials, and CSP forbids external assets.
+  // Icons are part of the login page, so they cannot sit behind the session.
+  // Browsers request them without credentials, and CSP forbids external assets.
+  // Each format is served as its own file because Safari's pinned tab and iOS's
+  // home screen reject the tab icon's shape (see app/icons.mjs).
   if (req.method === 'GET' && url.pathname === '/favicon.svg') {
     res.writeHead(200, {
       'Content-Type': 'image/svg+xml; charset=utf-8',
@@ -3414,6 +3420,29 @@ async function handler(req, res) {
       'X-Content-Type-Options': 'nosniff',
     });
     return res.end(FAVICON_SVG);
+  }
+  if (req.method === 'GET' && url.pathname === '/mask-icon.svg') {
+    res.writeHead(200, {
+      'Content-Type': 'image/svg+xml; charset=utf-8',
+      'Content-Length': Buffer.byteLength(MASK_ICON_SVG),
+      // Pinned tabs keep the icon for the life of the tab, so a day is plenty
+      // and a stale shape clears fast after an update.
+      'Cache-Control': 'public, max-age=86400',
+      'Content-Security-Policy': "default-src 'none'",
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return res.end(MASK_ICON_SVG);
+  }
+  if (req.method === 'GET' && url.pathname === '/apple-touch-icon.png') {
+    const icon = appleTouchIconPng();
+    res.writeHead(200, {
+      'Content-Type': 'image/png',
+      'Content-Length': icon.length,
+      'Cache-Control': 'public, max-age=86400',
+      'Content-Security-Policy': "default-src 'none'",
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return res.end(icon);
   }
   if (req.method === 'GET' && url.pathname === '/api/state') {
     await refreshCatalog();

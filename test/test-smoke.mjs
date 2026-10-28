@@ -1901,6 +1901,15 @@ try {
   assert.equal(pageResponse.status, 200);
   assert.match(pageResponse.headers.get('content-type'), /text\/html/);
   assert.match(pageResponse.headers.get('content-security-policy'), /default-src 'none'/);
+  // The favicon is an image the page itself declares, so `default-src 'none'`
+  // blocks it unless img-src is granted explicitly: the browser never even
+  // issues the request, and the tab shows no icon. Any same-origin image the
+  // page adds has to keep working.
+  assert.match(
+    pageResponse.headers.get('content-security-policy'),
+    /img-src 'self'/,
+    'the page CSP must allow its own favicon, or the browser blocks it silently',
+  );
   const pageHtml = await pageResponse.text();
   assert.match(pageHtml, /Provider keys/);
   assert.match(pageHtml, /Route priority/);
@@ -1914,6 +1923,19 @@ try {
   assert.match(faviconBody, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
   assert.match(faviconBody, /viewBox="0 0 32 32"/);
   assert.equal(faviconBody.includes('<script'), false);
+  // Pinned tab and home screen take their own formats, and both are also
+  // requested without a session.
+  const maskIcon = await fetch(`${base}/mask-icon.svg`);
+  assert.equal(maskIcon.status, 200);
+  assert.match(maskIcon.headers.get('content-type'), /image\/svg\+xml/);
+  const maskBody = await maskIcon.text();
+  assert.match(maskBody, /viewBox="0 0 16 16"/, 'Safari requires a 16x16 viewBox');
+  assert.equal(maskBody.includes('<rect'), false, 'a background tile fills the pinned tab solid');
+  const touchIcon = await fetch(`${base}/apple-touch-icon.png`);
+  assert.equal(touchIcon.status, 200);
+  assert.equal(touchIcon.headers.get('content-type'), 'image/png');
+  const touchBody = Buffer.from(await touchIcon.arrayBuffer());
+  assert.deepEqual([...touchBody.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47], 'home-screen icon must be a PNG');
   assert.equal(pageHtml.includes('Today\'s quota'), false);
   // The page is a template string; an apostrophe in a JS string must not be
   // written as \', or the browser sees a truncated literal and the UI is blank.

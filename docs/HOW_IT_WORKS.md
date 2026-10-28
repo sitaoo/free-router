@@ -121,6 +121,8 @@ tab). Without any gateway key, `/v1` stays open for local use.
 
 On top of authentication, browser-driven abuse is still filtered: cross-site requests per `Sec-Fetch-Site` are rejected, and a `Host` header pointing at a public domain (DNS rebinding) is rejected while loopback, LAN, and `.local` names are accepted. A plain `curl` call sends neither header and still works.
 
+The page ships a `Content-Security-Policy` of `default-src 'none'` with inline script and style allowed, `connect-src 'self'`, and `img-src 'self'`. The image rule is load-bearing rather than decorative: the tab icon is an image the page itself declares, and without an explicit `img-src` the fallback to `default-src 'none'` blocks it before the request is even made, so the tab silently shows nothing. Three icon formats are served because each one is specified differently — `/favicon.svg` for the tab, `/mask-icon.svg` for Safari pinned tabs (Safari uses only the alpha channel and paints it with the `color` attribute, so it has to be one black shape on transparency in a 16×16 viewBox), and `/apple-touch-icon.png` for the iOS home screen (Apple documents PNG only, and iOS applies its own rounded mask, so the icon is full-bleed). The PNG is generated in-process at boot rather than checked in, which keeps the repository binary-free. See `app/icons.mjs`.
+
 ### Why the key endpoints need care
 
 Since `script/start.sh` sources the env file with `set -a`, being able to write an arbitrary variable there would mean code execution on the next start. The write path is therefore constrained:
