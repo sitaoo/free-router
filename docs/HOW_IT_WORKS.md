@@ -273,6 +273,8 @@ POST /v1/responses           same routing, translated Responses dialect
 
 `GET /v1/models` returns the route alias, each static provider's `freeModels`, and every currently free text-chat model from catalog providers. A listed concrete model ID can be selected directly; the gateway then tries every provider that currently offers that same model. Prefix with `provider:` to force a single provider.
 
+Each entry carries the four standard OpenAI fields (`id`, `object`, `created`, `owned_by`) plus what the catalogs actually publish about that model: `context_length`, `max_output_tokens`, `name`, `description`, `supported_parameters`, `input_modalities`, `output_modalities`, `pricing`, `expiration_date`, `provider`, and `free`. Metadata is merged per model across providers, because the dialects disagree on what they report — Google's native listing gives `inputTokenLimit`/`outputTokenLimit` but has no release date, while OpenRouter supplies `created` and `top_provider.max_completion_tokens`. A field one provider omits is filled from another provider offering the same model; pricing is never borrowed, since a price is per provider. Anything genuinely unknown stays `0` (or is omitted) rather than invented.
+
 ```bash
 curl -s http://127.0.0.1:8787/health | jq
 ```

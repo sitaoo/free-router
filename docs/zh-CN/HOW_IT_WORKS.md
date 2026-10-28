@@ -268,6 +268,8 @@ POST /v1/responses           同一套路由，Responses 方言
 
 `GET /v1/models` 返回路由别名、各 static 渠道的 `freeModels`，以及catalog 渠道当前免费的文本模型。直接点名具体模型 ID 也行，网关会把当前提供同一模型的每个渠道都试一遍；`provider:` 前缀强制只用一家。
 
+每个条目都带 OpenAI 标准的四个字段（`id`、`object`、`created`、`owned_by`），外加各家目录里真正公布的信息：`context_length`、`max_output_tokens`、`name`、`description`、`supported_parameters`、`input_modalities`、`output_modalities`、`pricing`、`expiration_date`、`provider`、`free`。元数据按模型跨渠道合并，因为各家口径不一样：Google 原生列表给 `inputTokenLimit`/`outputTokenLimit` 却没有发布日期，OpenRouter 有 `created` 和 `top_provider.max_completion_tokens`。一家没给的字段用另一家同一模型的补上；`pricing` 例外，价格是按渠道算的，绝不外借。真正不知道的保持 `0`（或干脆不出现），不编。
+
 ```bash
 curl -s http://127.0.0.1:8787/health | jq
 ```

@@ -8,6 +8,8 @@ tags are cut here. Dates are commit dates (`YYYY-MM-DD`).
 
 ### Added
 
+- `/v1/models` entries now carry the full metadata the catalogs publish, not just `id`/`created`/`owned_by`/`context_length`: `max_output_tokens`, `name`, `description`, `supported_parameters`, `input_modalities`, `output_modalities`, `pricing`, `expiration_date`, `provider`, and `free`. Metadata is merged per model across providers, so a Google allowlisted model reports its `inputTokenLimit`/`outputTokenLimit` (previously hard-coded to `0`) and borrows `created` from whichever provider publishes a release date.
+- A favicon (`/favicon.svg`, inline SVG served by the gateway, no external asset under the page's CSP) plus pinned-tab and theme-colour declarations; it loads on the login screen, before any session exists.
 - `POST /v1/responses`: the gateway now speaks the OpenAI Responses API on the same routes, keys, quota, cooldown, and usage counters as chat completions. Requests and answers are translated in both directions (`input`, `instructions`, `tools`, `text.format`, `reasoning.effort`, `max_output_tokens`), streaming emits the standard `response.*` event sequence, and custom tools round-trip as `custom_tool_call`. Stateful fields (`store`, `previous_response_id`, `conversation`, `background`, `prompt`, `item_reference`) are refused with a 400 instead of being ignored.
 - Free-tier probing now runs for every price-free catalog by default (Gemini, TokenRouter, B.AI) and a new HashNeuron provider is shipped; a probe that returns a positive `usage.cost`/`credits` is treated as billed and kept out of routes.
 - Cached free verdicts are re-adopted into discovery after a state-file loss, without spending another probe.

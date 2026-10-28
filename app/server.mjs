@@ -50,7 +50,7 @@ import {
   providerNeedsThoughtSignatures,
   rememberSignaturesFromPayload,
 } from './thought-signature.mjs';
-import { displayPath, maskSecret, renderPage, updateEnvFile, validateSecret } from './ui.mjs';
+import { displayPath, maskSecret, renderPage, updateEnvFile, validateSecret, FAVICON_SVG } from './ui.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const LAYOUT = resolveLayout({
@@ -3389,6 +3389,18 @@ async function handler(req, res) {
       return sendJson(res, 401, { error: { message: authFailure, type: 'unauthorized' } });
     }
   }
+  // The icon is part of the login page, so it cannot sit behind the session.
+  // Browsers request it without credentials, and CSP forbids external assets.
+  if (req.method === 'GET' && url.pathname === '/favicon.svg') {
+    res.writeHead(200, {
+      'Content-Type': 'image/svg+xml; charset=utf-8',
+      'Content-Length': Buffer.byteLength(FAVICON_SVG),
+      'Cache-Control': 'public, max-age=86400',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'",
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return res.end(FAVICON_SVG);
+  }
   if (req.method === 'GET' && url.pathname === '/api/state') {
     await refreshCatalog();
     return sendJson(
@@ -3510,23 +3522,11 @@ async function handler(req, res) {
       return sendJson(res, 401, { error: { message: gatewayFailure, type: 'unauthorized' } });
     }
     await refreshCatalog();
-    const routeModels = Object.keys(config.routes || {}).map((id) => ({
-      id,
-      object: 'model',
-      created: 0,
-      owned_by: 'free-router',
-    }));
-    const listed = registry.listListedModels();
-    const catalogModels = registry.listCatalogModels(listed.ids).map((model) => ({
-      id: model.id,
-      object: model.object,
-      created: model.created,
-      owned_by: model.owned_by,
-      context_length: model.context_length,
-    }));
+    const routeIds = Object.keys(config.routes || {});
+    const { models } = registry.listModels(routeIds);
     return sendJson(res, 200, {
       object: 'list',
-      data: [...routeModels, ...listed.models, ...catalogModels],
+      data: models,
     });
   }
   if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {

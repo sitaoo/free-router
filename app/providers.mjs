@@ -484,6 +484,91 @@ export function createProviderRegistry(config, { host, port }) {
     }
   }
 
+  // A listing entry carries everything the catalogs actually publish about a
+  // model. Providers speak different dialects: Google reports sizes but no
+  // release time, OpenRouter reports a `created` timestamp, and either may be
+  // the only place a given model appears. Fields are therefore filled per
+  // model and topped up across providers rather than zero-filled.
+  function catalogFacts(model) {
+    if (!model) return {};
+    const facts = {};
+    const contextLength = Number(model.context_length || model.top_provider?.context_length || 0);
+    if (contextLength > 0) facts.context_length = contextLength;
+    const maxOutput = Number(model.max_output_tokens || model.top_provider?.max_completion_tokens || 0);
+    if (maxOutput > 0) facts.max_output_tokens = maxOutput;
+    const created = Number(model.created || 0);
+    if (created > 0) facts.created = created;
+    if (model.name) facts.name = String(model.name);
+    if (model.description) facts.description = String(model.description);
+    if (Array.isArray(model.supported_parameters) && model.supported_parameters.length) {
+      facts.supported_parameters = [...model.supported_parameters];
+    }
+    const inputs = model.architecture?.input_modalities;
+    if (Array.isArray(inputs) && inputs.length) facts.input_modalities = [...inputs];
+    const outputs = model.architecture?.output_modalities;
+    if (Array.isArray(outputs) && outputs.length) facts.output_modalities = [...outputs];
+    if (model.pricing && typeof model.pricing === 'object') facts.pricing = { ...model.pricing };
+    // Free models get retired, and a listing that says so is worth passing on.
+    if (model.expiration_date) facts.expiration_date = String(model.expiration_date);
+    return facts;
+  }
+
+  // What every other provider says about the same model, keyed by slug. Google
+  // never publishes a release date, so the OpenRouter entry for `gemini-x` is
+  // the only honest source for it.
+  function borrowedFacts(modelId) {
+    const slug = normalizeModelSlug(modelId);
+    if (!slug) return {};
+    const facts = {};
+    for (const provider of providers.values()) {
+      if (!provider.catalog?.size) continue;
+      const model = provider.catalogSlugs?.get(slug);
+      if (!model) continue;
+      const found = catalogFacts(model);
+      for (const [key, value] of Object.entries(found)) {
+        if (facts[key] === undefined) facts[key] = value;
+      }
+    }
+    return facts;
+  }
+
+  function modelEntry({ provider, id, catalogModel, ownedBy }) {
+    const entry = {
+      id,
+      object: 'model',
+      created: 0,
+      // An allowlisted model is the provider's offering, so the provider owns
+      // it; a catalog model keeps the vendor prefix it publishes ("google/…").
+      owned_by: ownedBy || provider.name,
+      context_length: 0,
+      provider: provider.name,
+      free: true,
+    };
+    const facts = provider?.usesCatalog ? catalogFacts(catalogModel || catalogEntry(provider, id)) : {};
+    const borrowed = borrowedFacts(id);
+    // This provider's own numbers win; anything it does not publish is filled
+    // from a sibling provider that does. Pricing is the exception: it is per
+    // provider, so another provider's price says nothing about this one.
+    const borrowedForThisModel = { ...borrowed };
+    delete borrowedForThisModel.pricing;
+    const merged = { ...borrowedForThisModel, ...facts };
+    for (const key of [
+      'created',
+      'context_length',
+      'max_output_tokens',
+      'name',
+      'description',
+      'supported_parameters',
+      'input_modalities',
+      'output_modalities',
+      'pricing',
+      'expiration_date',
+    ]) {
+      if (merged[key] !== undefined) entry[key] = merged[key];
+    }
+    return entry;
+  }
+
   function listListedModels() {
     const models = [];
     const ids = new Set();
@@ -493,13 +578,7 @@ export function createProviderRegistry(config, { host, port }) {
         if (ids.has(id)) continue;
         if (provider.usesCatalog && provider.catalog.size && !catalogEntry(provider, id)) continue;
         ids.add(id);
-        models.push({
-          id,
-          object: 'model',
-          created: 0,
-          owned_by: provider.name,
-          context_length: 0,
-        });
+        models.push(modelEntry({ provider, id }));
       }
     }
     return { models, ids };
@@ -513,18 +592,32 @@ export function createProviderRegistry(config, { host, port }) {
       for (const model of provider.catalog.values()) {
         if (!isZeroCost(model) || !isChatModel(model) || seen.has(model.id)) continue;
         seen.add(model.id);
-        models.push({
-          id: model.id,
-          object: 'model',
-          created: Number(model.created || 0),
-          owned_by: model.id.split('/')[0] || provider.name,
-          context_length: Number(model.context_length || 0),
-          provider: provider.name,
-        });
+        models.push(
+          modelEntry({
+            provider,
+            id: model.id,
+            catalogModel: model,
+            ownedBy: model.id.split('/')[0] || provider.name,
+          }),
+        );
       }
     }
     models.sort((a, b) => String(a.id).localeCompare(String(b.id)));
     return models;
+  }
+
+  // One payload for GET /v1/models: route aliases, allowlisted models, and every
+  // currently free catalog model, with duplicates collapsed by id.
+  function listModels(routeIds = []) {
+    const listed = listListedModels();
+    const catalogModels = listCatalogModels(listed.ids);
+    const routes = routeIds.map((id) => ({
+      id,
+      object: 'model',
+      created: 0,
+      owned_by: 'free-router',
+    }));
+    return { models: [...routes, ...listed.models, ...catalogModels], ids: listed.ids };
   }
 
   // 'catalog' lets prices decide what is free; 'static' trusts the freeModels
@@ -640,6 +733,7 @@ export function createProviderRegistry(config, { host, port }) {
     refreshCatalogs,
     listListedModels,
     listCatalogModels,
+    listModels,
     health,
     discoveryCatalog,
     catalogEntry,

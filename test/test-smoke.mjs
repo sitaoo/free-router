@@ -811,6 +811,39 @@ const extraMock = http.createServer(async (req, res) => {
 let geminiRequests = 0;
 let lastGeminiBody = null;
 const geminiMock = http.createServer(async (req, res) => {
+  // Google's native listing, on its own URL and auth header. It carries sizes
+  // but no creation timestamp, which is exactly the metadata /v1/models used
+  // to drop on the floor for allowlisted models.
+  if (req.method === 'GET' && req.url.split('?')[0] === '/v1beta/models') {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(
+      JSON.stringify({
+        models: [
+          {
+            name: 'models/gemini-3.8-flash',
+            displayName: 'Gemini 3.8 Flash',
+            description: 'Fast general model.',
+            inputTokenLimit: 1048576,
+            outputTokenLimit: 65536,
+            supportedGenerationMethods: ['generateContent'],
+          },
+          {
+            name: 'models/gemini-3.7-flash',
+            displayName: 'Gemini 3.7 Flash',
+            inputTokenLimit: 1048576,
+            outputTokenLimit: 65536,
+            supportedGenerationMethods: ['generateContent'],
+          },
+          {
+            name: 'models/gemini-embed-x',
+            inputTokenLimit: 2048,
+            supportedGenerationMethods: ['embedContent'],
+          },
+        ],
+      }),
+    );
+    return;
+  }
   if (req.method === 'POST' && req.url === '/v1beta/openai/chat/completions') {
     geminiRequests += 1;
     const chunks = [];
@@ -1024,7 +1057,11 @@ fs.writeFileSync(
         freeModels: ['extra-1'],
       },
       gemini: {
+        catalog: true,
+        pricing: false,
         baseUrl: `http://127.0.0.1:${geminiPort}/v1beta/openai`,
+        modelsUrl: `http://127.0.0.1:${geminiPort}/v1beta/models`,
+        modelsKeyHeader: 'x-goog-api-key',
         keyEnv: 'GEMINI_API_KEY',
         freeModels: ['gemini-3.8-flash', 'gemini-3.7-flash'],
       },
@@ -1219,10 +1256,10 @@ try {
   assert.equal(health.providers.tokenrouter.kind, 'static');
   assert.equal(health.providers.extra.configured, true);
 
-  // Priced catalogs and probeFreeTier catalogs both add models; extra has a
-  // catalog only so it can notice withdrawals.
+  // Priced catalogs and probeFreeTier catalogs both add models; a catalog that
+  // neither prices nor probes only exists to notice withdrawals.
   assert.deepEqual(health.discovery.addsFrom, ['openrouter', 'bai']);
-  assert.deepEqual(health.discovery.availabilityOnly, ['extra']);
+  assert.deepEqual(health.discovery.availabilityOnly, ['extra', 'gemini']);
   assert.equal(health.providers.bai.kind, 'static+catalog');
 
   // glm-5.3-flash is listed upstream as "models/glm-5.3-flash": a spelling
@@ -1279,6 +1316,27 @@ try {
       'mock-new',
     ],
   );
+  // Every listed entry carries the standard OpenAI model fields plus whatever
+  // the catalogs publish. Gemini's allowlist used to report zeroes for both
+  // sizes; the catalog it already fetches has the real numbers.
+  const modelsById = new Map(models.data.map((model) => [model.id, model]));
+  const geminiListed = modelsById.get('gemini-3.8-flash');
+  assert.equal(geminiListed.object, 'model');
+  assert.equal(geminiListed.context_length, 1048576);
+  assert.equal(geminiListed.max_output_tokens, 65536);
+  assert.equal(geminiListed.description, 'Fast general model.');
+  assert.equal(geminiListed.name, 'Gemini 3.8 Flash');
+  assert.equal(geminiListed.provider, 'gemini');
+  assert.equal(geminiListed.free, true);
+  // The embedding endpoint entry is never offered as a chat model.
+  assert.equal(modelsById.has('gemini-embed-x'), false);
+  // A priced catalog keeps its published metadata and capability list.
+  const freeCatalogEntry = modelsById.get('mock-a');
+  assert.equal(freeCatalogEntry.context_length, 0);
+  assert.deepEqual(freeCatalogEntry.supported_parameters, ['tools', 'response_format']);
+  assert.deepEqual(freeCatalogEntry.input_modalities, ['text']);
+  // The published window reaches the context filter: not just cosmetic.
+  assert.equal(modelsById.get('deepseek-v3.2:free').context_length, 8192);
   // Input plus requested output exceeds the model's published window, so the
   // candidate is dropped before an upstream request is spent on it.
   const oversized = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
@@ -1846,6 +1904,16 @@ try {
   const pageHtml = await pageResponse.text();
   assert.match(pageHtml, /Provider keys/);
   assert.match(pageHtml, /Route priority/);
+  assert.match(pageHtml, /<link rel="icon" type="image\/svg\+xml" href="\/favicon\.svg">/);
+  // The icon belongs to the login screen, so it must load with no session, and
+  // the page's own CSP forbids external assets — it has to come from here.
+  const favicon = await fetch(`${base}/favicon.svg`);
+  assert.equal(favicon.status, 200);
+  assert.match(favicon.headers.get('content-type'), /image\/svg\+xml/);
+  const faviconBody = await favicon.text();
+  assert.match(faviconBody, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
+  assert.match(faviconBody, /viewBox="0 0 32 32"/);
+  assert.equal(faviconBody.includes('<script'), false);
   assert.equal(pageHtml.includes('Today\'s quota'), false);
   // The page is a template string; an apostrophe in a JS string must not be
   // written as \', or the browser sees a truncated literal and the UI is blank.

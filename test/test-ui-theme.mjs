@@ -53,4 +53,14 @@ assert.match(page, /id="disc-run"/, 'manual discovery button missing');
 assert.match(page, /runNow:\s*true/, 'manual discovery must send runNow');
 assert.match(page, /route_suggestions/, 'empty-route live ranking hint missing');
 
+// Favicon: served by the gateway (CSP forbids external assets), declared with
+// an explicit type, and not a data: URI the browser would have to re-parse.
+assert.match(page, /<link rel="icon" type="image\/svg\+xml" href="\/favicon\.svg"/, 'favicon link missing');
+assert.match(page, /<link rel="mask-icon" href="\/favicon\.svg"/, 'pinned-tab icon missing');
+assert.doesNotMatch(page, /<link[^>]+href="data:/, 'favicon must be a real asset, not a data URI');
+// Browser chrome colour follows the theme actually in effect, not just the OS.
+assert.match(page, /id="theme-color-light"/, 'light chrome colour missing');
+assert.match(page, /id="theme-color-dark"/, 'dark chrome colour missing');
+assert.match(page, /theme-color-light'\)/, 'chrome colour is not switched by the theme runtime');
+
 console.log('ui-theme unit tests passed');

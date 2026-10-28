@@ -85,6 +85,11 @@ const PAGE = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <title>Free Router</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="mask-icon" href="/favicon.svg" color="#0b62d6">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#0b62d6" id="theme-color-light">
+<meta name="theme-color" content="#0f1729" id="theme-color-dark">
 <script>
 // Resolve the theme before first paint so a dark user never sees a white flash.
 // Scoped in an IIFE: the main script declares themePref too, and two top-level
@@ -927,7 +932,16 @@ function themeIsDark() {
   return Boolean(themeQuery && themeQuery.matches);
 }
 function applyTheme() {
-  document.documentElement.dataset.theme = themeIsDark() ? 'dark' : 'light';
+  const dark = themeIsDark();
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  // Two theme-color tags, one active: the browser chrome should match the theme
+  // the user actually chose, not just the OS preference.
+  const lightMeta = document.getElementById('theme-color-light');
+  const darkMeta = document.getElementById('theme-color-dark');
+  if (lightMeta && darkMeta) {
+    lightMeta.setAttribute('media', dark ? 'not all' : 'all');
+    darkMeta.setAttribute('media', dark ? 'all' : 'not all');
+  }
   const button = el('theme-btn');
   if (!button) return;
   button.textContent = '';
@@ -2654,3 +2668,16 @@ load().catch((error) => toast(String(error.message || error), 'err'));
 export function renderPage() {
   return PAGE;
 }
+
+// The favicon repeats the page's own brand mark — the accent tile with the
+// heartbeat line from the top bar and login card — rather than inventing a
+// second symbol. Inline SVG keeps it crisp at 16px, and drawing the tile (not
+// a transparent glyph) keeps it legible on light and dark tab strips alike.
+export const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Free Router">
+<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0" stop-color="#3b93ff"/><stop offset="1" stop-color="#0b62d6"/>
+</linearGradient></defs>
+<rect width="32" height="32" rx="8" fill="url(#g)"/>
+<path d="M4.5 17h4.6l3.2-8.6 4.6 15.6 3.2-7.4h6.4" fill="none" stroke="#ffffff" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+`;
