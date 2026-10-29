@@ -51,6 +51,8 @@ mkdir -p data && cp .env.example data/.env
 
 网关默认监听 `127.0.0.1:8787`。`./script/stop.sh` 停止。请用普通用户跑这两个脚本；如果以 root 启动，它们会 re-exec 到目录属主身份，拒绝保持 root。
 
+`ALL_PROXY`（或 `HTTPS_PROXY`，只认 `socks5`/`socks5h`）指向 SOCKS 代理时，上游请求走 curl。默认先直连，只有直连 DNS 失败才走代理；列进 `socksFirstHosts` 的域名则直接走代理。代理桥按 curl 输出的节奏转发，SSE 回答会逐 token 到达客户端，而不是等整段传输结束才一次性吐出。
+
 ## Docker 运行
 
 ```bash
@@ -222,6 +224,8 @@ custom_providers:
 
 选中的上游从 `X-Free-Router-Provider` 和 `X-Free-Router-Model` 返回，外加 provider 自己的 `model` 字段。
 
+两种方言在路上都被加固。出去的方向，上游请求按 Chat Completions 明示字段重建，客户端自己的记账字段（`features`、`variables`、`files`、`tool_ids`、`metadata`、`models` 等）不会发给会回 `400 Unknown name "features"` 的渠道（Gemini 的兼容层就是）。`stream_options` 只在渠道支持时才带；不支持的渠道设 `"streamOptions": false`，随包的 Gemini 配置已经这样写。回来的方向，流 chunk 不再原样透传，而是统一整形：补齐 `id`、`created`、`object`，`model` 用客户端请求的那个 id（不是渠道内部的），`reasoning` 和 `reasoning_content` 两个字段保持同步，成功流只以一个 `[DONE]` 收尾。响应已提交后上游断掉，会发一条 SSE 错误帧加 `[DONE]`，而不是静默结束。每个请求还会在日志里留下方言和顶层字段名（从不记录字段内容）。
+
 ## Responses API
 
 `POST /v1/responses` 开箱即用，走的是和 `/v1/chat/completions` 同一套模型池、Key 轮换、配额、冷静期和用量计数。网关背后的渠道几乎只会 Chat Completions，所以这里不是透传而是双向翻译：`input`、`instructions`、`tools`、`tool_choice`、`max_output_tokens`、`text.format`、`reasoning.effort` 翻成 chat 请求，chat 的答案（或它的 SSE 增量）再翻回 `response` 对象（或 `response.*` 事件流）。
@@ -319,7 +323,7 @@ Key 后由后台探活补上。完全没有目录的渠道，把免费 ID 写进
 }
 ```
 
-可选字段：`keyEnv`、`baseUrlEnv`、`headers`、`chatPath`、`modelsPath`、`discover: false`（把带价格目录的渠道排除在发现之外）、`probeFreeTier: true`（让无价格目录自己探出免费模型）。创建表单和每个渠道的高级设置里都有同一个探活开关，切换后立即生效，不用重启。
+可选字段：`keyEnv`、`baseUrlEnv`、`headers`、`chatPath`、`modelsPath`、`discover: false`（把带价格目录的渠道排除在发现之外）、`probeFreeTier: true`（让无价格目录自己探出免费模型）、`streamOptions: false`（渠道的 OpenAI 兼容层不接受 `stream_options` 时）。创建表单和每个渠道的高级设置里都有同一个探活开关，切换后立即生效，不用重启。
 
 `modelsUrl` + `modelsKeyHeader` 覆盖一种特殊情况：目录不在 chat 前缀下、走独立鉴权。Gemini 两样都要，因为只有它的原生列表里才有`supportedGenerationMethods`，而且它对 Bearer token 直接回 `401`。两种返回形状都认：OpenAI 的 `data[].id` 或 Google 的 `models[].name`。
 
@@ -365,12 +369,12 @@ Key 后由后台探活补上。完全没有目录的渠道，把免费 ID 写进
 
 所有基线信号都在 0-100 的明示尺度上：配置锚点（94 起，30 兜底，外加封顶的能力画像加成，排得靠后的强模型不会被埋没）、评测分（约 0-91）、手写 `baselineScores`（钳制进尺度）、用量浮动（±`usageWeight`）。置顶模型在尺度之上（有限值 150），不吃流量浮动。
 
-失败先分类再记分：容量信号（`rateLimit`、`timeout`、`overloaded`）只进冷却；路由、账单、凭证故障（`notFound`、`forbidden`、`payment`、坏 Key的 `401`）只记录不打分。只有质量失败（空回复、坏回复、上游错误）才动分。
+失败先分类再记分：容量信号（`rateLimit`、`timeout`、`overloaded`）只进冷却；路由、账单、凭证故障（`notFound`、`forbidden`、`payment`、坏 Key的 `401`）只记录不打分。只有质量失败（空回复、坏回复、上游错误）才动分。连续超时会把该候选/Key 的冷却翻倍（`cooldownMs.timeout` 是第一次等待，`cooldownMs.timeoutMax` 封顶，默认一小时），出现任何其他结果就清零：老挂住的模型不会和偶尔失败一次的模型一样每 5 分钟被踩一遍。
 
 每次请求还有两个实时信号参与排序：
 
 - **稀缺**：5 分以内，剩余额度多的赢，聪明但稀缺的模型留到刀刃上用；不限额的排最前。
-- **延迟**：滚动平均响应 5 秒内 +2，30 秒内 0，以上 −2，攒够 5 个样本才生效，小而封顶。
+- **延迟**：滚动平均的「首个有效 token」时间 5 秒内 +2，30 秒内 0，以上 −2，攒够 5 个样本才生效。统计到第一个正文或工具调用增量为止，不等到回答结束，长回答不会被当成慢启动；小而封顶。
 
 百分之几的请求（`routing.explorePercent`，默认 5）会绕去没跑过的模型，让冷模型有机会赚流量；置顶模型永远不让第一。外部榜单走`script/sync-scores.mjs` 写 `baselineScores`（40-80 先验带），带来源戳，详见 `./script/sync-scores.mjs --help`。
 

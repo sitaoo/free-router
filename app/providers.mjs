@@ -161,6 +161,9 @@ export function createProviderRegistry(config, { host, port }) {
       // candidate and is only sound on a key with no billing attached.
       probeFreeTier: usesCatalog && !catalogHasPricing && cfg.probeFreeTier === true,
       chatPath: cfg.chatPath || '/chat/completions',
+      // Some OpenAI-compatible layers (Gemini's) reject `stream_options`
+      // outright; providers that understand it keep returning usage.
+      streamOptions: cfg.streamOptions !== false,
       modelsPath: cfg.modelsPath || '/models',
       // Some providers serve a richer catalog outside the OpenAI-compatible
       // prefix used for chat, on its own auth scheme.

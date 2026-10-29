@@ -84,6 +84,76 @@ const mock = http.createServer(async (req, res) => {
     if (body.stream && body.model === 'stall-connect') {
       return;
     }
+    // Strict like Gemini's compatibility layer: any non-standard top-level
+    // field (including stream_options when the provider says it cannot take
+    // it) is a 400, not something to ignore.
+    if (body.stream && body.model === 'strict-ok') {
+      const allowed = new Set([
+        'model',
+        'messages',
+        'stream',
+        'temperature',
+        'top_p',
+        'n',
+        'stop',
+        'max_tokens',
+        'max_completion_tokens',
+        'presence_penalty',
+        'frequency_penalty',
+        'logit_bias',
+        'logprobs',
+        'top_logprobs',
+        'user',
+        'seed',
+        'response_format',
+        'tools',
+        'tool_choice',
+        'parallel_tool_calls',
+        'reasoning_effort',
+        'service_tier',
+        'modalities',
+        'audio',
+        'prediction',
+      ]);
+      const unknown = Object.keys(body).filter((key) => !allowed.has(key));
+      if (unknown.length) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: `Unknown name "${unknown[0]}"` } }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'strict-ok' }, finish_reason: null }] })}\n\n`,
+      );
+      res.end('data: [DONE]\n\n');
+      return;
+    }
+    // A stream that dies after its first content chunk: the client must see
+    // an error frame and [DONE], not a silent end (and no failover, since the
+    // response was already committed).
+    if (body.stream && body.model === 'drop-mid') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'partial-ok' }, finish_reason: null }] })}\n\n`,
+      );
+      await sleep(50);
+      res.destroy();
+      return;
+    }
+    // First content arrives fast, then the model keeps generating for a
+    // while: latency accounting must record the first token, not the total.
+    if (body.stream && body.model === 'slow-tail') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'tail-start' }, finish_reason: null }] })}\n\n`,
+      );
+      await sleep(2000);
+      res.write(
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'tail-end' }, finish_reason: null }] })}\n\n`,
+      );
+      res.end('data: [DONE]\n\n');
+      return;
+    }
     if (body.stream) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.write(
@@ -149,6 +219,9 @@ fs.writeFileSync(
       mock: {
         baseUrl: `http://127.0.0.1:${mockPort}`,
         keyEnv: 'STREAM_COMMIT_API_KEY',
+        // This provider cannot take stream_options, like Gemini; the gateway
+        // must drop it before sending.
+        streamOptions: false,
         freeModels: [
           'slow-think',
           'slow-hollow',
@@ -156,6 +229,9 @@ fs.writeFileSync(
           'stall-headers',
           'stall-connect',
           'late-think',
+          'strict-ok',
+          'drop-mid',
+          'slow-tail',
           'fallback-ok',
         ],
         chatPath: '/chat/completions',
@@ -248,6 +324,11 @@ try {
     const text = await response.text();
     assert.match(text, /slow-ok/);
     assert.match(text, /thinking-/);
+    // Normalized chunks: the requested model (not the provider's), a chat
+    // chunk object, and exactly one terminator.
+    assert.match(text, /"model":"slow-think"/);
+    assert.match(text, /"object":"chat\.completion\.chunk"/);
+    assert.equal((text.match(/\[DONE\]/g) || []).length, 1);
   }
 
   // 2. Fast reasoning-only streams still fail over instead of committing. Both
@@ -371,6 +452,81 @@ try {
     assert.ok(elapsed < 3000, `failover took ${elapsed}ms; connect wait was not bounded`);
     assert.match(await response.text(), /fallback-ok/);
   }
+
+  // 8. Client-only fields and an unsupported stream_options never reach the
+  // upstream: the strict mock 400s on any non-standard top-level name.
+  {
+    const response = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'strict-ok',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+        stream_options: { include_usage: true },
+        temperature: 0.1,
+        features: { web_search: true },
+        variables: {},
+        files: [],
+        tool_ids: ['x'],
+        metadata: { chat_id: 'abc' },
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /strict-ok/);
+  }
+
+  // 9. An upstream that dies after committing yields an error frame and a
+  // terminator instead of a silent truncated stream.
+  {
+    const response = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'drop-mid',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.match(text, /partial-ok/);
+    assert.match(text, /"type":"upstream_error"/);
+    assert.match(text, /\[DONE\]/);
+    assert.doesNotMatch(text, /fallback-ok/, 'a committed stream must not fail over');
+  }
+
+  // 10. Latency accounting uses the first useful token, not the duration of
+  // the whole answer.
+  {
+    const response = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'slow-tail',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.match(text, /tail-start/);
+    assert.match(text, /tail-end/);
+  }
+
+  // The request log names the dialect and the top-level fields, never content.
+  assert.match(childOutput, /chat request slow-think fields=.*stream_options/);
+
+  // Flush state, then verify the first-token sample landed instead of the
+  // ~2.2s the slow-tail stream took end to end.
+  kill();
+  await waitForExit();
+  const statePath = path.join(tempDir, 'discovered-free-models.json');
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  const latency = state.latency?.['mock:slow-tail'];
+  assert.ok(latency, 'slow-tail latency was recorded');
+  assert.equal(latency.n, 1);
+  assert.ok(latency.meanMs < 1500, `recorded ${latency.meanMs}ms; expected first-token latency, not total`);
 
   console.log('stream-commit tests passed');
 } finally {

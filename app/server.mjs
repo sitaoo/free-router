@@ -29,6 +29,8 @@ import {
   supportsRequest,
 } from './providers.mjs';
 import { probeBatchPlan, responseLooksBilled } from './discovery.mjs';
+import { CHAT_DONE_FRAME, chatDataFrame, createChatStreamNormalizer, pickChatRequestFields } from './chat.mjs';
+import { TIMEOUT_BACKOFF_CAP_MS, timeoutBackoffMs } from './cooldown.mjs';
 import { estimateRequestTokens, fitsContext } from './context.mjs';
 import { installUpstreamProxy } from './proxy.mjs';
 import { isInsufficientFunds, msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
@@ -1603,11 +1605,32 @@ function cooldownRemaining(candidate, slot) {
   return remaining;
 }
 
+// Consecutive timeouts per candidate/key. A model that kept hanging is not
+// worth retrying on the same five-minute cadence as one that failed once, so
+// each consecutive timeout doubles the wait; any other outcome resets it.
+const consecutiveTimeouts = new Map();
+
+function resetTimeoutStreak(candidate, slot) {
+  consecutiveTimeouts.delete(cooldownKey(candidate, slot));
+}
+
 function setCooldown(candidate, kind, reason, overrideMs = 0, slot = null) {
   const durations = config.cooldownMs || {};
-  const duration = overrideMs || Number(durations[kind] || 0);
+  const key = cooldownKey(candidate, slot);
+  let duration = overrideMs || Number(durations[kind] || 0);
+  if (kind === 'timeout') {
+    const streak = (consecutiveTimeouts.get(key) || 0) + 1;
+    consecutiveTimeouts.set(key, streak);
+    duration = timeoutBackoffMs(
+      streak,
+      duration,
+      Number(durations.timeoutMax || TIMEOUT_BACKOFF_CAP_MS),
+    );
+  } else {
+    consecutiveTimeouts.delete(key);
+  }
   if (!duration) return;
-  cooldowns.set(cooldownKey(candidate, slot), {
+  cooldowns.set(key, {
     until: Date.now() + duration,
     kind,
     reason: String(reason || '').slice(0, 300),
@@ -1768,16 +1791,22 @@ function resolveRequest(requestedModel, body) {
   return { ...resolution, candidates: active, blocked };
 }
 
+// Rebuilds the upstream request from the documented Chat Completions fields.
+// Clients add their own keys (Open WebUI sends features, variables, files,
+// tool_ids, ...) and strict providers reject unknown top-level names with a
+// 400 instead of ignoring them. `stream_options` is gated per provider because
+// not every OpenAI-compatible layer implements it.
 function sanitizeUpstreamBody(body, candidate) {
+  const provider = PROVIDERS.get(candidate.provider);
+  // Deep copy: thought-signature injection mutates messages, and the same
+  // request is retried against other providers.
   const upstream = JSON.parse(
-    JSON.stringify({
-      ...body,
-      model: candidate.model,
-    }),
+    JSON.stringify(
+      pickChatRequestFields(body, { streamOptions: provider?.streamOptions !== false }),
+    ),
   );
-  delete upstream.models;
-  delete upstream.route;
-  if (providerNeedsThoughtSignatures(PROVIDERS.get(candidate.provider))) {
+  upstream.model = candidate.model;
+  if (providerNeedsThoughtSignatures(provider)) {
     injectThoughtSignatures(upstream, thoughtSignatures);
   }
   if (!secretRedactor) return upstream;
@@ -1948,6 +1977,12 @@ async function attemptJson(candidate, body, clientSignal, slot) {
 
 async function attemptStream(candidate, body, res, clientSignal, slot, options = {}) {
   const translator = options.translator || null;
+  // Chat chunks are rebuilt into one well-formed stream; the Responses
+  // dialect has its own translator.
+  const normalizer = translator
+    ? null
+    : createChatStreamNormalizer({ model: options.model || candidate.model });
+  const attemptStartedAt = Number(options.startedAt) || Date.now();
   const firstByteWaitMs = firstByteTimeoutMs();
   const firstByteController = new AbortController();
   const firstByteTimer =
@@ -1994,6 +2029,7 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
   let committed = false;
   let sawUseful = false;
   let finishReason = '';
+  let firstTokenMs = 0;
 
   // Every exit from this attempt goes through here: a timer that outlives its
   // attempt would later write into a response another candidate now owns.
@@ -2039,6 +2075,15 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
     else bufferedEvents.push(text);
   }
 
+  // Chat output is never the provider's own bytes: every chunk is normalized
+  // so ids, timestamps, the requested model, and the reasoning field name are
+  // consistent, and non-data lines never leak into the client stream.
+  function emitChat(payload) {
+    const frame = chatDataFrame(normalizer.push(payload));
+    if (committed) res.write(frame);
+    else bufferedChunks.push(frame);
+  }
+
   function commitStream() {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
@@ -2072,10 +2117,14 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
   function finishStream(reason) {
     if (translator) {
       res.write(translator.finish({ finishReason: reason }).map(sseEvent).join(''));
-      // OpenAI SDKs stop on [DONE]; Responses clients stop on the terminal
-      // event. Both terminators keep every client happy.
-      res.write('data: [DONE]\n\n');
+    } else if (!normalizer.finishSeen()) {
+      // Some providers just stop. A terminal chunk keeps clients from showing
+      // a truncated answer.
+      res.write(chatDataFrame(normalizer.terminal(reason || 'stop')));
     }
+    // OpenAI SDKs stop on [DONE]; Responses clients stop on the terminal
+    // event. Both terminators keep every client happy.
+    res.write(CHAT_DONE_FRAME);
     res.end();
   }
 
@@ -2101,9 +2150,16 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
       extractor?.flush();
       releaseAttempt();
       if (committed) {
-        if (translator) res.write(translator.fail(String(error)).map(sseEvent).join(''));
+        // Headers are out and the client is reading; a silent end looks like
+        // a truncated answer, so say what happened instead.
+        if (translator) {
+          res.write(translator.fail(String(error)).map(sseEvent).join(''));
+        } else {
+          res.write(chatDataFrame({ error: { message: String(error), type: 'upstream_error' } }));
+        }
+        res.write(CHAT_DONE_FRAME);
         res.end();
-        return { ok: true, candidate, interrupted: true };
+        return { ok: true, candidate, interrupted: true, firstTokenMs: firstTokenMs || undefined };
       }
       if (clientSignal?.aborted) {
         return { ok: false, status: 499, reason: 'client disconnected', kind: 'aborted' };
@@ -2116,20 +2172,10 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
     if (read.done) break;
     lastUpstreamAt = Date.now();
     clearFirstByteTimer();
-    const bytes = Buffer.from(read.value);
     const text = decoder.decode(read.value, { stream: true });
     extractor?.push(text);
-    if (translator) {
-      // Translated output is generated from parsed payloads below, never from
-      // the provider's own bytes. Nothing to forward here.
-    } else if (committed) {
-      res.write(bytes);
-    } else {
-      bufferedChunks.push(bytes);
-    }
-    // One shared scan drives commit, finish tracking, and usefulness
-    // accounting both before and after the commit, so a grace-committed
-    // stream that later yields content still counts as a success.
+    // Output is generated from parsed payloads only: the provider's raw bytes
+    // never reach the client, so both dialects share one scan and one shape.
     parserBuffer += text;
     const lines = parserBuffer.split('\n');
     parserBuffer = lines.pop() || '';
@@ -2143,16 +2189,11 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
         const finish = payload?.choices?.[0]?.finish_reason;
         if (finish) finishReason = finish;
         if (translator) emitEvents(translator.push(payload));
+        else emitChat(payload);
         if (usefulDelta(payload)) {
           sawUseful = true;
-          if (!committed) {
-            commitStream();
-            // The chat branch forwards the provider's own bytes, which are
-            // already in the commit backlog, so the rest of this read needs no
-            // scanning. Translated output is generated per event, so every
-            // remaining line in this read still has to be converted.
-            if (!translator) break;
-          }
+          if (!firstTokenMs) firstTokenMs = Date.now() - attemptStartedAt;
+          if (!committed) commitStream();
         }
       } catch {
         // Ignore keepalives and malformed provider-specific event lines.
@@ -2174,14 +2215,17 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
             .map(sseEvent)
             .join(''),
         );
+      } else if (!normalizer.finishSeen()) {
+        res.write(chatDataFrame(normalizer.terminal(finishReason || 'stop')));
       }
+      res.write(CHAT_DONE_FRAME);
       res.end();
       const reason = `reasoning only or empty stream (finish_reason=${finishReason || 'unknown'})`;
       setCooldown(candidate, 'empty', reason, 0, slot);
       return { ok: true, candidate, hollow: true };
     }
     finishStream(finishReason);
-    return { ok: true, candidate };
+    return { ok: true, candidate, firstTokenMs: firstTokenMs || undefined };
   }
   releaseAttempt();
   return {
@@ -2268,6 +2312,10 @@ async function handleChat(req, res, options = {}) {
     });
   }
 
+  // Field names only: enough to see what a client sent, never its content.
+  const requestFields = Object.keys(body).sort();
+  const dialect = options.dialect === 'responses' ? 'responses' : 'chat';
+
   // /v1/responses is served by translating to chat shape, running the same
   // routing pipeline, and translating back: routing, quota, cooldown, key
   // rotation, and usage accounting all stay identical for both dialects.
@@ -2281,6 +2329,7 @@ async function handleChat(req, res, options = {}) {
     body = translated.body;
   }
   const requestedModel = String(body.model || DEFAULT_MODEL_ALIAS);
+  log(`${dialect} request ${requestedModel} fields=${requestFields.join(',')}`);
   await refreshCatalog();
   const requestPlan = resolveRequest(requestedModel, body);
   const candidates = requestPlan.candidates;
@@ -2376,7 +2425,11 @@ async function handleChat(req, res, options = {}) {
           })
         : null;
       const result = body.stream
-        ? await attemptStream(candidate, body, res, clientController.signal, slot, { translator })
+        ? await attemptStream(candidate, body, res, clientController.signal, slot, {
+            translator,
+            model: requestedModel,
+            startedAt: attemptStartedAt,
+          })
         : await attemptJson(candidate, body, clientController.signal, slot);
 
       if (result.ok) {
@@ -2384,8 +2437,11 @@ async function handleChat(req, res, options = {}) {
         // client's 200 but served nothing: count it as empty (the cooldown
         // was already set inside the attempt) instead of a success.
         recordUsage(candidate, result.hollow ? 'empty' : 'ok');
+        resetTimeoutStreak(candidate, slot);
         if (!result.hollow) {
-          recordLatency(candidate, Date.now() - attemptStartedAt);
+          // Time to first useful token, not time to completion: a long answer
+          // is not a slow start, while a model that thinks for a minute is.
+          recordLatency(candidate, result.firstTokenMs ?? Date.now() - attemptStartedAt);
           rememberSelection({
             requested: requestedModel,
             provider: candidate.provider,

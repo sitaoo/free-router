@@ -79,25 +79,59 @@ function parseHeaderDump(text) {
   return { status: status || 502, headers };
 }
 
+// Splits curl's `-i` output into the final response head and the body that
+// follows it. Returns null while the head is still incomplete, so a streaming
+// caller can wait for more bytes instead of buffering the whole transfer.
+export function splitLeadingHttpBlocks(buffer) {
+  if (!Buffer.isBuffer(buffer) || !buffer.length) return null;
+  let offset = 0;
+  const statusLine = /^HTTP\/\d(?:\.\d)?\s+\d{3}/;
+  while (offset < buffer.length) {
+    const end = buffer.indexOf('\r\n\r\n', offset);
+    if (end < 0) return null;
+    const headerText = buffer.subarray(offset, end).toString('latin1');
+    if (!statusLine.test(headerText.trimStart())) return null;
+    const bodyStart = end + 4;
+    const rest = buffer.subarray(bodyStart);
+    // A following status line is another hop: an interim 100-continue, or a
+    // redirect curl followed. Keep scanning for the final one.
+    if (rest.length && statusLine.test(rest.toString('latin1').trimStart())) {
+      offset = bodyStart;
+      continue;
+    }
+    const parsed = parseHeaderDump(headerText);
+    return { status: parsed.status, headers: parsed.headers, body: Buffer.from(rest) };
+  }
+  return null;
+}
+
+// Streaming bridge: curl writes headers and body interleaved to stdout, and
+// the bytes after the final header block are exposed as the Response body as
+// they arrive. Previously the whole transfer was buffered, which made SSE
+// answers arrive in one burst (and hit curl's hard deadline) whenever the
+// SOCKS fallback was active.
 function socksFetch(url, init = {}) {
   const proxy = proxyFromEnv();
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'free-router-curl-'));
-  const headerDump = path.join(tmp, 'headers');
   const requestHeaders = path.join(tmp, 'request-headers');
   const headers = new Headers(init.headers);
   const headerLines = [];
   for (const [name, value] of headers) headerLines.push(`${name}: ${value}`);
   fs.writeFileSync(requestHeaders, `${headerLines.join('\n')}\n`, { mode: 0o600 });
+  // `-i` puts the response head on stdout in front of the body, `-N` keeps
+  // curl from buffering, and the caller's signal (attempt timeout, client
+  // disconnect) is what bounds the transfer. The hard deadline only guards a
+  // caller that forgot to pass one.
   const args = [
     '-sS',
-    '-D',
-    headerDump,
-    '-o',
-    '-',
+    '-i',
+    '-N',
+    '--connect-timeout',
+    '30',
+    '--max-time',
+    '1800',
     '--socks5-hostname',
     `${proxy.host}:${proxy.port}`,
-    '--max-time',
-    '180',
     '-X',
     init.method || 'GET',
     '-H',
@@ -114,35 +148,76 @@ function socksFetch(url, init = {}) {
 
   return new Promise((resolve, reject) => {
     const child = spawn('curl', args, { stdio: ['pipe', 'pipe', 'pipe'] });
-    const chunks = [];
+    let pending = Buffer.alloc(0);
+    let response = null;
     let stderr = '';
-    child.stdout.on('data', (chunk) => chunks.push(chunk));
+    let closed = false;
+    let streamController = null;
+    const stream = new ReadableStream({
+      start(controller) {
+        streamController = controller;
+      },
+      cancel() {
+        child.kill('SIGTERM');
+      },
+    });
     child.stderr.on('data', (chunk) => {
       stderr += chunk.toString();
       if (stderr.length > 2000) stderr = stderr.slice(-2000);
     });
     const abort = () => child.kill('SIGTERM');
     init.signal?.addEventListener('abort', abort, { once: true });
-    const done = (error, response) => {
+    const done = (error) => {
+      if (closed) return;
+      closed = true;
       init.signal?.removeEventListener('abort', abort);
       cleanup();
-      if (error) reject(error);
-      else resolve(response);
+      if (!response) {
+        if (error) reject(error);
+        else reject(new Error('curl exited without a response'));
+        return;
+      }
+      if (error) streamController.error(error);
+      else streamController.close();
     };
+    const deliver = (split) => {
+      const status = split.status >= 200 && split.status <= 599 ? split.status : 502;
+      response = new Response(stream, { status, headers: split.headers });
+      resolve(response);
+      if (split.body.length) streamController.enqueue(split.body);
+    };
+    if (init.signal?.aborted) {
+      child.kill('SIGTERM');
+      done(new Error('aborted'));
+      return;
+    }
+    child.stdout.on('data', (chunk) => {
+      if (closed) return;
+      if (response) {
+        streamController.enqueue(chunk);
+        return;
+      }
+      pending = pending.length ? Buffer.concat([pending, chunk]) : Buffer.from(chunk);
+      const split = splitLeadingHttpBlocks(pending);
+      if (!split) return;
+      pending = Buffer.alloc(0);
+      deliver(split);
+    });
     child.on('error', (error) => done(error));
     child.on('close', (code) => {
-      try {
-        const text = fs.existsSync(headerDump) ? fs.readFileSync(headerDump, 'utf8') : '';
-        const parsed = parseHeaderDump(text);
-        const payload = Buffer.concat(chunks);
-        if (code && !payload.length) {
-          done(new Error(stderr.trim() || `curl exited ${code}`));
+      if (!response) {
+        // A complete head with no body bytes is a valid empty response; any
+        // other ending without a head is the error curl reported.
+        const split = pending.length ? splitLeadingHttpBlocks(pending) : null;
+        if (split) {
+          deliver(split);
+          done(code ? new Error(stderr.trim() || `curl exited ${code}`) : null);
           return;
         }
-        done(null, new Response(payload, { status: parsed.status, headers: parsed.headers }));
-      } catch (error) {
-        done(error);
+        done(new Error(stderr.trim() || `curl exited ${code}`));
+        return;
       }
+      done(code ? new Error(stderr.trim() || `curl exited ${code}`) : null);
     });
     if (body) child.stdin.write(body);
     child.stdin.end();

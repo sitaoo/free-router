@@ -51,6 +51,8 @@ mkdir -p data && cp .env.example data/.env
 
 The gateway listens on `127.0.0.1:8787` by default. Stop it with `./script/stop.sh`. Run these scripts as a normal user. If started as root, they re-exec as the directory owner and refuse to stay root.
 
+If `ALL_PROXY` (or `HTTPS_PROXY`; `socks5`/`socks5h` only) names a SOCKS proxy, upstream calls go through curl. A direct request is tried first unless the host is listed in `socksFirstHosts`, and the fallback is only used when direct DNS fails. The bridge streams curl's output as it arrives, so an SSE answer reaches the client token by token instead of in one burst after the transfer ends.
+
 ## Run with Docker
 
 ```bash
@@ -227,6 +229,8 @@ Or add a `model_aliases.free-best` entry and switch with `/model free-best`.
 
 The selected upstream is returned in `X-Free-Router-Provider` and `X-Free-Router-Model`, plus the provider's normal `model` field.
 
+Both dialects are hardened in transit. On the way out, the upstream request is rebuilt from the documented Chat Completions fields, so client bookkeeping such as `features`, `variables`, `files`, `tool_ids`, `metadata`, and `models` never reaches a provider that would answer `400 Unknown name "features"` (Gemini's compatibility layer does). `stream_options` is forwarded only when the provider accepts it: set `"streamOptions": false` on a provider that rejects it, as the shipped Gemini entry does. On the way back, stream chunks are normalized rather than passed through: `id`, `created`, and `object` are filled in, `model` is the id the client requested (not the provider's), `reasoning` and `reasoning_content` are kept in sync, and exactly one `[DONE]` ends a successful stream. A provider that dies after the response was committed produces an SSE error frame plus `[DONE]` instead of ending silently. Every request also logs its dialect and top-level field names (never their content).
+
 ## Responses API
 
 `POST /v1/responses` is served out of the box, on the same pool, key rotation, quota, cooldown, and usage counters as `/v1/chat/completions`. Almost every provider behind the gateway speaks only Chat Completions, so the gateway translates in both directions instead of proxying: `input`, `instructions`, `tools`, `tool_choice`, `max_output_tokens`, `text.format`, and `reasoning.effort` become a chat request, and the chat answer (or its SSE deltas) becomes a `response` object (or the `response.*` event stream).
@@ -328,7 +332,7 @@ keys, URLs, allowlists, selections, and `probeFreeTier` apply immediately.
 }
 ```
 
-Optional fields: `keyEnv`, `baseUrlEnv`, `headers`, `chatPath`, `modelsPath`, `discover: false` to keep a priced catalog provider out of discovery, and `probeFreeTier: true` to let a price-free catalog contribute models by probing. The create form and each provider's advanced settings expose the same probe switch; toggling it there takes effect without a restart.
+Optional fields: `keyEnv`, `baseUrlEnv`, `headers`, `chatPath`, `modelsPath`, `discover: false` to keep a priced catalog provider out of discovery, `probeFreeTier: true` to let a price-free catalog contribute models by probing, and `streamOptions: false` for a provider whose OpenAI-compatible layer rejects `stream_options`. The create form and each provider's advanced settings expose the same probe switch; toggling it there takes effect without a restart.
 
 Two fields cover a catalog served outside the chat prefix, on its own auth: `modelsUrl` for an absolute listing URL and `modelsKeyHeader` for the header carrying the key. Gemini needs both, because its native listing is the only place `supportedGenerationMethods` appears and it answers `401` to a Bearer token. Either response shape is accepted: OpenAI's `data[].id` or Google's `models[].name`.
 
@@ -374,14 +378,16 @@ Ranking also reacts to real traffic. Once a model has at least `evaluation.usage
 
 All base signals live on a documented 0-100 scale: config anchors (94 down to a 30 floor, plus a capped capability-portrait bonus so a strong model placed low is not stuck), evaluations (~0-91), hand-written `baselineScores` (clamped into range), and usage adjustments (±`usageWeight`). Pinned models sit above the scale at a finite 150 and skip traffic adjustments.
 
-Failures are classified before they touch scores: capacity signals (`rateLimit`, `timeout`, `overloaded`) drive cooldowns only; routing, billing and credential faults (`notFound`, `forbidden`, `payment`, bad-key `401`s) are recorded but never scored. Only quality failures (empty or broken responses, upstream errors) move the score.
+Failures are classified before they touch scores: capacity signals (`rateLimit`, `timeout`, `overloaded`) drive cooldowns only; routing, billing and credential faults (`notFound`, `forbidden`, `payment`, bad-key `401`s) are recorded but never scored. Only quality failures (empty or broken responses, upstream errors) move the score. Consecutive timeouts double the cooldown of that candidate/key (`cooldownMs.timeout` is the first wait, `cooldownMs.timeoutMax` the cap, default one hour), and any other outcome resets the streak: a model that keeps hanging is not retried on the same five-minute cadence as one that failed once.
 
 Two live signals refine the order on every request:
 
 - **Scarcity**: within 5 points, higher remaining daily quota wins, so
 scarce-but-smart models are saved for when they matter. Unlimited models sort first.
-- **Latency**: rolling mean response time adds +2 under 5s, 0 up to 30s, −2
-above, once 5 samples exist. Small and capped by design.
+- **Latency**: rolling mean time to the first useful token adds +2 under 5s, 0
+up to 30s, −2 above, once 5 samples exist. Measured to the first content or
+tool-call delta, not to the end of the answer, so a long answer is not a slow
+start. Small and capped by design.
 
 A few percent of requests (`routing.explorePercent`, default 5) detour to an underexplored model so cold models can earn traffic; pinned models never give up first place. External leaderboards feed in through `script/sync-scores.mjs`, which writes `baselineScores` (40-80 prior band) plus provenance — see `./script/sync-scores.mjs --help`.
 

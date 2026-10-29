@@ -584,6 +584,8 @@ export function defaultConfigObject() {
         catalog: true,
         pricing: false,
         probeFreeTier: true,
+        // Gemini's OpenAI-compatible layer rejects stream_options.
+        streamOptions: false,
         baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
         modelsUrl: 'https://generativelanguage.googleapis.com/v1beta/models',
         modelsKeyHeader: 'x-goog-api-key',
@@ -683,7 +685,10 @@ export function defaultConfigObject() {
     },
     cooldownMs: {
       rateLimit: 600000,
+      // Base timeout cooldown; the nth consecutive timeout waits 2^(n-1)
+      // times this, capped by timeoutMax.
       timeout: 300000,
+      timeoutMax: 3600000,
       serverError: 120000,
       empty: 300000,
       notFound: 3600000,
