@@ -17,13 +17,14 @@ assert.match(page, /id="theme-btn"/, 'theme toggle button');
 assert.match(page, /THEME_ORDER\s*=\s*\[/, 'three-state cycle');
 assert.match(page, /prefers-color-scheme: dark/, 'system preference respected');
 
-// Navigation: four tabs (Routes and Quota were folded into the pool and
-// Providers), each with an inline SVG icon (no character icons).
+// Navigation: five tabs (Routes and Quota were folded into the pool and
+// Providers; Logs arrived with the request log), each with an inline SVG icon
+// (no character icons).
 const navStart = page.indexOf('id="tabs"');
 const navEnd = page.indexOf('</nav>', navStart);
 assert.ok(navStart !== -1 && navEnd > navStart, 'header nav present');
 const nav = page.slice(navStart, navEnd);
-assert.equal((nav.match(/<svg/g) || []).length, 4, 'four nav icons');
+assert.equal((nav.match(/<svg/g) || []).length, 5, 'five nav icons');
 assert.doesNotMatch(nav, /⧉|▦|⚙|●|○|▸|▾/, 'no character icons in nav');
 
 // Login gate hides the app chrome until auth succeeds.

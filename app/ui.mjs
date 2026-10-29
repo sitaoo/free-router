@@ -385,7 +385,7 @@ td.muted { color: var(--muted); }
 /* Wide tables scroll inside their card instead of widening the page: the
    model ids and provider URLs are wider than a phone viewport, and an
    auto-sized grid item would otherwise push the whole page sideways. */
-#usage, #pool, #providers, #gateway { overflow-x: auto; }
+#usage, #pool, #providers, #gateway, #logs { overflow-x: auto; }
 [data-pane], [data-pane] > section, .sec-body { min-width: 0; }
 
 /* ===== Pills ===== */
@@ -616,6 +616,7 @@ body[data-gate="1"] main#app { display: none; }
       <button data-tab="access"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg><span data-i18n="tab_access">Access</span></button>
       <button data-tab="providers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h20v6H2zM2 15h20v6H2zM6 6h.01M6 18h.01"/></svg><span data-i18n="tab_providers">Providers</span></button>
       <button data-tab="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg><span data-i18n="tab_settings">Settings</span></button>
+      <button data-tab="logs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg><span data-i18n="tab_logs">Logs</span></button>
     </nav>
     <div class="head-actions">
       <select id="lang" title="Language" data-i18n-title="lang_name"></select>
@@ -844,6 +845,22 @@ body[data-gate="1"] main#app { display: none; }
       </div>
     </section>
   </div>
+
+  <div data-pane="logs" hidden>
+    <section>
+      <div class="sec-head">
+        <h2 data-i18n="logs_title">Request log</h2>
+        <p data-i18n="logs_blurb">Newest first. Metadata only: dialect, models, outcome, timings, and top-level field names — never prompts, answers, headers, or key values. The last 500 requests are kept in memory and cleared on restart.</p>
+      </div>
+      <div class="sec-body">
+        <div class="row" style="justify-content:flex-end">
+          <button id="logs-refresh" class="quiet" data-i18n="logs_refresh">Refresh</button>
+        </div>
+        <div id="logs"></div>
+        <p class="note" id="logs-note"></p>
+      </div>
+    </section>
+  </div>
 </main>
 <div id="login" style="display:none">
   <div class="gate">
@@ -1021,6 +1038,7 @@ function renderAll() {
   renderTuning();
   renderMigration();
   renderSession();
+  renderLogs();
 }
 
 
@@ -2230,6 +2248,127 @@ function renderUsage() {
 }
 
 
+// The request log: one row per client call, newest first. Everything here is
+// metadata from /api/logs; prompts, answers, headers, and key values never
+// reach this tab. All values are inserted as text, never as HTML.
+let logsState = null;
+let logsRefreshing = false;
+
+function logResultKind(result) {
+  if (result === 'ok') return 'ok';
+  if (result === 'empty' || result === 'interrupted') return 'warn';
+  if (result === 'aborted' || result === 'rejected') return 'no';
+  return 'bad';
+}
+
+function logReasonText(value, max) {
+  const text = String(value || '');
+  return text.length > max ? text.slice(0, max) + '…' : text;
+}
+
+function logAttemptsCell(entry) {
+  const attempts = entry.attempts || [];
+  if (!attempts.length) return td('-', 'muted');
+  const cell = document.createElement('td');
+  const count = document.createElement('div');
+  count.textContent = t('logs_tries', { n: attempts.length });
+  cell.appendChild(count);
+  for (const attempt of attempts.slice(0, 3)) {
+    const line = document.createElement('div');
+    line.className = 'mono';
+    line.style.fontSize = '11.5px';
+    line.style.color = 'var(--muted)';
+    line.style.whiteSpace = 'nowrap';
+    let text = attempt.provider + ':' + attempt.model;
+    if (attempt.key) text += ' [' + attempt.key + ']';
+    text += ' · ' + (attempt.status === null ? '-' : attempt.status);
+    if (attempt.reason) text += ' ' + logReasonText(attempt.reason, 80);
+    line.textContent = text;
+    line.title = String(attempt.reason || '');
+    cell.appendChild(line);
+  }
+  if (attempts.length > 3) {
+    const more = document.createElement('div');
+    more.className = 'note';
+    more.style.margin = '2px 0 0';
+    more.textContent = t('logs_more', { n: attempts.length - 3 });
+    cell.appendChild(more);
+  }
+  return cell;
+}
+
+function renderLogs() {
+  const host = el('logs');
+  const note = el('logs-note');
+  host.textContent = '';
+  const entries = (logsState && logsState.entries) || [];
+  const capacity = (logsState && logsState.capacity) || 500;
+  note.textContent = logsState ? t('logs_count', { n: entries.length, cap: capacity }) : '';
+  if (!logsState) return;
+  if (!entries.length) {
+    const p = document.createElement('p');
+    p.className = 'note';
+    p.style.margin = '0';
+    p.textContent = t('logs_empty');
+    host.appendChild(p);
+    return;
+  }
+  host.appendChild(table(
+    [
+      { label: t('th_logs_time') },
+      { label: t('th_logs_dialect') },
+      { label: t('th_logs_requested') },
+      { label: t('th_logs_selected') },
+      { label: t('th_logs_result') },
+      { label: t('th_logs_duration'), num: true },
+      { label: t('th_logs_first_token'), num: true },
+      { label: t('th_logs_attempts') },
+    ],
+    entries.map((entry) => {
+      const selected = entry.provider
+        ? entry.provider + ':' + entry.upstreamModel + (entry.key ? ' [' + entry.key + ']' : '')
+        : '-';
+      const resultCell = document.createElement('td');
+      resultCell.appendChild(pill(t('log_' + entry.outcome), logResultKind(entry.outcome)));
+      if (entry.reason) {
+        const why = document.createElement('div');
+        why.className = 'note';
+        why.style.margin = '3px 0 0';
+        why.style.maxWidth = '260px';
+        why.style.overflow = 'hidden';
+        why.style.textOverflow = 'ellipsis';
+        why.style.whiteSpace = 'nowrap';
+        why.textContent = logReasonText(entry.reason, 120);
+        why.title = String(entry.reason);
+        resultCell.appendChild(why);
+      }
+      return [
+        td(new Date(entry.at).toLocaleString(lang), 'muted'),
+        td(entry.dialect, 'muted'),
+        td(entry.model || '-', 'mono'),
+        td(selected, 'mono'),
+        resultCell,
+        td(entry.durationMs, 'num'),
+        td(entry.firstTokenMs === null || entry.firstTokenMs === undefined ? '-' : entry.firstTokenMs, 'num'),
+        logAttemptsCell(entry),
+      ];
+    }),
+  ));
+}
+
+async function refreshLogs(silent) {
+  if (logsRefreshing) return;
+  logsRefreshing = true;
+  try {
+    logsState = await api('api/logs');
+    renderLogs();
+  } catch (error) {
+    if (!silent) toast(String(error.message || error), 'err');
+  } finally {
+    logsRefreshing = false;
+  }
+}
+
 // The pool is the whole routing truth now: free models in ranking order, then
 // the paid models that only a request naming them can use.
 function poolTable(entries) {
@@ -2735,8 +2874,13 @@ function bindOnce() {
   if (bindOnce.done) return;
   bindOnce.done = true;
   for (const button of document.querySelectorAll('#tabs button')) {
-    button.onclick = () => switchTab(button.dataset.tab);
+    button.onclick = () => {
+      switchTab(button.dataset.tab);
+      // Fetch on first visit; the interval keeps it fresh while visible.
+      if (button.dataset.tab === 'logs') refreshLogs(true);
+    };
   }
+  el('logs-refresh').onclick = () => refreshLogs(false);
   el('lang').onchange = () => setLang(el('lang').value);
   el('theme-btn').onclick = cycleTheme;
   applyTheme();
@@ -2946,6 +3090,7 @@ function showLogin() {
   el('app').style.display = 'none';
   el('logout-top').style.display = 'none';
   state = null;
+  logsState = null;
   applyI18n();
 }
 
@@ -3015,11 +3160,24 @@ function startProvidersAutoRefresh() {
   }, PROVIDERS_REFRESH_MS);
 }
 
+// The Logs tab refreshes itself while it is the one on screen. Like the other
+// pollers it skips hidden pages, logged-out sessions, and overlapping calls.
+const LOGS_REFRESH_MS = 5000;
+function startLogsAutoRefresh() {
+  if (startLogsAutoRefresh.done) return;
+  startLogsAutoRefresh.done = true;
+  setInterval(() => {
+    if (activeTab !== 'logs' || document.hidden || !state || logsRefreshing) return;
+    refreshLogs(true);
+  }, LOGS_REFRESH_MS);
+}
+
 // Bind buttons before the first load: an unauthenticated visit fails
 // /api/state and returns early, which must not leave the login button dead.
 bindOnce();
 startStatusAutoRefresh();
 startProvidersAutoRefresh();
+startLogsAutoRefresh();
 load().catch((error) => toast(String(error.message || error), 'err'));
 </script>
 </body>
