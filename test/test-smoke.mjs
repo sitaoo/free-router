@@ -2034,6 +2034,8 @@ try {
 
   const uiState = await fetch(`${base}/api/state`).then((res) => res.json());
   assert.equal(uiState.error?.type, 'unauthorized');
+  const unauthLogs = await fetch(`${base}/api/logs`);
+  assert.equal(unauthLogs.status, 401, 'the request log needs the admin session');
   // Web UI management APIs require the admin session (default password).
   const loginResponse = await fetch(`${base}/api/login`, {
     method: 'POST',
@@ -2149,7 +2151,13 @@ try {
 
   // The new key has to apply without a restart, and the redactor has to learn
   // it so it cannot leak back out through an upstream payload.
-  await fetch(`${base}/v1/chat/completions`, {
+  const malformed = await fetch(`${base}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{not json',
+  });
+  assert.equal(malformed.status, 400);
+  const probeResponse = await fetch(`${base}/v1/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -2157,8 +2165,39 @@ try {
       messages: [{ role: 'user', content: 'echo bai-rotated-key please' }],
     }),
   });
+  assert.equal(probeResponse.status, 200);
+  const probeId = probeResponse.headers.get('x-free-router-request-id') || '';
+  assert.match(probeId, /^req_[0-9a-f]{16}$/, 'responses carry the id used in the request log');
   assert.equal(lastBaiAuth, 'Bearer bai-rotated-key');
   assert.equal(JSON.stringify(lastBaiBody).includes('bai-rotated-key'), false);
+
+  // One row per client request: the bad body is rejected with no attempts, and
+  // the successful probe is the newest row, holding metadata only.
+  const logsResponse = await fetch(`${base}/api/logs`, { headers: { Cookie: sessionCookie } });
+  assert.equal(logsResponse.status, 200);
+  assert.equal(logsResponse.headers.get('cache-control'), 'no-store');
+  const logs = await logsResponse.json();
+  assert.equal(logs.capacity, 500);
+  assert.ok(Number.isFinite(Date.parse(logs.since)), 'since is a timestamp');
+  assert.equal(logs.size, logs.entries.length);
+  assert.ok(logs.entries.length >= 2, `expected at least 2 log rows, got ${logs.entries.length}`);
+  assert.equal(logs.entries[0].id, probeId, 'newest first');
+  const probeEntry = logs.entries[0];
+  assert.equal(probeEntry.model, 'glm-5.3-flash');
+  assert.equal(probeEntry.dialect, 'chat');
+  assert.equal(probeEntry.outcome, 'ok');
+  assert.equal(probeEntry.status, 200);
+  assert.ok(probeEntry.attempts.some((attempt) => attempt.ok), 'the attempt summary includes the answer');
+  assert.ok(probeEntry.fields.includes('model'));
+  assert.ok(probeEntry.fields.includes('messages'));
+  const rejectedEntry = logs.entries.find(
+    (entry) => entry.outcome === 'rejected' && entry.status === 400 && entry.attempts.length === 0,
+  );
+  assert.ok(rejectedEntry, 'the malformed body is recorded as a rejection with no attempts');
+  const logsJson = JSON.stringify(logs);
+  assert.equal(logsJson.includes('echo bai-rotated-key'), false, 'no prompt content');
+  assert.equal(logsJson.includes('bai-rotated-key'), false, 'no key value');
+  assert.equal(logsJson.includes('BAI_API_KEY='), false, 'no env assignment');
 
   const cleared = await fetch(`${base}/api/keys`, {
     method: 'POST',

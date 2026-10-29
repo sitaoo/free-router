@@ -31,6 +31,7 @@ import {
 import { probeBatchPlan, responseLooksBilled } from './discovery.mjs';
 import { CHAT_DONE_FRAME, chatDataFrame, createChatStreamNormalizer, pickChatRequestFields } from './chat.mjs';
 import { TIMEOUT_BACKOFF_CAP_MS, timeoutBackoffMs } from './cooldown.mjs';
+import { createRequestLog } from './request-log.mjs';
 import { estimateRequestTokens, fitsContext } from './context.mjs';
 import { installUpstreamProxy } from './proxy.mjs';
 import { isInsufficientFunds, msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
@@ -588,6 +589,9 @@ function gatewayGuardFailure(req) {
 
 const cooldowns = new Map();
 const thoughtSignatures = createThoughtSignatureCache();
+// Finished client gateway calls for the Logs tab. Metadata only, in memory:
+// nothing here survives a restart and nothing carries request content.
+const clientRequestLog = createRequestLog();
 let discoverySeenIds = [];
 let discoveryRemovedIds = [];
 let discoveryLastCheckedAt = 0;
@@ -2302,11 +2306,69 @@ function poolStatus() {
   };
 }
 
+// Turn the in-flight record into the finished shape the ring buffer stores.
+// The outcome is derived once from what was actually sent, so every return
+// path (including bare aborts) is accounted for without instrumenting each one.
+function finishRequestRecord(record, res, startedAt) {
+  const finishedAt = Date.now();
+  const sent = res.headersSent;
+  const status = sent ? res.statusCode : record.aborted ? 499 : 500;
+  let outcome;
+  if (!sent) {
+    outcome = record.aborted ? 'aborted' : 'failed';
+  } else if (status === 200) {
+    outcome = record.hollow ? 'empty' : record.interrupted ? 'interrupted' : 'ok';
+  } else if (status === 402) {
+    outcome = 'blocked';
+  } else if (status === 502) {
+    outcome = 'failed';
+  } else {
+    outcome = 'rejected';
+  }
+  return {
+    id: record.id,
+    at: new Date(finishedAt).toISOString(),
+    startedAt: new Date(startedAt).toISOString(),
+    durationMs: finishedAt - startedAt,
+    dialect: record.dialect,
+    stream: record.stream === true,
+    model: record.model || '',
+    provider: record.provider || '',
+    upstreamModel: record.upstreamModel || '',
+    key: record.key || '',
+    status,
+    outcome,
+    reason: record.reason || '',
+    firstTokenMs: Number.isFinite(record.firstTokenMs) ? record.firstTokenMs : null,
+    fields: record.fields || [],
+    attempts: record.attempts || [],
+  };
+}
+
 async function handleChat(req, res, options = {}) {
+  const startedAt = Date.now();
+  const record = {
+    id: `req_${crypto.randomBytes(8).toString('hex')}`,
+    dialect: options.dialect === 'responses' ? 'responses' : 'chat',
+    attempts: [],
+  };
+  // Set before any writeHead: Node merges this into whichever response the
+  // attempt ends up sending, JSON or SSE.
+  res.setHeader('X-Free-Router-Request-Id', record.id);
+  try {
+    await runChatRequest(req, res, options, record);
+  } finally {
+    const entry = finishRequestRecord(record, res, startedAt);
+    clientRequestLog.add(secretRedactor ? secretRedactor.redact(entry).value : entry);
+  }
+}
+
+async function runChatRequest(req, res, options, record) {
   let body;
   try {
     body = await readJson(req);
   } catch (error) {
+    record.reason = 'invalid JSON body';
     return sendJson(res, 400, {
       error: { message: String(error), type: 'invalid_request_error' },
     });
@@ -2319,6 +2381,9 @@ async function handleChat(req, res, options = {}) {
     .map((name) => name.replace(/[^\w.-]/g, '_').slice(0, 40))
     .sort();
   const dialect = options.dialect === 'responses' ? 'responses' : 'chat';
+  record.fields = requestFields;
+  record.model = String(body.model || '');
+  record.stream = body.stream === true;
 
   // /v1/responses is served by translating to chat shape, running the same
   // routing pipeline, and translating back: routing, quota, cooldown, key
@@ -2327,18 +2392,21 @@ async function handleChat(req, res, options = {}) {
   if (options.dialect === 'responses') {
     const translated = toChatRequest(body);
     if (!translated.ok) {
+      record.reason = translated.error?.message || 'invalid request';
       return sendJson(res, translated.status, { error: translated.error });
     }
     responses = { request: body, customTools: translated.customTools };
     body = translated.body;
   }
   const requestedModel = String(body.model || DEFAULT_MODEL_ALIAS);
-  log(`${dialect} request ${requestedModel} fields=${requestFields.join(',')}`);
+  record.model = requestedModel;
+  log(`${dialect} request ${requestedModel} id=${record.id} fields=${requestFields.join(',')}`);
   await refreshCatalog();
   const requestPlan = resolveRequest(requestedModel, body);
   const candidates = requestPlan.candidates;
   if (!candidates.length) {
     if (requestPlan.blocked.length) {
+      record.reason = 'insufficient funds';
       return sendPaymentBlocked(res, requestedModel, requestPlan.blocked);
     }
     if (requestPlan.kind === 'unknown' || requestPlan.kind === 'not_enabled') {
@@ -2346,6 +2414,9 @@ async function handleChat(req, res, options = {}) {
       // is a configuration answer, not an outage, so it is a 404 with a type
       // the client can tell apart from a typo.
       const enabled = requestPlan.kind === 'not_enabled';
+      record.reason = enabled
+        ? `model is not enabled: ${requestedModel}`
+        : `unknown model: ${requestedModel}`;
       return sendJson(res, 404, {
         error: {
           message: enabled
@@ -2355,6 +2426,7 @@ async function handleChat(req, res, options = {}) {
         },
       });
     }
+    record.reason = 'no compatible free model';
     return sendJson(res, 503, {
       error: {
         message: `No currently free model supports this request for ${requestedModel}`,
@@ -2406,7 +2478,10 @@ async function handleChat(req, res, options = {}) {
   }
 
   for (const candidate of candidates) {
-    if (clientController.signal.aborted) return;
+    if (clientController.signal.aborted) {
+      record.aborted = true;
+      return;
+    }
     if (failedProviders.has(candidate.provider)) continue;
     // Multi-account: each candidate is tried with every usable key in
     // round-robin order. A 401 retires just that key; rate limits cool down
@@ -2416,7 +2491,10 @@ async function handleChat(req, res, options = {}) {
     const attempts = slots.length ? slots : [null];
     let candidateOk = false;
     for (const slot of attempts) {
-      if (clientController.signal.aborted) return;
+      if (clientController.signal.aborted) {
+        record.aborted = true;
+        return;
+      }
       if (slot && cooldownRemaining(candidate, slot) > 0) continue;
       const slotLabel = slot ? ` [${slot.name}]` : '';
       log(`trying ${candidateKey(candidate)}${slotLabel} for ${requestedModel}`);
@@ -2436,7 +2514,24 @@ async function handleChat(req, res, options = {}) {
           })
         : await attemptJson(candidate, body, clientController.signal, slot);
 
+      record.attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        key: slot?.name || '',
+        status: result.ok ? 200 : result.status,
+        ok: result.ok === true,
+        kind: result.kind || '',
+        reason: result.reason || '',
+        ms: Date.now() - attemptStartedAt,
+      });
+
       if (result.ok) {
+        record.provider = candidate.provider;
+        record.upstreamModel = candidate.model;
+        record.key = slot?.name || '';
+        record.firstTokenMs = result.firstTokenMs;
+        record.hollow = result.hollow === true;
+        record.interrupted = result.interrupted === true;
         // A grace-committed stream that never yielded content kept the
         // client's 200 but served nothing: count it as empty (the cooldown
         // was already set inside the attempt) instead of a success.
@@ -2495,6 +2590,7 @@ async function handleChat(req, res, options = {}) {
         isInsufficientFunds(result.status, result.errorBody, result.reason)
       ) {
         blockPayment(candidate, result.reason);
+        record.reason = 'insufficient funds';
         if (!res.headersSent) {
           return sendPaymentBlocked(res, requestedModel, [
             { ...candidate, blockedUntil: paymentBlocks[candidateKey(candidate)]?.until },
@@ -2535,6 +2631,7 @@ async function handleChat(req, res, options = {}) {
   }
 
   if (!res.headersSent) {
+    record.reason = 'all models failed';
     sendJson(res, 502, {
       error: {
         message: `All models failed for ${requestedModel}`,
@@ -3623,6 +3720,11 @@ async function handler(req, res) {
       },
       { 'Cache-Control': 'no-store' },
     );
+  }
+  if (req.method === 'GET' && url.pathname === '/api/logs') {
+    // Session-protected by the global /api/* gate above. Newest first; the
+    // buffer is already bounded, so there is nothing to page or filter here.
+    return sendJson(res, 200, clientRequestLog.snapshot(), { 'Cache-Control': 'no-store' });
   }
   if (req.method === 'POST' && url.pathname === '/api/keys') {
     return handleKeyUpdate(req, res);

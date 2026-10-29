@@ -320,6 +320,11 @@ try {
     });
     const ttfb = Date.now() - started;
     assert.equal(response.status, 200);
+    assert.match(
+      response.headers.get('x-free-router-request-id') || '',
+      /^req_[0-9a-f]{16}$/,
+      'every gateway response carries the request id used by the log',
+    );
     assert.ok(ttfb < 2000, `TTFB ${ttfb}ms exceeds commit grace (headers held until content)`);
     const text = await response.text();
     assert.match(text, /slow-ok/);
@@ -515,7 +520,11 @@ try {
   }
 
   // The request log names the dialect and the top-level fields, never content.
-  assert.match(childOutput, /chat request slow-think fields=.*stream_options/);
+  assert.match(
+    childOutput,
+    /chat request slow-think id=req_[0-9a-f]{16} fields=.*stream_options/,
+    'the request line names the dialect, its id, and the top-level fields',
+  );
 
   // Flush state, then verify the first-token sample landed instead of the
   // ~2.2s the slow-tail stream took end to end.
