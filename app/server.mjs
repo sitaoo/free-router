@@ -2313,7 +2313,11 @@ async function handleChat(req, res, options = {}) {
   }
 
   // Field names only: enough to see what a client sent, never its content.
-  const requestFields = Object.keys(body).sort();
+  // They are client-controlled, so strip anything that could forge a log line.
+  const requestFields = Object.keys(body)
+    .slice(0, 40)
+    .map((name) => name.replace(/[^\w.-]/g, '_').slice(0, 40))
+    .sort();
   const dialect = options.dialect === 'responses' ? 'responses' : 'chat';
 
   // /v1/responses is served by translating to chat shape, running the same
