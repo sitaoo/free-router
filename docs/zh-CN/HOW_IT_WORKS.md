@@ -102,7 +102,7 @@ npm run models -- --json
 
 ## Web 界面
 
-打开 <http://127.0.0.1:8787/> 并登录（默认密码 `admin123`，去设置 →管理里改）。界面有状态、访问、渠道、设置、日志五个标签页：状态页看实时模型池优先级，渠道页管 Key、每个渠道的模型表（免费/付费成员与每日限额）和发现（Discovery），日志页把最近 500 次客户端调用按纯文本块展示，一次请求一块，格式与容器日志一致（时间与请求 id、方言、结果与状态、耗时、首 token、顶层字段名；请求模型与实际使用的 `provider:model`、finish reason、工具调用个数、正文/推理字符数；最后是每一次上游尝试），页面可见时每 5 秒自动刷新。每块右上角有单独的**复制**按钮，页面上方还有**复制全部**、**导出 JSONL**、**导出文本**，出问题的请求可以原样贴进 bug 报告。页面走普通 HTTP 时浏览器剪贴板 API 不可用，复制会自动退回 textarea + execCommand。记录只有元数据，绝不保存提示词、回复、请求头或 Key 值，且只存在内存里，重启即清空。每个网关响应都带 `X-Free-Router-Request-Id`，可与日志行对应。跟随浏览器语言，每处修改都立即对运行中的进程生效——除了 host、端口和少数标了"需重启"的设置（Save 旁边有重启按钮，Docker 下 supervisor 会把服务拉起来）。顶栏的主题按钮在跟随系统、浅色、深色之间切换，选择记在这个浏览器的本地存储里。
+打开 <http://127.0.0.1:8787/> 并登录（默认密码 `admin123`，去设置 →管理里改）。界面有状态、访问、渠道、设置、日志五个标签页：状态页看实时模型池优先级，渠道页管 Key、每个渠道的模型表（免费/付费成员与每日限额）和发现（Discovery），日志页把最近 500 次客户端调用按表格展示（时间、方言、请求模型、实际使用的 `provider:model [key]`、带 finish reason、工具调用个数和字符数的结果标签、耗时、首 token，以及每一次上游尝试），页面可见时每 5 秒自动刷新。页面上方一排幽灵按钮：**刷新**、**复制全部**、**导出 JSONL**、**导出文本**、**清除**。复制和两种导出都写成与容器日志一致的三行文本（时间与请求 id、方言、结果与状态、耗时、首 token、顶层字段名；请求模型与实际使用的 `provider:model`、finish reason、工具调用个数、正文/推理字符数；最后是每一次上游尝试），出问题的请求可以原样贴进 bug 报告。页面走普通 HTTP 时浏览器剪贴板 API 不可用，复制会自动退回 textarea + execCommand；清除确认后清空内存中的记录。记录只有元数据，绝不保存提示词、回复、请求头或 Key 值，且只存在内存里，重启即清空。每个网关响应都带 `X-Free-Router-Request-Id`，可与日志行对应。跟随浏览器语言，每处修改都立即对运行中的进程生效——除了 host、端口和少数标了"需重启"的设置（Save 旁边有重启按钮，Docker 下 supervisor 会把服务拉起来）。顶栏的主题按钮在跟随系统、浅色、深色之间切换，选择记在这个浏览器的本地存储里。
 
 ```json
 "webui": {
@@ -258,6 +258,7 @@ POST /api/login              { "password": "..." } -> 会话 cookie
 POST /api/logout             吊销当前会话
 GET  /api/state              完整 UI 状态（要会话）
 GET  /api/logs               最近的客户端调用，最新在前（要会话）
+DELETE /api/logs             清空内存中的调用记录（要会话）
 POST /api/keys               provider Key：{ "provider", "name"?, "key" }
 POST /api/gateway-keys       网关 Key：{ "action": "create|delete|setRequireAuth", ... }
 POST /api/providers          { "action": "create|update|delete", ... }

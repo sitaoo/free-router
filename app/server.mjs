@@ -3762,6 +3762,15 @@ async function handler(req, res) {
     // buffer is already bounded, so there is nothing to page or filter here.
     return sendJson(res, 200, clientRequestLog.snapshot(), { 'Cache-Control': 'no-store' });
   }
+  if (req.method === 'DELETE' && url.pathname === '/api/logs') {
+    // Clearing only touches the in-memory ring; nothing on disk to erase.
+    return sendJson(
+      res,
+      200,
+      { ok: true, cleared: clientRequestLog.clear() },
+      { 'Cache-Control': 'no-store' },
+    );
+  }
   if (req.method === 'POST' && url.pathname === '/api/keys') {
     return handleKeyUpdate(req, res);
   }

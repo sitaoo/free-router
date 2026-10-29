@@ -302,6 +302,8 @@ button.primary {
 button.primary:hover { filter: brightness(1.06); transform: translateY(-1px); }
 button.quiet { border-color: transparent; background: transparent; color: var(--muted); box-shadow: none; }
 button.quiet:hover { background: var(--hover); color: var(--fg); }
+button.ghost { background: transparent; box-shadow: none; }
+button.ghost:hover { background: var(--hover); border-color: var(--line-strong); }
 button.danger { color: var(--bad); }
 button.danger:hover { background: var(--bad-soft); border-color: var(--bad-line); color: var(--bad); }
 button:disabled { opacity: .5; cursor: default; box-shadow: none; transform: none; }
@@ -386,13 +388,6 @@ td.muted { color: var(--muted); }
    model ids and provider URLs are wider than a phone viewport, and an
    auto-sized grid item would otherwise push the whole page sideways. */
 #usage, #pool, #providers, #gateway, #logs { overflow-x: auto; }
-/* A log row is scanned left to right: keep each field on one line and let the
-   card scroll instead of breaking model ids and timestamps mid-token. */
-#logs { display: grid; gap: 8px; }
-.log-entry { position: relative; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
-.log-text { margin: 0; padding-right: 60px; font-family: var(--mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
-.log-copy { position: absolute; top: 6px; right: 8px; font-size: 11px; opacity: .7; }
-.log-copy:hover { opacity: 1; }
 [data-pane], [data-pane] > section, .sec-body { min-width: 0; }
 
 /* ===== Pills ===== */
@@ -861,10 +856,11 @@ body[data-gate="1"] main#app { display: none; }
       </div>
       <div class="sec-body">
         <div class="row" style="justify-content:flex-end">
-          <button id="logs-refresh" class="quiet" data-i18n="logs_refresh">Refresh</button>
-          <button id="logs-copy" class="quiet" data-i18n="logs_copy_all">Copy all</button>
-          <button id="logs-export-jsonl" class="quiet" data-i18n="logs_export_jsonl">Export JSONL</button>
-          <button id="logs-export-text" class="quiet" data-i18n="logs_export_text">Export text</button>
+          <button id="logs-refresh" class="ghost" data-i18n="logs_refresh">Refresh</button>
+          <button id="logs-copy" class="ghost" data-i18n="logs_copy_all">Copy all</button>
+          <button id="logs-export-jsonl" class="ghost" data-i18n="logs_export_jsonl">Export JSONL</button>
+          <button id="logs-export-text" class="ghost" data-i18n="logs_export_text">Export text</button>
+          <button id="logs-clear" class="ghost danger" data-i18n="logs_clear">Clear</button>
         </div>
         <div id="logs"></div>
         <p class="note" id="logs-note"></p>
@@ -2361,6 +2357,48 @@ function downloadLogText(filename, text, type) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function logResultKind(result) {
+  if (result === 'ok') return 'ok';
+  if (result === 'empty' || result === 'interrupted') return 'warn';
+  if (result === 'aborted' || result === 'rejected') return 'no';
+  return 'bad';
+}
+
+function logAttemptsCell(entry) {
+  const attempts = entry.attempts || [];
+  if (!attempts.length) return td('-', 'muted');
+  const cell = document.createElement('td');
+  cell.style.maxWidth = '220px';
+  cell.style.overflow = 'hidden';
+  const count = document.createElement('div');
+  count.textContent = t('logs_tries', { n: attempts.length });
+  cell.appendChild(count);
+  for (const attempt of attempts.slice(0, 3)) {
+    const line = document.createElement('div');
+    line.className = 'mono';
+    line.style.fontSize = '11.5px';
+    line.style.color = 'var(--muted)';
+    line.style.whiteSpace = 'nowrap';
+    line.style.overflow = 'hidden';
+    line.style.textOverflow = 'ellipsis';
+    let text = attempt.provider + ':' + attempt.model;
+    if (attempt.key) text += ' [' + attempt.key + ']';
+    text += ' · ' + (attempt.status === null ? '-' : attempt.status);
+    if (attempt.reason) text += ' ' + logReasonText(attempt.reason, 80);
+    line.textContent = text;
+    line.title = String(attempt.reason || '');
+    cell.appendChild(line);
+  }
+  if (attempts.length > 3) {
+    const more = document.createElement('div');
+    more.className = 'note';
+    more.style.margin = '2px 0 0';
+    more.textContent = t('logs_more', { n: attempts.length - 3 });
+    cell.appendChild(more);
+  }
+  return cell;
+}
+
 function renderLogs() {
   const host = el('logs');
   const note = el('logs-note');
@@ -2377,20 +2415,64 @@ function renderLogs() {
     host.appendChild(p);
     return;
   }
-  for (const entry of entries) {
-    const box = document.createElement('div');
-    box.className = 'log-entry';
-    const pre = document.createElement('pre');
-    pre.className = 'log-text';
-    pre.textContent = logEntryText(entry);
-    box.appendChild(pre);
-    const copy = document.createElement('button');
-    copy.className = 'quiet log-copy';
-    copy.textContent = t('logs_copy_one');
-    copy.onclick = () => copyLogText(logEntryText(entry));
-    box.appendChild(copy);
-    host.appendChild(box);
-  }
+  host.appendChild(table(
+    [
+      { label: t('th_logs_time') },
+      { label: t('th_logs_dialect') },
+      { label: t('th_logs_requested') },
+      { label: t('th_logs_selected') },
+      { label: t('th_logs_result') },
+      { label: t('th_logs_duration'), num: true },
+      { label: t('th_logs_first_token'), num: true },
+      { label: t('th_logs_attempts') },
+    ],
+    entries.map((entry) => {
+      const selected = entry.provider
+        ? entry.provider + ':' + entry.upstreamModel + (entry.key ? ' [' + entry.key + ']' : '')
+        : '-';
+      const resultCell = document.createElement('td');
+      resultCell.appendChild(pill(t('log_' + entry.outcome), logResultKind(entry.outcome)));
+      if (entry.reason) {
+        const why = document.createElement('div');
+        why.className = 'note';
+        why.style.margin = '3px 0 0';
+        why.style.maxWidth = '160px';
+        why.style.overflow = 'hidden';
+        why.style.textOverflow = 'ellipsis';
+        why.style.whiteSpace = 'nowrap';
+        why.textContent = logReasonText(entry.reason, 120);
+        why.title = String(entry.reason);
+        resultCell.appendChild(why);
+      }
+      // What the answer was made of: an "ok" row with zero characters and a
+      // tool call looks very different from one that carried text.
+      if (entry.finishReason || entry.toolCalls || entry.contentChars) {
+        const shape = document.createElement('div');
+        shape.className = 'note';
+        shape.style.margin = '3px 0 0';
+        shape.style.maxWidth = '160px';
+        shape.style.overflow = 'hidden';
+        shape.style.textOverflow = 'ellipsis';
+        shape.style.whiteSpace = 'nowrap';
+        shape.textContent = t('logs_answer', {
+          finish: entry.finishReason || '-',
+          tools: entry.toolCalls || 0,
+          chars: entry.contentChars || 0,
+        });
+        resultCell.appendChild(shape);
+      }
+      return [
+        td(new Date(entry.at).toLocaleString(lang), 'muted'),
+        td(entry.dialect, 'muted'),
+        td(entry.model || '-', 'mono'),
+        td(selected, 'mono'),
+        resultCell,
+        td(entry.durationMs, 'num'),
+        td(entry.firstTokenMs === null || entry.firstTokenMs === undefined ? '-' : entry.firstTokenMs, 'num'),
+        logAttemptsCell(entry),
+      ];
+    }),
+  ));
 }
 
 async function refreshLogs(silent) {
@@ -2403,6 +2485,17 @@ async function refreshLogs(silent) {
     if (!silent) toast(String(error.message || error), 'err');
   } finally {
     logsRefreshing = false;
+  }
+}
+
+async function clearLogs() {
+  if (!confirm(t('logs_clear_confirm'))) return;
+  try {
+    await api('api/logs', { method: 'DELETE' });
+    await refreshLogs(true);
+    toast(t('logs_cleared'), 'good');
+  } catch (error) {
+    toast(String(error.message || error), 'err');
   }
 }
 
@@ -2923,6 +3016,7 @@ function bindOnce() {
     downloadLogText('free-router-logs-' + logStamp() + '.jsonl', logJsonl(), 'application/x-ndjson');
   el('logs-export-text').onclick = () =>
     downloadLogText('free-router-logs-' + logStamp() + '.log', logAllText(), 'text/plain');
+  el('logs-clear').onclick = () => clearLogs();
   el('lang').onchange = () => setLang(el('lang').value);
   el('theme-btn').onclick = cycleTheme;
   applyTheme();

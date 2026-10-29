@@ -177,4 +177,20 @@ const iso = (date) => new Date(date).toISOString();
   assert.equal(createRequestLog().capacity, REQUEST_LOG_CAPACITY);
 }
 
+// ---- clearing ------------------------------------------------------------
+{
+  const log = createRequestLog({ capacity: 5, now });
+  log.add({ id: 'a' });
+  log.add({ id: 'b' });
+  const cleared = log.clear();
+  assert.equal(cleared, 2, 'clear reports how many records it removed');
+  assert.equal(log.size, 0);
+  assert.deepEqual(log.snapshot().entries, []);
+  assert.equal(log.capacity, 5, 'clearing keeps the buffer configuration');
+  assert.equal(log.since, createRequestLog({ now }).since, 'since marks process start, not the clear');
+  assert.equal(log.clear(), 0, 'clearing an empty log is a no-op');
+  log.add({ id: 'c' });
+  assert.deepEqual(log.snapshot().entries.map((entry) => entry.id), ['c']);
+}
+
 console.log('request-log unit tests passed');

@@ -2036,6 +2036,8 @@ try {
   assert.equal(uiState.error?.type, 'unauthorized');
   const unauthLogs = await fetch(`${base}/api/logs`);
   assert.equal(unauthLogs.status, 401, 'the request log needs the admin session');
+  const unauthClear = await fetch(`${base}/api/logs`, { method: 'DELETE' });
+  assert.equal(unauthClear.status, 401, 'clearing the request log needs the admin session');
   // Web UI management APIs require the admin session (default password).
   const loginResponse = await fetch(`${base}/api/login`, {
     method: 'POST',
@@ -2202,6 +2204,18 @@ try {
   assert.equal(logsJson.includes('echo bai-rotated-key'), false, 'no prompt content');
   assert.equal(logsJson.includes('bai-rotated-key'), false, 'no key value');
   assert.equal(logsJson.includes('BAI_API_KEY='), false, 'no env assignment');
+
+  // Clear empties the in-memory list, and the next read proves it.
+  const clearResponse = await fetch(`${base}/api/logs`, { method: 'DELETE', headers: { Cookie: sessionCookie } });
+  assert.equal(clearResponse.status, 200);
+  assert.equal(clearResponse.headers.get('cache-control'), 'no-store');
+  const clearPayload = await clearResponse.json();
+  assert.equal(clearPayload.ok, true);
+  assert.equal(clearPayload.cleared, logs.entries.length);
+  const afterLogsClear = await fetch(`${base}/api/logs`, { headers: { Cookie: sessionCookie } }).then((res) => res.json());
+  assert.equal(afterLogsClear.size, 0);
+  assert.deepEqual(afterLogsClear.entries, []);
+  assert.equal(afterLogsClear.capacity, 500);
 
   const cleared = await fetch(`${base}/api/keys`, {
     method: 'POST',

@@ -135,5 +135,11 @@ export function createRequestLog({ capacity = REQUEST_LOG_CAPACITY, now = Date.n
       // convention (only this module writes them).
       return { capacity: limit, size: entries.length, since, entries: entries.slice().reverse() };
     },
+    clear() {
+      // `since` stays: it marks when the process started keeping records.
+      const removed = entries.length;
+      entries.length = 0;
+      return removed;
+    },
   };
 }
