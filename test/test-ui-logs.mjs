@@ -62,6 +62,11 @@ for (const key of ['log_ok', 'log_empty', 'log_interrupted', 'log_aborted', 'log
 }
 assert.match(page, /logs_answer/, 'each row shows finish reason, tool calls, and character count');
 assert.match(page, /logs_more/, 'long attempt lists collapse into a remainder line');
+// The cell is 220px wide, so the visible lines are always cut short: hovering
+// must reveal the complete text of every attempt, not just the first three.
+assert.match(page, /cell\.title = /, 'the attempts cell must expose every attempt on hover');
+assert.match(page, /line\.title = logAttemptText\(attempt\)/, 'a visible line must expose its full text on hover');
+assert.match(page, /attempts\.map\(logAttemptText\)/, 'the hover hint covers all attempts, not only the three shown');
 assert.match(page, /logs_tries/, 'the attempts cell counts its lines');
 assert.doesNotMatch(page, /log-copy/, 'no per-row copy button');
 assert.doesNotMatch(page, /logs_copy_one/, 'the per-row copy wording is gone');

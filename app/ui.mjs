@@ -2370,6 +2370,10 @@ function logAttemptsCell(entry) {
   const cell = document.createElement('td');
   cell.style.maxWidth = '220px';
   cell.style.overflow = 'hidden';
+  // The column is narrow on purpose, so the cell always truncates its lines.
+  // Hovering shows every attempt in full, including the ones beyond the third
+  // that only appear as "N more" below.
+  cell.title = [t('logs_tries', { n: attempts.length })].concat(attempts.map(logAttemptText)).join('\\n');
   const count = document.createElement('div');
   count.textContent = t('logs_tries', { n: attempts.length });
   cell.appendChild(count);
@@ -2383,10 +2387,10 @@ function logAttemptsCell(entry) {
     line.style.textOverflow = 'ellipsis';
     let text = attempt.provider + ':' + attempt.model;
     if (attempt.key) text += ' [' + attempt.key + ']';
-    text += ' · ' + (attempt.status === null ? '-' : attempt.status);
+    text += ' · ' + (attempt.status === null || attempt.status === undefined ? '-' : attempt.status);
     if (attempt.reason) text += ' ' + logReasonText(attempt.reason, 80);
     line.textContent = text;
-    line.title = String(attempt.reason || '');
+    line.title = logAttemptText(attempt);
     cell.appendChild(line);
   }
   if (attempts.length > 3) {
