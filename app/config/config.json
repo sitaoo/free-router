@@ -17,7 +17,7 @@
       "catalog": true,
       "pricing": false,
       "probeFreeTier": true,
-      "streamOptions": false,
+      "streamOptions": true,
       "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
       "modelsUrl": "https://generativelanguage.googleapis.com/v1beta/models",
       "modelsKeyHeader": "x-goog-api-key",
@@ -110,8 +110,7 @@
       "usageWeight": 12,
       "usageMinRequests": 20,
       "pinnedModels": [
-        "gemini:gemini-3.8-flash",
-        "gemini:gemini-3.7-flash",
+        "gemini:gemini-3.5-flash-lite",
         "tokenrouter:z-ai/glm-5.3-free",
         "bai:glm-5.3-flash"
       ]

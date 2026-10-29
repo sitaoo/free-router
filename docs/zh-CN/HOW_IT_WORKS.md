@@ -102,7 +102,7 @@ npm run models -- --json
 
 ## Web 界面
 
-打开 <http://127.0.0.1:8787/> 并登录（默认密码 `admin123`，去设置 →管理里改）。界面有状态、访问、渠道、设置、日志五个标签页：状态页看实时模型池优先级，渠道页管 Key、每个渠道的模型表（免费/付费成员与每日限额）和发现（Discovery），日志页把最近 500 次客户端调用按表格展示（时间、方言、请求模型、实际使用的 `provider:model [key]`、带 finish reason、工具调用个数和字符数的结果标签、耗时、首 token，以及每一次上游尝试），页面可见时每 5 秒自动刷新。页面上方一排幽灵按钮：**刷新**、**复制全部**、**导出 JSONL**、**导出文本**、**清除**。复制和两种导出都写成与容器日志一致的三行文本（时间与请求 id、方言、结果与状态、耗时、首 token、顶层字段名；请求模型与实际使用的 `provider:model`、finish reason、工具调用个数、正文/推理字符数；最后是每一次上游尝试），出问题的请求可以原样贴进 bug 报告。页面走普通 HTTP 时浏览器剪贴板 API 不可用，复制会自动退回 textarea + execCommand；清除确认后清空内存中的记录。记录只有元数据，绝不保存提示词、回复、请求头或 Key 值，且只存在内存里，重启即清空。每个网关响应都带 `X-Free-Router-Request-Id`，可与日志行对应。跟随浏览器语言，每处修改都立即对运行中的进程生效——除了 host、端口和少数标了"需重启"的设置（Save 旁边有重启按钮，Docker 下 supervisor 会把服务拉起来）。顶栏的主题按钮在跟随系统、浅色、深色之间切换，选择记在这个浏览器的本地存储里。
+打开 <http://127.0.0.1:8787/> 并登录（默认密码 `admin123`，去设置 →管理里改）。界面有状态、访问、渠道、设置、日志五个标签页：状态页看实时模型池优先级，渠道页管 Key、每个渠道的模型表（免费/付费成员与每日限额）和发现（Discovery），日志页把最近 500 次客户端调用按表格展示（时间、API（chat / responses）、请求模型、实际使用的 `provider:model [key]`、带 finish reason、工具调用个数和字符数的结果标签、耗时、首 token、输入/输出 token 数、输出速度（token/秒），以及每一次上游尝试），页面可见时每 5 秒自动刷新。页面上方一排幽灵按钮：**刷新**、**复制全部**、**导出 JSONL**、**导出文本**、**清除**。复制和两种导出都写成与容器日志一致的三行文本（时间与请求 id、API、结果与状态、耗时、首 token、顶层字段名；请求模型与实际使用的 `provider:model`、finish reason、工具调用个数、正文/推理字符数、输入/输出 token 数与速度；最后是每一次上游尝试），出问题的请求可以原样贴进 bug 报告。页面走普通 HTTP 时浏览器剪贴板 API 不可用，复制会自动退回 textarea + execCommand；清除确认后清空内存中的记录。记录只有元数据，绝不保存提示词、回复、请求头或 Key 值，且只存在内存里，重启即清空。每个网关响应都带 `X-Free-Router-Request-Id`，可与日志行对应。跟随浏览器语言，每处修改都立即对运行中的进程生效——除了 host、端口和少数标了"需重启"的设置（Save 旁边有重启按钮，Docker 下 supervisor 会把服务拉起来）。顶栏的主题按钮在跟随系统、浅色、深色之间切换，选择记在这个浏览器的本地存储里。
 
 ```json
 "webui": {
@@ -224,7 +224,7 @@ custom_providers:
 
 选中的上游从 `X-Free-Router-Provider` 和 `X-Free-Router-Model` 返回，外加 provider 自己的 `model` 字段。
 
-两种方言在路上都被加固。出去的方向，上游请求按 Chat Completions 明示字段重建，客户端自己的记账字段（`features`、`variables`、`files`、`tool_ids`、`metadata`、`models` 等）不会发给会回 `400 Unknown name "features"` 的渠道（Gemini 的兼容层就是）。`stream_options` 只在渠道支持时才带；不支持的渠道设 `"streamOptions": false`，随包的 Gemini 配置已经这样写。回来的方向，流 chunk 不再原样透传，而是统一整形：补齐 `id`、`created`、`object`，`model` 用客户端请求的那个 id（不是渠道内部的），`reasoning` 和 `reasoning_content` 两个字段保持同步，成功流只以一个 `[DONE]` 收尾。流式工具调用会补上 `index`，带工具调用的那一轮以 `finish_reason: "tool_calls"` 结束，即使渠道报的是 `stop`（Gemini 的兼容层两样都占）：OpenAI 兼容客户端按 `index` 聚合工具调用、只在这个 finish reason 下执行，没修过的流到了客户端就是一条空回答。响应已提交后上游断掉，会发一条 SSE 错误帧加 `[DONE]`，而不是静默结束。每个请求还会在日志里留下方言和顶层字段名（从不记录字段内容）。
+两种方言在路上都被加固。出去的方向，上游请求按 Chat Completions 明示字段重建，客户端自己的记账字段（`features`、`variables`、`files`、`tool_ids`、`metadata`、`models` 等）不会发给会回 `400 Unknown name "features"` 的渠道（Gemini 的兼容层就是）。`stream_options` 只在渠道支持时才带，不支持的渠道设 `"streamOptions": false`；带的时候网关总是要求 `include_usage`，因为调用日志要记输入/输出 token 数和输出速度。没有主动要 usage 的客户端既收不到只有 usage 的那个 chunk，也看不到普通 chunk 里的数字，线上看到的仍然和它请求的一模一样。回来的方向，流 chunk 不再原样透传，而是统一整形：补齐 `id`、`created`、`object`，`model` 用客户端请求的那个 id（不是渠道内部的），`reasoning` 和 `reasoning_content` 两个字段保持同步，成功流只以一个 `[DONE]` 收尾。流式工具调用会补上 `index`，带工具调用的那一轮以 `finish_reason: "tool_calls"` 结束，即使渠道报的是 `stop`（Gemini 的兼容层两样都占）：OpenAI 兼容客户端按 `index` 聚合工具调用、只在这个 finish reason 下执行，没修过的流到了客户端就是一条空回答。响应已提交后上游断掉，会发一条 SSE 错误帧加 `[DONE]`，而不是静默结束。每个请求还会在日志里留下方言和顶层字段名（从不记录字段内容）。
 
 ## Responses API
 
@@ -456,8 +456,7 @@ verdict 双向压过 `freeModels`，这就是意义所在：`config.json` 的白
     "probeBatchDelayMs": 2000,
     "probeMaxPerProvider": 100,
     "pinnedModels": [
-      "gemini:gemini-3.8-flash",
-      "gemini:gemini-3.7-flash",
+      "gemini:gemini-3.5-flash-lite",
       "tokenrouter:z-ai/glm-5.3-free",
       "bai:glm-5.3-flash"
     ]
@@ -535,7 +534,7 @@ journalctl --user -u free-router -f
 `401` 只退役那把 Key。
 11. 发上游前，把本地环境里 `*_API_KEY` / `*_TOKEN` / `*_SECRET` /
 `*_PASSWORD` 的值（含 provider Key、网关 Key、管理密码）以及这些名字的 `NAME=...` 赋值行都脱敏。这拦不住 Hermes 在本地读 `.env`，只保证这些值不进 OpenRouter、TokenRouter、B.AI 的请求体。
-12. 推理专用的流 chunk 先攒着，模型吐出正文或工具调用才往客户端发，空模型照样能被换掉。等待有上限 `streamCommitGraceMs`（默认 10 秒，`FREE_ROUTER_STREAM_COMMIT_GRACE_MS` 环境变量优先）：超时就把已攒的前缀先发出去、剩下实时透传，浏览器和代理永远不会卡在无头连接上。这个期限是定时器，一个 delta 之后长时间没动静也会按时提交，不用等上游下一次读。这样提交了却始终没有正文的流，客户端照旧拿到 200，但记账按 `empty` 算、永不记 `ok`。到 `firstByteTimeoutMs`（默认 60 秒，`FREE_ROUTER_FIRST_BYTE_TIMEOUT_MS` 优先，0 关闭）还没吐出一个正文字节的模型按卡死处理、不按慢处理：直接放弃这次尝试换下一个候选，等响应头和等第一个 chunk 都算在这个期限内。提交之后的流，只要 `streamKeepAliveMs`（默认 15 秒，`FREE_ROUTER_STREAM_KEEPALIVE_MS` 优先，0 关闭）内没有上游 chunk，就发一条 SSE `: keep-alive` 注释，长时间推理不会被当成卡住。
+12. 推理专用的流 chunk 先攒着，模型吐出正文或工具调用才往客户端发，空模型照样能被换掉。等待有上限 `streamCommitGraceMs`（默认 10 秒，`FREE_ROUTER_STREAM_COMMIT_GRACE_MS` 环境变量优先）：超时就把已攒的前缀先发出去、剩下实时透传，浏览器和代理永远不会卡在无头连接上。这个期限是定时器，一个 delta 之后长时间没动静也会按时提交，不用等上游下一次读。这样提交了却始终没有正文的流，客户端照旧拿到 200，但记账按 `empty` 算、永不记 `ok`。到 `firstByteTimeoutMs`（默认 30 秒，`FREE_ROUTER_FIRST_BYTE_TIMEOUT_MS` 优先，0 关闭）还没吐出一个正文字节的模型按卡死处理、不按慢处理：直接放弃这次尝试换下一个候选，等响应头和等第一个 chunk 都算在这个期限内。30 秒故意压在普通客户端的耐心之下（浏览器和 Open WebUI 大约 50 秒就放弃）：否则最先尝试的卡死模型——通常是刚出冷却的置顶模型——会把整个请求耗光，客户端只看到报错，看不到下一个模型的回答。提交之后的流，只要 `streamKeepAliveMs`（默认 15 秒，`FREE_ROUTER_STREAM_KEEPALIVE_MS` 优先，0 关闭）内没有上游 chunk，就发一条 SSE `: keep-alive` 注释，长时间推理不会被当成卡住。
 13. Gemini 工具调用续聊，把 OpenAI 客户端丢掉的
 `extra_content.google.thought_signature` 贴回去。优先用上次 Gemini回包缓存的签名，不然用 Google 的 `skip_thought_signature_validator`哨兵，省一次烧配额的 400。还 400 就跳过同请求的剩下 Gemini 模型。
 

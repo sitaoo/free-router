@@ -567,8 +567,11 @@ export function defaultConfigObject() {
     streamCommitGraceMs: 10000,
     // Upper bound on the wait for the first body byte of a stream, covering
     // both the response headers and the first chunk after them. On expiry the
-    // attempt is aborted so the next candidate can answer. 0 disables it.
-    firstByteTimeoutMs: 60000,
+    // attempt is aborted so the next candidate can answer. It has to stay
+    // below a client's own patience (browsers and Open WebUI give up around
+    // 50s), or a stuck first candidate burns the request instead of yielding
+    // to a healthy one. 0 disables it.
+    firstByteTimeoutMs: 30000,
     // Idle intervals on a committed stream send an SSE comment line so proxies
     // and clients do not time out during a long reasoning gap. 0 disables it.
     streamKeepAliveMs: 15000,
@@ -666,8 +669,7 @@ export function defaultConfigObject() {
         usageWeight: 12,
         usageMinRequests: 20,
         pinnedModels: [
-          'gemini:gemini-3.8-flash',
-          'gemini:gemini-3.7-flash',
+          'gemini:gemini-3.5-flash-lite',
           'tokenrouter:z-ai/glm-5.3-free',
           'bai:glm-5.3-flash',
         ],
