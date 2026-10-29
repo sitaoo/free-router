@@ -386,6 +386,9 @@ td.muted { color: var(--muted); }
    model ids and provider URLs are wider than a phone viewport, and an
    auto-sized grid item would otherwise push the whole page sideways. */
 #usage, #pool, #providers, #gateway, #logs { overflow-x: auto; }
+/* A log row is scanned left to right: keep each field on one line and let the
+   card scroll instead of breaking model ids and timestamps mid-token. */
+#logs td { white-space: nowrap; }
 [data-pane], [data-pane] > section, .sec-body { min-width: 0; }
 
 /* ===== Pills ===== */
@@ -2270,6 +2273,8 @@ function logAttemptsCell(entry) {
   const attempts = entry.attempts || [];
   if (!attempts.length) return td('-', 'muted');
   const cell = document.createElement('td');
+  cell.style.maxWidth = '220px';
+  cell.style.overflow = 'hidden';
   const count = document.createElement('div');
   count.textContent = t('logs_tries', { n: attempts.length });
   cell.appendChild(count);
@@ -2279,6 +2284,8 @@ function logAttemptsCell(entry) {
     line.style.fontSize = '11.5px';
     line.style.color = 'var(--muted)';
     line.style.whiteSpace = 'nowrap';
+    line.style.overflow = 'hidden';
+    line.style.textOverflow = 'ellipsis';
     let text = attempt.provider + ':' + attempt.model;
     if (attempt.key) text += ' [' + attempt.key + ']';
     text += ' · ' + (attempt.status === null ? '-' : attempt.status);
@@ -2334,7 +2341,7 @@ function renderLogs() {
         const why = document.createElement('div');
         why.className = 'note';
         why.style.margin = '3px 0 0';
-        why.style.maxWidth = '260px';
+        why.style.maxWidth = '160px';
         why.style.overflow = 'hidden';
         why.style.textOverflow = 'ellipsis';
         why.style.whiteSpace = 'nowrap';
