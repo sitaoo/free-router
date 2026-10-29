@@ -20,6 +20,9 @@ function cleanText(value, max) {
 }
 
 function nonNegative(value) {
+  // null/undefined/"" mean "no sample", not zero: Number(null) is 0, which
+  // would otherwise turn an absent first-token time into a plausible 0 ms.
+  if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
   if (!Number.isFinite(number) || number < 0) return null;
   return Math.min(Math.round(number), MAX_DURATION_MS);

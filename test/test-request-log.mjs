@@ -55,6 +55,10 @@ const iso = (date) => new Date(date).toISOString();
   assert.equal(record.status, 200);
   assert.equal(record.attempts[0].ok, true);
 
+  // An explicit null is "no sample", not a 0 ms first token.
+  const absent = normalizeRequestRecord({ firstTokenMs: null }, { now });
+  assert.equal(absent.firstTokenMs, null);
+
   // Unknown dialect/outcome fall back instead of inventing a new state.
   const odd = normalizeRequestRecord({ dialect: 'grpc', outcome: 'melted', stream: 'yes' }, { now });
   assert.equal(odd.dialect, 'chat');
