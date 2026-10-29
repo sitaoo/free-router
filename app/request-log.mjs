@@ -38,6 +38,20 @@ function count(value) {
   return Math.min(Math.round(number), MAX_COUNT);
 }
 
+// Tokens per second over the time the model actually spent generating: from
+// its first token to the end of the answer. A non-stream (JSON) answer has no
+// first-token sample, so the whole request is used instead — that is a floor,
+// since it also counts the wait for the upstream, not an inflated number.
+export function outputTokensPerSecond({ outputTokens, durationMs, firstTokenMs }) {
+  const tokens = count(outputTokens);
+  const total = nonNegative(durationMs);
+  if (!tokens || total === null || total <= 0) return null;
+  const first = nonNegative(firstTokenMs);
+  const generationMs = first !== null && first > 0 && first < total ? total - first : total;
+  if (generationMs <= 0) return null;
+  return Math.round((tokens / generationMs) * 10000) / 10;
+}
+
 function httpStatus(value) {
   const number = Number(value);
   return Number.isInteger(number) && number >= 100 && number <= 599 ? number : null;
@@ -88,11 +102,15 @@ export function normalizeRequestRecord(input, { now = Date.now } = {}) {
   const source = isPlainObject(input) ? input : {};
   const at = isoOr(source.at, new Date(now()).toISOString());
   const outcome = OUTCOMES.has(source.outcome) ? source.outcome : 'failed';
+  const durationMs = nonNegative(source.durationMs) ?? 0;
+  const firstTokenMs = nonNegative(source.firstTokenMs);
+  const inputTokens = count(source.inputTokens);
+  const outputTokens = count(source.outputTokens);
   return {
     id: cleanText(source.id, 64),
     at,
     startedAt: isoOr(source.startedAt, at),
-    durationMs: nonNegative(source.durationMs) ?? 0,
+    durationMs,
     dialect: source.dialect === 'responses' ? 'responses' : 'chat',
     stream: source.stream === true,
     model: cleanText(source.model, 200),
@@ -102,11 +120,14 @@ export function normalizeRequestRecord(input, { now = Date.now } = {}) {
     status: httpStatus(source.status),
     outcome,
     reason: cleanText(source.reason, 240),
-    firstTokenMs: nonNegative(source.firstTokenMs),
+    firstTokenMs,
     finishReason: cleanText(source.finishReason, 40),
     toolCalls: count(source.toolCalls),
     contentChars: count(source.contentChars),
     reasoningChars: count(source.reasoningChars),
+    inputTokens,
+    outputTokens,
+    outputTps: outputTokensPerSecond({ outputTokens, durationMs, firstTokenMs }),
     fields: cleanFields(source.fields),
     attempts: cleanAttempts(source.attempts),
   };

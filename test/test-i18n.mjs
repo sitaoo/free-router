@@ -18,7 +18,8 @@ const NEW_KEYS = [
   'logs_export_text', 'logs_copied', 'logs_copy_failed', 'logs_clear', 'logs_clear_confirm',
   'logs_cleared',
   'th_logs_time', 'th_logs_dialect', 'th_logs_requested', 'th_logs_selected',
-  'th_logs_result', 'th_logs_duration', 'th_logs_first_token', 'th_logs_attempts',
+  'th_logs_result', 'th_logs_duration', 'th_logs_first_token', 'th_logs_input_tokens',
+  'th_logs_output_tokens', 'th_logs_speed', 'th_logs_attempts',
   'log_ok', 'log_empty', 'log_interrupted', 'log_aborted', 'log_blocked', 'log_failed',
   'log_rejected',
 ];

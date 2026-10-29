@@ -37,7 +37,7 @@ import {
   pickChatRequestFields,
 } from './chat.mjs';
 import { TIMEOUT_BACKOFF_CAP_MS, timeoutBackoffMs } from './cooldown.mjs';
-import { createRequestLog } from './request-log.mjs';
+import { createRequestLog, outputTokensPerSecond } from './request-log.mjs';
 import { estimateRequestTokens, fitsContext } from './context.mjs';
 import { installUpstreamProxy } from './proxy.mjs';
 import { isInsufficientFunds, msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
@@ -233,9 +233,9 @@ function streamCommitGraceMs() {
 function firstByteTimeoutMs() {
   const env = process.env.FREE_ROUTER_FIRST_BYTE_TIMEOUT_MS;
   const raw = Number(
-    env === undefined || env === '' ? config.firstByteTimeoutMs ?? 60000 : env,
+    env === undefined || env === '' ? config.firstByteTimeoutMs ?? 30000 : env,
   );
-  return Number.isFinite(raw) && raw >= 0 ? raw : 60000;
+  return Number.isFinite(raw) && raw >= 0 ? raw : 30000;
 }
 // After the headers are committed, a model can think for a long while between
 // tokens. SSE comment lines keep proxies and clients from timing out a stream
@@ -2043,7 +2043,14 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
   let firstTokenMs = 0;
   // Answer accounting for the request log: how much text and how many tool
   // calls actually went out, never the content itself.
-  const stats = { contentChars: 0, reasoningChars: 0, toolCalls: 0, finishReason: '' };
+  const stats = {
+    contentChars: 0,
+    reasoningChars: 0,
+    toolCalls: 0,
+    finishReason: '',
+    inputTokens: 0,
+    outputTokens: 0,
+  };
 
   // Every exit from this attempt goes through here: a timer that outlives its
   // attempt would later write into a response another candidate now owns.
@@ -2207,8 +2214,21 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
         stats.reasoningChars += counted.reasoningChars;
         stats.toolCalls += counted.toolCalls;
         if (counted.finishReason) stats.finishReason = counted.finishReason;
+        // Usage arrives once on the final chunk on most providers, but Gemini
+        // repeats a cumulative total on every chunk: the last non-zero sample
+        // wins, so summing would multiply the count by the chunk count.
+        if (counted.inputTokens) stats.inputTokens = counted.inputTokens;
+        if (counted.outputTokens) stats.outputTokens = counted.outputTokens;
+        // The include_usage request was the gateway's own. A Chat Completions
+        // client that did not ask for usage must not see the extra numbers or
+        // the usage-only chunk that carries them; the Responses dialect always
+        // reports usage in its completed event, so its translator keeps them.
+        const usageOnly =
+          !translator && payload.usage && (!Array.isArray(payload.choices) || payload.choices.length === 0);
+        const clientWantsUsage = translator || body?.stream_options?.include_usage === true;
+        if (!clientWantsUsage) delete payload.usage;
         if (translator) emitEvents(translator.push(payload));
-        else emitChat(payload);
+        else if (!usageOnly) emitChat(payload);
         if (usefulDelta(payload)) {
           sawUseful = true;
           if (!firstTokenMs) firstTokenMs = Date.now() - attemptStartedAt;
@@ -2359,9 +2379,12 @@ function finishRequestRecord(record, res, startedAt) {
     toolCalls: record.toolCalls || 0,
     contentChars: record.contentChars || 0,
     reasoningChars: record.reasoningChars || 0,
+    inputTokens: record.inputTokens || 0,
+    outputTokens: record.outputTokens || 0,
     fields: record.fields || [],
     attempts: record.attempts || [],
   };
+  const outputTps = outputTokensPerSecond(entry);
   // One line per finished request in the container log: the same metadata the
   // Logs tab shows, enough to tell a text answer from a tool call from nothing
   // without opening an admin session.
@@ -2369,7 +2392,9 @@ function finishRequestRecord(record, res, startedAt) {
   log(
     `${entry.dialect} ${entry.id} ${entry.outcome} ${status} ${entry.durationMs}ms ${selected}` +
       ` finish=${entry.finishReason || '-'} tools=${entry.toolCalls}` +
-      ` chars=${entry.contentChars}/${entry.reasoningChars}`,
+      ` chars=${entry.contentChars}/${entry.reasoningChars}` +
+      ` tokens=${entry.inputTokens}/${entry.outputTokens}` +
+      ` tps=${outputTps === null ? '-' : outputTps}`,
   );
   return entry;
 }
@@ -2568,6 +2593,10 @@ async function runChatRequest(req, res, options, record) {
         record.toolCalls = result.stats?.toolCalls || 0;
         record.contentChars = result.stats?.contentChars || 0;
         record.reasoningChars = result.stats?.reasoningChars || 0;
+        // The provider's own usage block, when it reports one; 0 means the
+        // upstream did not say, and the Logs tab shows a dash for it.
+        record.inputTokens = result.stats?.inputTokens || 0;
+        record.outputTokens = result.stats?.outputTokens || 0;
         // A grace-committed stream that never yielded content kept the
         // client's 200 but served nothing: count it as empty (the cooldown
         // was already set inside the attempt) instead of a success.

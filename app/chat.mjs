@@ -48,9 +48,12 @@ export const CHAT_REQUEST_FIELDS = [
 
 const CHAT_FIELD_SET = new Set(CHAT_REQUEST_FIELDS);
 
-// `streamOptions` is a provider capability, not an API fact: Gemini's
-// compatibility layer rejects it while most OpenAI-compatible gateways need
-// it for usage in the final chunk.
+// `streamOptions` is a provider capability, not an API fact: a provider that
+// rejects the field answers 400 to it, so the shipped gateway entries can turn
+// it off. When it is on, the gateway always asks for `include_usage` on a
+// stream so the request log can report input/output tokens and speed even for
+// a client that did not request them; the stream path strips the numbers back
+// out before they reach such a client.
 export function pickChatRequestFields(body, { streamOptions = true } = {}) {
   const out = {};
   if (!body || typeof body !== 'object') return out;
@@ -59,8 +62,10 @@ export function pickChatRequestFields(body, { streamOptions = true } = {}) {
     if (value !== undefined) out[field] = value;
   }
   const options = body.stream_options;
-  if (streamOptions && options && typeof options === 'object' && !Array.isArray(options)) {
-    out.stream_options = options;
+  const supplied = options && typeof options === 'object' && !Array.isArray(options);
+  if (streamOptions && supplied) out.stream_options = options;
+  if (streamOptions && body.stream === true) {
+    out.stream_options = { ...(supplied ? options : {}), include_usage: true };
   }
   return out;
 }
@@ -89,11 +94,25 @@ export function countPayloadOutput(payload) {
       : typeof part?.reasoning === 'string'
         ? part.reasoning
         : '';
+  // Token counts come from the provider's usage block, never from character
+  // counts: only the provider knows its tokenizer. Chat Completions names them
+  // prompt/completion_tokens, the Responses dialect input/output_tokens.
+  const usage = payload?.usage;
+  const usageCount = (...names) => {
+    if (!usage || typeof usage !== 'object') return 0;
+    for (const name of names) {
+      const value = Number(usage[name]);
+      if (Number.isFinite(value) && value >= 0) return Math.round(value);
+    }
+    return 0;
+  };
   return {
     contentChars: part ? lengthOf(part.content) : 0,
     reasoningChars: reasoning.length,
     toolCalls: Array.isArray(part?.tool_calls) ? part.tool_calls.length : 0,
     finishReason: typeof choice?.finish_reason === 'string' ? choice.finish_reason : '',
+    inputTokens: usageCount('prompt_tokens', 'input_tokens'),
+    outputTokens: usageCount('completion_tokens', 'output_tokens'),
   };
 }
 

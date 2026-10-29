@@ -45,7 +45,7 @@ assert.match(page, /!state/);
 assert.match(page, /logsRefreshing/);
 assert.match(page, /function startLogsAutoRefresh/);
 
-// 5. The table is back: eight columns, result pills, an answer-shape line, and
+// 5. The table is back: eleven columns, result pills, an answer-shape line, and
 // at most three attempts per row.
 assert.match(page, /function renderLogs\(/);
 assert.match(page, /renderLogs\(\);/, 'renderAll must render the cached logs');
@@ -53,7 +53,8 @@ assert.match(page, /function logResultKind\(/);
 assert.match(page, /function logAttemptsCell\(/);
 for (const key of [
   'th_logs_time', 'th_logs_dialect', 'th_logs_requested', 'th_logs_selected',
-  'th_logs_result', 'th_logs_duration', 'th_logs_first_token', 'th_logs_attempts',
+  'th_logs_result', 'th_logs_duration', 'th_logs_first_token', 'th_logs_input_tokens',
+  'th_logs_output_tokens', 'th_logs_speed', 'th_logs_attempts',
 ]) {
   assert.ok(page.includes(key), `the table must have a ${key} column`);
 }
@@ -74,7 +75,7 @@ assert.doesNotMatch(page, /logs_copy_one/, 'the per-row copy wording is gone');
 // 6. Copy and the exports use the same plain-text shape: three lines per
 // request, the fields a bug report needs.
 assert.match(page, /function logEntryText\(/);
-for (const token of ['finish=', 'tools=', 'chars=', 'fields=', 'logs_tries']) {
+for (const token of ['finish=', 'tools=', 'chars=', 'tokens=', 'tps=', 'fields=', 'logs_tries']) {
   assert.ok(page.includes(token), `the entry text must include ${token}`);
 }
 assert.match(page, /function logAllText\(/);

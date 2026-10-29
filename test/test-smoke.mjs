@@ -758,6 +758,7 @@ const baiMock = http.createServer(async (req, res) => {
         `data: ${JSON.stringify({
           model: body.model,
           choices: [{ delta: { content: 'bai-ok' }, finish_reason: null }],
+          usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 },
         })}\n\n`,
       );
       res.end('data: [DONE]\n\n');
@@ -773,6 +774,7 @@ const baiMock = http.createServer(async (req, res) => {
             finish_reason: 'stop',
           },
         ],
+        usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
       }),
     );
     return;
@@ -1458,6 +1460,10 @@ try {
   const stream = await streamResponse.text();
   assert.match(stream, /bai-ok/);
   assert.doesNotMatch(stream, /thinking only/);
+  // The gateway asks the provider for usage to fill its request log; that ask
+  // is not the client's, so a client that did not request usage never sees the
+  // numbers or a usage-only chunk.
+  assert.doesNotMatch(stream, /"usage"/, 'usage stays internal unless the client asked');
 
   const directTokenRouterResponse = await fetch(
     `http://127.0.0.1:${routerPort}/v1/chat/completions`,
@@ -2194,8 +2200,18 @@ try {
   assert.equal(probeEntry.toolCalls, 0);
   assert.ok(probeEntry.contentChars > 0, 'the answer volume is recorded, not the answer');
   assert.equal(typeof probeEntry.reasoningChars, 'number');
+  assert.equal(probeEntry.inputTokens, 5, 'the provider usage block is recorded');
+  assert.equal(probeEntry.outputTokens, 2);
+  assert.ok(probeEntry.outputTps > 0, 'output speed comes from tokens over generation time');
   assert.ok(probeEntry.fields.includes('model'));
   assert.ok(probeEntry.fields.includes('messages'));
+  const streamEntry = logs.entries.find(
+    (entry) => entry.stream === true && entry.upstreamModel === 'glm-5.3-flash' && entry.outcome === 'ok',
+  );
+  assert.ok(streamEntry, 'the streamed request is in the log');
+  assert.equal(streamEntry.inputTokens, 7, 'stream usage reaches the log');
+  assert.equal(streamEntry.outputTokens, 3);
+  assert.ok(streamEntry.outputTps > 0, 'a stream records its output speed');
   const rejectedEntry = logs.entries.find(
     (entry) => entry.outcome === 'rejected' && entry.status === 400 && entry.attempts.length === 0,
   );

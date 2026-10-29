@@ -2291,6 +2291,8 @@ function logEntryText(entry) {
   selected += ' finish=' + (entry.finishReason || '-');
   selected += ' tools=' + (entry.toolCalls || 0);
   selected += ' chars=' + (entry.contentChars || 0) + '/' + (entry.reasoningChars || 0);
+  selected += ' tokens=' + (entry.inputTokens || 0) + '/' + (entry.outputTokens || 0);
+  selected += ' tps=' + (entry.outputTps === null || entry.outputTps === undefined ? '-' : entry.outputTps);
   if (entry.reason) selected += ' reason=' + entry.reason;
   lines.push('  ' + selected);
   const attempts = Array.isArray(entry.attempts) ? entry.attempts : [];
@@ -2428,6 +2430,9 @@ function renderLogs() {
       { label: t('th_logs_result') },
       { label: t('th_logs_duration'), num: true },
       { label: t('th_logs_first_token'), num: true },
+      { label: t('th_logs_input_tokens'), num: true },
+      { label: t('th_logs_output_tokens'), num: true },
+      { label: t('th_logs_speed'), num: true },
       { label: t('th_logs_attempts') },
     ],
     entries.map((entry) => {
@@ -2473,6 +2478,11 @@ function renderLogs() {
         resultCell,
         td(entry.durationMs, 'num'),
         td(entry.firstTokenMs === null || entry.firstTokenMs === undefined ? '-' : entry.firstTokenMs, 'num'),
+        // 0 tokens means the upstream never reported usage, not an empty
+        // answer: that row still shows its character and tool-call counts.
+        td(entry.inputTokens ? entry.inputTokens : '-', 'num'),
+        td(entry.outputTokens ? entry.outputTokens : '-', 'num'),
+        td(entry.outputTps === null || entry.outputTps === undefined ? '-' : entry.outputTps + ' tok/s', 'num'),
         logAttemptsCell(entry),
       ];
     }),

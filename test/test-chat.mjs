@@ -59,10 +59,16 @@ import { countPayloadOutput, createChatStreamNormalizer, pickChatRequestFields }
   assert.equal(picked.stream, true);
 }
 
-// A non-object stream_options is never forwarded.
+// The gateway asks the provider for token usage itself, because the request
+// log reports it whether or not the client did; a non-object value is dropped
+// instead of being passed through.
 {
   const picked = pickChatRequestFields({ stream: true, stream_options: 'yes' }, { streamOptions: true });
-  assert.equal('stream_options' in picked, false);
+  assert.deepEqual(picked.stream_options, { include_usage: true });
+  const none = pickChatRequestFields({ stream: false }, { streamOptions: true });
+  assert.equal('stream_options' in none, false, 'usage only exists on a stream');
+  const rejected = pickChatRequestFields({ stream: true }, { streamOptions: false });
+  assert.equal('stream_options' in rejected, false, 'a provider that rejects the field gets no field');
 }
 
 // ---- answer accounting ---------------------------------------------------
@@ -74,7 +80,14 @@ import { countPayloadOutput, createChatStreamNormalizer, pickChatRequestFields }
   const content = countPayloadOutput({
     choices: [{ index: 0, delta: { content: 'hello' }, finish_reason: null }],
   });
-  assert.deepEqual(content, { contentChars: 5, reasoningChars: 0, toolCalls: 0, finishReason: '' });
+  assert.deepEqual(content, {
+    contentChars: 5,
+    reasoningChars: 0,
+    toolCalls: 0,
+    finishReason: '',
+    inputTokens: 0,
+    outputTokens: 0,
+  });
 
   const reasoning = countPayloadOutput({
     choices: [{ index: 0, delta: { reasoning: 'thinking' }, finish_reason: null }],
@@ -107,7 +120,33 @@ import { countPayloadOutput, createChatStreamNormalizer, pickChatRequestFields }
   assert.equal(message.finishReason, 'stop');
 
   const empty = countPayloadOutput({});
-  assert.deepEqual(empty, { contentChars: 0, reasoningChars: 0, toolCalls: 0, finishReason: '' });
+  assert.deepEqual(empty, {
+    contentChars: 0,
+    reasoningChars: 0,
+    toolCalls: 0,
+    finishReason: '',
+    inputTokens: 0,
+    outputTokens: 0,
+  });
+
+  // Token accounting is the provider's own usage block, taken verbatim and
+  // never derived from characters: only the provider knows its tokenizer.
+  const usage = countPayloadOutput({
+    choices: [],
+    usage: { prompt_tokens: 11, completion_tokens: 4, total_tokens: 15 },
+  });
+  assert.equal(usage.inputTokens, 11);
+  assert.equal(usage.outputTokens, 4);
+  assert.equal(usage.contentChars, 0);
+
+  // Some OpenAI-compatible layers name the same numbers the other way round.
+  const renamed = countPayloadOutput({ usage: { input_tokens: 3, output_tokens: 2 } });
+  assert.equal(renamed.inputTokens, 3);
+  assert.equal(renamed.outputTokens, 2);
+
+  // A missing or nonsensical usage block counts as "unknown", not as an error.
+  assert.equal(countPayloadOutput({ usage: { prompt_tokens: -1 } }).inputTokens, 0);
+  assert.equal(countPayloadOutput({ usage: 'n/a' }).outputTokens, 0);
 }
 
 // ---- stream normalization ------------------------------------------------

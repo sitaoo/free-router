@@ -36,6 +36,8 @@ const iso = (date) => new Date(date).toISOString();
       toolCalls: 1,
       contentChars: 0,
       reasoningChars: 12,
+      inputTokens: 321,
+      outputTokens: 45,
       fields: ['model', 'messages', 'stream'],
       attempts: [{ provider: 'mock', model: 'mock/model', key: 'primary', status: 200, ok: true, kind: '', reason: '', ms: 900 }],
       // Everything below is client content and must never be stored.
@@ -48,8 +50,9 @@ const iso = (date) => new Date(date).toISOString();
 
   assert.deepEqual(Object.keys(record).sort(), [
     'at', 'attempts', 'contentChars', 'dialect', 'durationMs', 'fields', 'finishReason',
-    'firstTokenMs', 'id', 'key', 'model', 'outcome', 'provider', 'reason', 'reasoningChars',
-    'startedAt', 'status', 'stream', 'toolCalls', 'upstreamModel',
+    'firstTokenMs', 'id', 'inputTokens', 'key', 'model', 'outcome', 'outputTokens',
+    'outputTps', 'provider', 'reason', 'reasoningChars', 'startedAt', 'status', 'stream',
+    'toolCalls', 'upstreamModel',
   ]);
   assert.equal(JSON.stringify(record).includes('do not keep me'), false);
   assert.equal(JSON.stringify(record).includes('sk-very-secret'), false);
@@ -63,6 +66,18 @@ const iso = (date) => new Date(date).toISOString();
   assert.equal(record.toolCalls, 1);
   assert.equal(record.contentChars, 0);
   assert.equal(record.reasoningChars, 12);
+  assert.equal(record.inputTokens, 321);
+  assert.equal(record.outputTokens, 45);
+  // Speed excludes the wait for the first token: 45 tokens over the 984 ms
+  // the model was actually generating, not over the whole request.
+  assert.equal(record.outputTps, 45.7);
+
+  // Without a first-token sample there is no generation window, so the whole
+  // request is the conservative denominator, and no output means no speed.
+  const jsonLike = normalizeRequestRecord({ outputTokens: 100, durationMs: 2000 }, { now });
+  assert.equal(jsonLike.outputTps, 50);
+  assert.equal(normalizeRequestRecord({ outputTokens: 0, durationMs: 1000 }, { now }).outputTps, null);
+  assert.equal(normalizeRequestRecord({ outputTokens: 9, firstTokenMs: 2000, durationMs: 2000 }, { now }).outputTps, 4.5);
 
   // An explicit null is "no sample", not a 0 ms first token.
   const absent = normalizeRequestRecord({ firstTokenMs: null }, { now });
