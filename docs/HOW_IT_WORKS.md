@@ -294,7 +294,7 @@ curl -s http://127.0.0.1:8787/health | jq
 
 There is one implicit pool and no route list to maintain. A provider contributes two kinds of members:
 
-- **Free models the rules can prove.** On a catalog that publishes prices, every chat model with `pricing.prompt = pricing.completion = 0` joins automatically. On a provider without prices, `freeModels` is the allowlist. A positive probe verdict also admits a model. A negative verdict (billed, rate-limited with no free allowance, permanently refused) keeps it out.
+- **Free models the rules can prove.** On a catalog that publishes prices, every chat model with `pricing.prompt = pricing.completion = 0` joins automatically. On a provider without prices, `freeModels` is the allowlist. A positive probe verdict also admits a model. A negative verdict (billed, rate-limited with no free allowance, permanently refused, or refused for this account for lack of a balance/deposit) keeps it out.
 - **Models the operator explicitly selected** in Providers → Models. A selection is membership, not proof of freeness: the model is labelled free, paid, or unknown-price from the evidence, and a paid/unknown selection warns before it is added.
 
 `free-best` remains as the alias for "the free pool, best first" and is the default when a request omits `model`. A paid model is never part of an automatic fallback: it is used only when the request names it, either by bare ID (when free models of the same ID come first) or by `provider:model`. A known-but-unselected model answers `404 model_not_enabled`; an unknown ID answers `404 model_not_found`.
@@ -407,6 +407,7 @@ A provider without prices in its catalog can still answer the question, just not
 | `429`, some `limit` above `0` | free, but spent for now | kept; the number becomes its daily limit |
 | `404` | not served, or withdrawn | not free |
 | `400` "only supports Interactions API" | not a chat model | dropped from the candidate list |
+| `402`/`400` insufficient balance, `403` deposit required | served, but this account must pay | not free; leaves the pool like a withdrawal |
 | timeout, `5xx` | says nothing | no verdict; retried next run |
 
 A positive bill on the response outranks the catalog and the status code: the request ran, but it was not free, so the model stays out of automatic routing. A selected paid model is unaffected by a negative verdict; only its free label changes. A key with no billing attached is still preferable, because a gateway that bills without reporting `cost` cannot be detected this way.

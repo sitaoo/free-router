@@ -394,6 +394,7 @@ Key 后由后台探活补上。完全没有目录的渠道，把免费 ID 写进
 | `429`，有 `limit` 大于 `0` | 免费，但今天花完了 | 留下；数字变每日限额 |
 | `404` | 不接，或下架了 | 不免费 |
 | `400` "only supports Interactions API" | 不是聊天模型 | 从候选里去掉 |
+| `402`/`400` 余额不足，`403` 要求充值 | 能 serve，但这个账户得付钱 | 不免费；像下架一样离开模型池 |
 | 超时、`5xx` | 说明不了问题 | 无 verdict，下轮再探 |
 
 响应里的正数账单压过状态码和目录：请求确实跑了，但不是免费的，就不能进自动路由。被选中的付费模型不受负面结论影响，结论只改它的免费标签。仍然建议用无账单的 Key，因为不报 `cost` 的计费网关用这招看不出来。
@@ -402,7 +403,7 @@ Key 后由后台探活补上。完全没有目录的渠道，把免费 ID 写进
 
 免费 verdict 不跟着发现条目一起丢。状态迁移或手改只留下了 verdict、丢了条目时，下一轮目录刷新会把模型补回池，不再花一次探路请求。
 
-verdict 双向压过 `freeModels`，这就是意义所在：`config.json` 的白名单只是你对别人定价的猜，配额数字是 provider 亲口报的价。
+verdict 双向压过 `freeModels`，这就是意义所在：`config.json` 的白名单只是你对别人定价的猜，配额数字是 provider 亲口报的价。余额不足或要求充值的拒绝同样写成"不免费"的 verdict：模型存在，但这个账户免费用不了。
 
 发请求前先窄化候选。Google 原生列表用 `supportedGenerationMethods` 标能力，所以 embedding、视频、直播音频模型不用点名就掉了；图片、语音、音乐、转写、agent 专用模型和普通聊天模型共用 `generateContent`，所以`discovery.exclude.modelPatterns` 管它们，连同 `-latest` 这种别名（它和指向的 concrete 模型会 double-count 一份配额）。
 

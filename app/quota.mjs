@@ -128,6 +128,17 @@ export function permanentRejection(status, payload) {
   if (status === 400 && /only supports .*Interactions API/i.test(message)) {
     return 'not a chat-completions model';
   }
+  // Account-level refusals. The model is served, but not to this account on a
+  // free basis: a deposit or a positive balance is required. Unlike a 429
+  // window these do not reset by waiting, so the model leaves the automatic
+  // pool (and `/v1/models`) until the verdict expires or the operator selects
+  // it explicitly.
+  if (status === 403 && /deposit required|access restricted/i.test(message)) {
+    return 'deposit required upstream';
+  }
+  if (isInsufficientFunds(status, payload)) {
+    return 'billed by provider (not free)';
+  }
   return '';
 }
 

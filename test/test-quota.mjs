@@ -75,6 +75,22 @@ assert.equal(
   'not a chat-completions model',
 );
 assert.equal(permanentRejection(400, { error: { message: 'bad' } }), '');
+// Account-level refusals: the model exists but this account cannot use it for
+// free, so it must leave the automatic pool like a withdrawn model.
+assert.equal(
+  permanentRejection(403, {
+    error: { message: 'Access restricted. Deposit required to unlock premium models.' },
+  }),
+  'deposit required upstream',
+);
+assert.equal(
+  permanentRejection(400, {
+    error: { message: 'credit insufficient balance: balance=0 required=702' },
+  }),
+  'billed by provider (not free)',
+);
+assert.equal(permanentRejection(402, { error: { message: 'payment required' } }), 'billed by provider (not free)');
+assert.equal(permanentRejection(429, { error: { message: 'slow down' } }), '');
 
 const wait = msUntilQuotaReset(Date.parse('2026-10-28T10:00:00.000Z'), 'America/Los_Angeles');
 assert.ok(wait > 0 && wait <= 86400000 + 60000);

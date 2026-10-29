@@ -59,6 +59,7 @@ tags are cut here. Dates are commit dates (`YYYY-MM-DD`).
 
 ### Fixed
 
+- A free model that turns out to be billable now leaves the automatic pool instead of failing on every request. `402` or an insufficient-balance `400` (B.AI answers `credit insufficient balance: balance=0 required=…`) and a `403` naming a required deposit are treated as negative verdicts — the same "not free" state as a withdrawal — so the model drops out of `/v1/models` and routing until the verdict expires (`discovery.verdictRetryMs`) or the operator selects it explicitly. Previously a free model with a billing refusal got no cooldown at all (the `insufficientFunds` block and verdict only applied to paid models), so a provider that stopped honouring its free tier was retried on every request.
 - Tool calls on the Chat Completions path no longer reach clients in a shape they discard. Gemini's compatibility layer streams a finished call without `index` and closes with `finish_reason: "stop"`; OpenAI-compatible clients (Open WebUI among them) aggregate tool calls by `index` and only execute them on `finish_reason: "tool_calls"`, so the answer arrived as an empty message and the turn looked like a silent failure. The stream normalizer now assigns a stable slot per call (reusing it for later argument fragments, keeping any index the provider did send) and rewrites a `stop` that ends a tool-call turn to `tool_calls`. The Responses dialect already normalized both.
 
 ### Removed
