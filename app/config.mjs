@@ -565,6 +565,13 @@ export function defaultConfigObject() {
     // delta of a stream. Thinking models reason first; without this bound the
     // client (e.g. OpenWebUI) times out and shows an empty reply.
     streamCommitGraceMs: 10000,
+    // Upper bound on the wait for the first body byte of a stream, covering
+    // both the response headers and the first chunk after them. On expiry the
+    // attempt is aborted so the next candidate can answer. 0 disables it.
+    firstByteTimeoutMs: 60000,
+    // Idle intervals on a committed stream send an SSE comment line so proxies
+    // and clients do not time out during a long reasoning gap. 0 disables it.
+    streamKeepAliveMs: 15000,
     catalogRefreshMs: 900000,
     redactSecrets: true,
     socksFirstHosts: ['generativelanguage.googleapis.com'],

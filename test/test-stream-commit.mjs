@@ -60,6 +60,30 @@ const mock = http.createServer(async (req, res) => {
       res.end('data: [DONE]\n\n');
       return;
     }
+    // One reasoning delta, then a long silence before content: the grace timer
+    // must commit at its deadline, not wait for the next upstream read.
+    if (body.stream && body.model === 'late-think') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(
+        `data: ${JSON.stringify({ choices: [{ delta: { reasoning: 'thinking...' }, finish_reason: null }] })}\n\n`,
+      );
+      await sleep(2500);
+      res.write(
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'late-ok' }, finish_reason: null }] })}\n\n`,
+      );
+      res.end('data: [DONE]\n\n');
+      return;
+    }
+    // Headers, then silence forever: only the first-byte deadline can unstick
+    // the request and let the next provider's offering answer.
+    if (body.stream && body.model === 'stall-headers') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      return;
+    }
+    // Not even headers: the same deadline has to cover the connect wait.
+    if (body.stream && body.model === 'stall-connect') {
+      return;
+    }
     if (body.stream) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.write(
@@ -83,6 +107,25 @@ const mock = http.createServer(async (req, res) => {
 await listen(mock);
 const mockPort = mock.address().port;
 
+// A second provider offering the same model slugs. Its answers are always
+// healthy, so a stalled first offering must fail over to this one.
+const healthy = http.createServer(async (req, res) => {
+  if (req.method === 'POST' && req.url === '/chat/completions') {
+    for await (const _chunk of req) {
+      // Drain the request body.
+    }
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.write(
+      `data: ${JSON.stringify({ choices: [{ delta: { content: 'fallback-ok' }, finish_reason: null }] })}\n\n`,
+    );
+    res.end('data: [DONE]\n\n');
+    return;
+  }
+  res.writeHead(404).end();
+});
+await listen(healthy);
+const healthyPort = healthy.address().port;
+
 const portProbe = http.createServer();
 await listen(portProbe);
 const routerPort = portProbe.address().port;
@@ -99,13 +142,28 @@ fs.writeFileSync(
     catalogRefreshMs: 3600000,
     defaultProvider: 'mock',
     routing: { explorePercent: 0 },
+    // Both providers offer the same slugs, so naming one resolves to the
+    // stalling offering first and the healthy copy as its failover. Provider
+    // order decides the tie, and `mock` is listed first.
     providers: {
       mock: {
         baseUrl: `http://127.0.0.1:${mockPort}`,
         keyEnv: 'STREAM_COMMIT_API_KEY',
-        // The automatic pool tries the list in this order, so the failing
-        // empty stream comes before the healthy fallback.
-        freeModels: ['fast-empty', 'fallback-ok', 'slow-think', 'slow-hollow'],
+        freeModels: [
+          'slow-think',
+          'slow-hollow',
+          'fast-empty',
+          'stall-headers',
+          'stall-connect',
+          'late-think',
+          'fallback-ok',
+        ],
+        chatPath: '/chat/completions',
+      },
+      healthy: {
+        baseUrl: `http://127.0.0.1:${healthyPort}`,
+        keyEnv: 'STREAM_COMMIT_API_KEY',
+        freeModels: ['fallback-ok', 'fast-empty', 'stall-headers', 'stall-connect'],
         chatPath: '/chat/completions',
       },
     },
@@ -123,6 +181,8 @@ const child = spawn(process.execPath, [path.join(HERE, '..', 'app', 'server.mjs'
     STREAM_COMMIT_API_KEY: 'test-key',
     FREE_ROUTER_CONFIG: testConfig,
     FREE_ROUTER_STREAM_COMMIT_GRACE_MS: '800',
+    FREE_ROUTER_FIRST_BYTE_TIMEOUT_MS: '700',
+    FREE_ROUTER_STREAM_KEEPALIVE_MS: '250',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -190,13 +250,14 @@ try {
     assert.match(text, /thinking-/);
   }
 
-  // 2. Fast reasoning-only streams still fail over instead of committing. No
-  // model means the automatic free pool, which starts with the empty stream.
+  // 2. Fast reasoning-only streams still fail over instead of committing. Both
+  // providers offer `fast-empty`; the empty one ranks first.
   {
     const response = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        model: 'fast-empty',
         messages: [{ role: 'user', content: 'hi' }],
         stream: true,
       }),
@@ -229,10 +290,93 @@ try {
     assert.ok((entry.counts.empty || 0) >= 1, `expected empty usage, got ${JSON.stringify(entry.counts)}`);
   }
 
+  // 4. Commit deadline is a timer, not a side effect of the next read: one
+  // reasoning delta followed by 2.5s of silence must still send headers at the
+  // grace deadline, with keep-alives covering the gap until content arrives.
+  {
+    const started = Date.now();
+    const response = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'late-think',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+      }),
+    });
+    const ttfb = Date.now() - started;
+    assert.equal(response.status, 200);
+    assert.ok(ttfb < 1800, `TTFB ${ttfb}ms: headers waited for the next upstream read`);
+    const text = await response.text();
+    assert.match(text, /late-ok/);
+    assert.match(text, /: keep-alive/, 'keep-alive comment expected during the silent gap');
+  }
+
+  // 5. The Responses dialect gets the same early commit and starts with
+  // response.created as soon as headers are sent.
+  {
+    const started = Date.now();
+    const response = await fetch(`http://127.0.0.1:${routerPort}/v1/responses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'late-think',
+        input: 'hi',
+        stream: true,
+      }),
+    });
+    const ttfb = Date.now() - started;
+    assert.equal(response.status, 200);
+    assert.ok(ttfb < 1800, `TTFB ${ttfb}ms: responses headers waited for the next read`);
+    const text = await response.text();
+    assert.match(text, /^event: response\.created/);
+    assert.match(text, /late-ok/);
+    assert.match(text, /event: response\.completed/);
+  }
+
+  // 6. A first candidate that sends headers then goes silent must hit the
+  // first-byte deadline, not the 20s attempt timeout, so the next candidate
+  // answers within the client's patience.
+  {
+    const started = Date.now();
+    const response = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'stall-headers',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+      }),
+    });
+    const elapsed = Date.now() - started;
+    assert.equal(response.status, 200);
+    assert.ok(elapsed < 3000, `failover took ${elapsed}ms; first-byte deadline was not enforced`);
+    assert.match(await response.text(), /fallback-ok/);
+  }
+
+  // 7. The same deadline covers a candidate that never sends headers at all.
+  {
+    const started = Date.now();
+    const response = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'stall-connect',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+      }),
+    });
+    const elapsed = Date.now() - started;
+    assert.equal(response.status, 200);
+    assert.ok(elapsed < 3000, `failover took ${elapsed}ms; connect wait was not bounded`);
+    assert.match(await response.text(), /fallback-ok/);
+  }
+
   console.log('stream-commit tests passed');
 } finally {
   kill();
   await waitForExit();
   await close(mock);
+  await close(healthy);
   fs.rmSync(tempDir, { recursive: true, force: true });
 }

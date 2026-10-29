@@ -217,6 +217,27 @@ function streamCommitGraceMs() {
   );
   return Number.isFinite(raw) && raw >= 0 ? raw : 10000;
 }
+// A stream that has produced no body byte by this deadline is stuck, not slow:
+// abort the attempt so the next candidate can answer instead of holding the
+// client for the whole attempt timeout. It covers both waits, for response
+// headers and for the first chunk after them. Streaming only; 0 disables it.
+function firstByteTimeoutMs() {
+  const env = process.env.FREE_ROUTER_FIRST_BYTE_TIMEOUT_MS;
+  const raw = Number(
+    env === undefined || env === '' ? config.firstByteTimeoutMs ?? 60000 : env,
+  );
+  return Number.isFinite(raw) && raw >= 0 ? raw : 60000;
+}
+// After the headers are committed, a model can think for a long while between
+// tokens. SSE comment lines keep proxies and clients from timing out a stream
+// that is healthy; 0 disables the comments.
+function streamKeepAliveMs() {
+  const env = process.env.FREE_ROUTER_STREAM_KEEPALIVE_MS;
+  const raw = Number(
+    env === undefined || env === '' ? config.streamKeepAliveMs ?? 15000 : env,
+  );
+  return Number.isFinite(raw) && raw >= 0 ? raw : 15000;
+}
 let catalogRefreshMs = Number(config.catalogRefreshMs || 900000);
 const registry = createProviderRegistry(config, { host: HOST, port: PORT });
 const PROVIDERS = registry.providers;
@@ -1823,14 +1844,19 @@ function errorSummary(status, raw) {
   );
 }
 
-async function fetchModel(candidate, body, clientSignal, slot) {
+async function fetchModel(candidate, body, clientSignal, slot, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('attempt timeout')), attemptTimeoutMs);
   const abortFromClient = () => controller.abort(new Error('client disconnected'));
   clientSignal?.addEventListener('abort', abortFromClient, { once: true });
+  // A stream aborts this one when the first-byte deadline expires, which
+  // cancels the body read too once the headers are already in.
+  const abortFromFirstByte = () => controller.abort(new Error('first byte timeout'));
+  options.firstByteSignal?.addEventListener('abort', abortFromFirstByte, { once: true });
   const cleanup = () => {
     clearTimeout(timer);
     clientSignal?.removeEventListener('abort', abortFromClient);
+    options.firstByteSignal?.removeEventListener('abort', abortFromFirstByte);
   };
   try {
     const provider = PROVIDERS.get(candidate.provider);
@@ -1922,6 +1948,16 @@ async function attemptJson(candidate, body, clientSignal, slot) {
 
 async function attemptStream(candidate, body, res, clientSignal, slot, options = {}) {
   const translator = options.translator || null;
+  const firstByteWaitMs = firstByteTimeoutMs();
+  const firstByteController = new AbortController();
+  const firstByteTimer =
+    firstByteWaitMs > 0
+      ? setTimeout(() => firstByteController.abort(new Error('first byte timeout')), firstByteWaitMs)
+      : null;
+  const firstByteTimedOut = () => firstByteController.signal.aborted;
+  const clearFirstByteTimer = () => {
+    if (firstByteTimer) clearTimeout(firstByteTimer);
+  };
   let response;
   let cleanup = () => {};
   try {
@@ -1930,8 +1966,13 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
       { ...body, stream: true },
       clientSignal,
       slot,
+      { firstByteSignal: firstByteController.signal },
     ));
   } catch (error) {
+    clearFirstByteTimer();
+    if (firstByteTimedOut()) {
+      return { ok: false, status: 504, reason: 'first byte timeout', kind: 'timeout' };
+    }
     const timedOut = error?.name === 'AbortError' || /timeout/i.test(String(error));
     return {
       ok: false,
@@ -1941,12 +1982,36 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
     };
   }
 
+  const bufferedChunks = [];
+  const bufferedEvents = [];
+  const graceMs = streamCommitGraceMs();
+  const keepAliveMs = streamKeepAliveMs();
+  const streamStartedAt = Date.now();
+  let graceTimer = null;
+  let keepAliveTimer = null;
+  let lastUpstreamAt = Date.now();
+  let parserBuffer = '';
+  let committed = false;
+  let sawUseful = false;
+  let finishReason = '';
+
+  // Every exit from this attempt goes through here: a timer that outlives its
+  // attempt would later write into a response another candidate now owns.
+  function releaseAttempt() {
+    clearFirstByteTimer();
+    if (graceTimer) clearTimeout(graceTimer);
+    if (keepAliveTimer) clearInterval(keepAliveTimer);
+    graceTimer = null;
+    keepAliveTimer = null;
+    cleanup();
+  }
+
   if (!response.ok) {
     let raw;
     try {
       raw = await response.text();
     } finally {
-      cleanup();
+      releaseAttempt();
     }
     const reason = errorSummary(response.status, raw);
     return {
@@ -1959,21 +2024,13 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
     };
   }
   if (!response.body) {
-    cleanup();
+    releaseAttempt();
     return { ok: false, status: 502, reason: 'empty response body', kind: 'empty' };
   }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const extractor = geminiStreamExtractor(candidate);
-  const bufferedChunks = [];
-  const bufferedEvents = [];
-  const graceMs = streamCommitGraceMs();
-  const streamStartedAt = Date.now();
-  let parserBuffer = '';
-  let committed = false;
-  let sawUseful = false;
-  let finishReason = '';
 
   function emitEvents(events) {
     if (!events.length) return;
@@ -1998,7 +2055,18 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
     for (const chunk of bufferedChunks) res.write(chunk);
     bufferedChunks.length = 0;
     committed = true;
+    startKeepAlive();
     log(`selected ${candidateKey(candidate)} (stream)`);
+  }
+
+  function startKeepAlive() {
+    if (keepAliveMs <= 0 || keepAliveTimer) return;
+    keepAliveTimer = setInterval(() => {
+      if (res.writableEnded || res.destroyed) return;
+      // Only fill real gaps: a stream that is still writing needs no comments.
+      if (Date.now() - lastUpstreamAt < keepAliveMs) return;
+      res.write(': keep-alive\n\n');
+    }, keepAliveMs);
   }
 
   function finishStream(reason) {
@@ -2011,13 +2079,27 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
     res.end();
   }
 
+  // The commit deadline has to be a timer, not a side effect of the next read:
+  // an upstream that sends one delta and then thinks for many seconds would
+  // otherwise keep the headers buffered the whole time. A completely silent
+  // upstream has nothing to flush and stays open for failover until the
+  // first-byte deadline instead.
+  if (graceMs >= 0) {
+    graceTimer = setTimeout(() => {
+      graceTimer = null;
+      if (!committed && !res.writableEnded && (bufferedChunks.length || bufferedEvents.length)) {
+        commitStream();
+      }
+    }, graceMs);
+  }
+
   while (true) {
     let read;
     try {
       read = await reader.read();
     } catch (error) {
       extractor?.flush();
-      cleanup();
+      releaseAttempt();
       if (committed) {
         if (translator) res.write(translator.fail(String(error)).map(sseEvent).join(''));
         res.end();
@@ -2026,9 +2108,14 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
       if (clientSignal?.aborted) {
         return { ok: false, status: 499, reason: 'client disconnected', kind: 'aborted' };
       }
+      if (firstByteTimedOut()) {
+        return { ok: false, status: 504, reason: 'first byte timeout', kind: 'timeout' };
+      }
       return { ok: false, status: 502, reason: String(error), kind: 'serverError' };
     }
     if (read.done) break;
+    lastUpstreamAt = Date.now();
+    clearFirstByteTimer();
     const bytes = Buffer.from(read.value);
     const text = decoder.decode(read.value, { stream: true });
     extractor?.push(text);
@@ -2078,7 +2165,7 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
 
   extractor?.flush();
   if (committed) {
-    cleanup();
+    releaseAttempt();
     if (!sawUseful) {
       if (translator) {
         res.write(
@@ -2096,7 +2183,7 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
     finishStream(finishReason);
     return { ok: true, candidate };
   }
-  cleanup();
+  releaseAttempt();
   return {
     ok: false,
     status: 502,
