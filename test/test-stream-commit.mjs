@@ -576,6 +576,14 @@ try {
     assert.equal(finishFrame.choices[0].finish_reason, 'tool_calls');
   }
 
+  // The finish line records what the answer was made of, so a row that a
+  // client rendered as nothing can be explained from the container log alone.
+  assert.match(
+    childOutput,
+    /chat req_[0-9a-f]{16} ok 200 \d+ms mock:tool-call finish=stop tools=1 chars=0\/0/,
+    'the finish line names the tool call and the empty text',
+  );
+
   // The request log names the dialect and the top-level fields, never content.
   assert.match(
     childOutput,

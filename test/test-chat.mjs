@@ -4,7 +4,7 @@
 // chunks are normalized into the shape clients actually parse.
 import assert from 'node:assert/strict';
 
-import { createChatStreamNormalizer, pickChatRequestFields } from '../app/chat.mjs';
+import { countPayloadOutput, createChatStreamNormalizer, pickChatRequestFields } from '../app/chat.mjs';
 
 // ---- request whitelist ---------------------------------------------------
 
@@ -63,6 +63,51 @@ import { createChatStreamNormalizer, pickChatRequestFields } from '../app/chat.m
 {
   const picked = pickChatRequestFields({ stream: true, stream_options: 'yes' }, { streamOptions: true });
   assert.equal('stream_options' in picked, false);
+}
+
+// ---- answer accounting ---------------------------------------------------
+
+// What a chunk or message delivered, without keeping the text: the request
+// log records text length and tool calls so an empty-looking answer can be
+// told apart from a tool-call-only one.
+{
+  const content = countPayloadOutput({
+    choices: [{ index: 0, delta: { content: 'hello' }, finish_reason: null }],
+  });
+  assert.deepEqual(content, { contentChars: 5, reasoningChars: 0, toolCalls: 0, finishReason: '' });
+
+  const reasoning = countPayloadOutput({
+    choices: [{ index: 0, delta: { reasoning: 'thinking' }, finish_reason: null }],
+  });
+  assert.equal(reasoning.reasoningChars, 8, 'reasoning is counted once, never doubled');
+  assert.equal(reasoning.contentChars, 0);
+
+  const tools = countPayloadOutput({
+    choices: [
+      {
+        index: 0,
+        delta: { tool_calls: [{ id: 'a' }, { id: 'b' }] },
+        finish_reason: 'tool_calls',
+      },
+    ],
+  });
+  assert.equal(tools.toolCalls, 2);
+  assert.equal(tools.finishReason, 'tool_calls');
+
+  const message = countPayloadOutput({
+    choices: [
+      {
+        index: 0,
+        message: { content: [{ type: 'text', text: 'abc' }, 'de'], tool_calls: [] },
+        finish_reason: 'stop',
+      },
+    ],
+  });
+  assert.equal(message.contentChars, 5, 'content parts are summed');
+  assert.equal(message.finishReason, 'stop');
+
+  const empty = countPayloadOutput({});
+  assert.deepEqual(empty, { contentChars: 0, reasoningChars: 0, toolCalls: 0, finishReason: '' });
 }
 
 // ---- stream normalization ------------------------------------------------

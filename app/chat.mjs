@@ -69,6 +69,34 @@ export function chatDataFrame(payload) {
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
 
+// What one chunk or message actually delivered: visible text, reasoning text,
+// and tool calls, plus its finish reason. Pure, so the request log can describe
+// an answer without keeping any of its content.
+export function countPayloadOutput(payload) {
+  const choice = payload?.choices?.[0];
+  const part = choice?.delta || choice?.message;
+  const lengthOf = (value) => {
+    if (typeof value === 'string') return value.length;
+    if (!Array.isArray(value)) return 0;
+    return value.reduce((total, item) => {
+      if (typeof item === 'string') return total + item.length;
+      return total + (typeof item?.text === 'string' ? item.text.length : 0);
+    }, 0);
+  };
+  const reasoning =
+    typeof part?.reasoning_content === 'string'
+      ? part.reasoning_content
+      : typeof part?.reasoning === 'string'
+        ? part.reasoning
+        : '';
+  return {
+    contentChars: part ? lengthOf(part.content) : 0,
+    reasoningChars: reasoning.length,
+    toolCalls: Array.isArray(part?.tool_calls) ? part.tool_calls.length : 0,
+    finishReason: typeof choice?.finish_reason === 'string' ? choice.finish_reason : '',
+  };
+}
+
 export const CHAT_DONE_FRAME = 'data: [DONE]\n\n';
 
 function generatedId() {

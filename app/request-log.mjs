@@ -28,6 +28,16 @@ function nonNegative(value) {
   return Math.min(Math.round(number), MAX_DURATION_MS);
 }
 
+const MAX_COUNT = 1_000_000_000;
+
+// Counts describe an answer (characters, tool calls) without storing it.
+function count(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return 0;
+  return Math.min(Math.round(number), MAX_COUNT);
+}
+
 function httpStatus(value) {
   const number = Number(value);
   return Number.isInteger(number) && number >= 100 && number <= 599 ? number : null;
@@ -93,6 +103,10 @@ export function normalizeRequestRecord(input, { now = Date.now } = {}) {
     outcome,
     reason: cleanText(source.reason, 240),
     firstTokenMs: nonNegative(source.firstTokenMs),
+    finishReason: cleanText(source.finishReason, 40),
+    toolCalls: count(source.toolCalls),
+    contentChars: count(source.contentChars),
+    reasoningChars: count(source.reasoningChars),
     fields: cleanFields(source.fields),
     attempts: cleanAttempts(source.attempts),
   };

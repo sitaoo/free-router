@@ -29,7 +29,13 @@ import {
   supportsRequest,
 } from './providers.mjs';
 import { probeBatchPlan, responseLooksBilled } from './discovery.mjs';
-import { CHAT_DONE_FRAME, chatDataFrame, createChatStreamNormalizer, pickChatRequestFields } from './chat.mjs';
+import {
+  CHAT_DONE_FRAME,
+  chatDataFrame,
+  countPayloadOutput,
+  createChatStreamNormalizer,
+  pickChatRequestFields,
+} from './chat.mjs';
 import { TIMEOUT_BACKOFF_CAP_MS, timeoutBackoffMs } from './cooldown.mjs';
 import { createRequestLog } from './request-log.mjs';
 import { estimateRequestTokens, fitsContext } from './context.mjs';
@@ -1975,6 +1981,7 @@ async function attemptJson(candidate, body, clientSignal, slot) {
   return {
     ok: true,
     payload,
+    stats: countPayloadOutput(payload),
     contentType: response.headers.get('content-type') || 'application/json',
   };
 }
@@ -2034,6 +2041,9 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
   let sawUseful = false;
   let finishReason = '';
   let firstTokenMs = 0;
+  // Answer accounting for the request log: how much text and how many tool
+  // calls actually went out, never the content itself.
+  const stats = { contentChars: 0, reasoningChars: 0, toolCalls: 0, finishReason: '' };
 
   // Every exit from this attempt goes through here: a timer that outlives its
   // attempt would later write into a response another candidate now owns.
@@ -2163,7 +2173,7 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
         }
         res.write(CHAT_DONE_FRAME);
         res.end();
-        return { ok: true, candidate, interrupted: true, firstTokenMs: firstTokenMs || undefined };
+        return { ok: true, candidate, interrupted: true, firstTokenMs: firstTokenMs || undefined, stats };
       }
       if (clientSignal?.aborted) {
         return { ok: false, status: 499, reason: 'client disconnected', kind: 'aborted' };
@@ -2192,6 +2202,11 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
         const payload = JSON.parse(data);
         const finish = payload?.choices?.[0]?.finish_reason;
         if (finish) finishReason = finish;
+        const counted = countPayloadOutput(payload);
+        stats.contentChars += counted.contentChars;
+        stats.reasoningChars += counted.reasoningChars;
+        stats.toolCalls += counted.toolCalls;
+        if (counted.finishReason) stats.finishReason = counted.finishReason;
         if (translator) emitEvents(translator.push(payload));
         else emitChat(payload);
         if (usefulDelta(payload)) {
@@ -2226,10 +2241,10 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
       res.end();
       const reason = `reasoning only or empty stream (finish_reason=${finishReason || 'unknown'})`;
       setCooldown(candidate, 'empty', reason, 0, slot);
-      return { ok: true, candidate, hollow: true };
+      return { ok: true, candidate, hollow: true, stats };
     }
     finishStream(finishReason);
-    return { ok: true, candidate, firstTokenMs: firstTokenMs || undefined };
+    return { ok: true, candidate, firstTokenMs: firstTokenMs || undefined, stats };
   }
   releaseAttempt();
   return {
@@ -2325,7 +2340,7 @@ function finishRequestRecord(record, res, startedAt) {
   } else {
     outcome = 'rejected';
   }
-  return {
+  const entry = {
     id: record.id,
     at: new Date(finishedAt).toISOString(),
     startedAt: new Date(startedAt).toISOString(),
@@ -2340,9 +2355,23 @@ function finishRequestRecord(record, res, startedAt) {
     outcome,
     reason: record.reason || '',
     firstTokenMs: Number.isFinite(record.firstTokenMs) ? record.firstTokenMs : null,
+    finishReason: record.finishReason || '',
+    toolCalls: record.toolCalls || 0,
+    contentChars: record.contentChars || 0,
+    reasoningChars: record.reasoningChars || 0,
     fields: record.fields || [],
     attempts: record.attempts || [],
   };
+  // One line per finished request in the container log: the same metadata the
+  // Logs tab shows, enough to tell a text answer from a tool call from nothing
+  // without opening an admin session.
+  const selected = entry.provider ? `${entry.provider}:${entry.upstreamModel}` : '-';
+  log(
+    `${entry.dialect} ${entry.id} ${entry.outcome} ${status} ${entry.durationMs}ms ${selected}` +
+      ` finish=${entry.finishReason || '-'} tools=${entry.toolCalls}` +
+      ` chars=${entry.contentChars}/${entry.reasoningChars}`,
+  );
+  return entry;
 }
 
 async function handleChat(req, res, options = {}) {
@@ -2532,6 +2561,13 @@ async function runChatRequest(req, res, options, record) {
         record.firstTokenMs = result.firstTokenMs;
         record.hollow = result.hollow === true;
         record.interrupted = result.interrupted === true;
+        // Shape of the answer, not the answer: text volume, tool calls, and
+        // the upstream finish reason, so an "ok" row that a client rendered as
+        // nothing can be told apart from one that carried a tool call.
+        record.finishReason = result.stats?.finishReason || '';
+        record.toolCalls = result.stats?.toolCalls || 0;
+        record.contentChars = result.stats?.contentChars || 0;
+        record.reasoningChars = result.stats?.reasoningChars || 0;
         // A grace-committed stream that never yielded content kept the
         // client's 200 but served nothing: count it as empty (the cooldown
         // was already set inside the attempt) instead of a success.

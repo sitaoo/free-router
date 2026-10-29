@@ -43,7 +43,7 @@ for (const key of [
   'log_ok', 'log_empty', 'log_interrupted', 'log_aborted', 'log_blocked', 'log_failed', 'log_rejected',
   'th_logs_time', 'th_logs_dialect', 'th_logs_requested', 'th_logs_selected',
   'th_logs_result', 'th_logs_duration', 'th_logs_first_token', 'th_logs_attempts',
-  'logs_empty', 'logs_count', 'logs_tries', 'logs_more',
+  'logs_empty', 'logs_count', 'logs_tries', 'logs_more', 'logs_answer',
 ]) {
   assert.ok(page.includes(key), `logs UI must reference ${key}`);
 }

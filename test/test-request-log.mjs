@@ -32,6 +32,10 @@ const iso = (date) => new Date(date).toISOString();
       outcome: 'ok',
       reason: '',
       firstTokenMs: 250,
+      finishReason: 'tool_calls',
+      toolCalls: 1,
+      contentChars: 0,
+      reasoningChars: 12,
       fields: ['model', 'messages', 'stream'],
       attempts: [{ provider: 'mock', model: 'mock/model', key: 'primary', status: 200, ok: true, kind: '', reason: '', ms: 900 }],
       // Everything below is client content and must never be stored.
@@ -43,8 +47,9 @@ const iso = (date) => new Date(date).toISOString();
   );
 
   assert.deepEqual(Object.keys(record).sort(), [
-    'at', 'attempts', 'dialect', 'durationMs', 'fields', 'firstTokenMs', 'id', 'key',
-    'model', 'outcome', 'provider', 'reason', 'startedAt', 'status', 'stream', 'upstreamModel',
+    'at', 'attempts', 'contentChars', 'dialect', 'durationMs', 'fields', 'finishReason',
+    'firstTokenMs', 'id', 'key', 'model', 'outcome', 'provider', 'reason', 'reasoningChars',
+    'startedAt', 'status', 'stream', 'toolCalls', 'upstreamModel',
   ]);
   assert.equal(JSON.stringify(record).includes('do not keep me'), false);
   assert.equal(JSON.stringify(record).includes('sk-very-secret'), false);
@@ -54,6 +59,10 @@ const iso = (date) => new Date(date).toISOString();
   assert.equal(record.at, '2026-10-29T09:59:00.000Z');
   assert.equal(record.status, 200);
   assert.equal(record.attempts[0].ok, true);
+  assert.equal(record.finishReason, 'tool_calls');
+  assert.equal(record.toolCalls, 1);
+  assert.equal(record.contentChars, 0);
+  assert.equal(record.reasoningChars, 12);
 
   // An explicit null is "no sample", not a 0 ms first token.
   const absent = normalizeRequestRecord({ firstTokenMs: null }, { now });
@@ -82,6 +91,10 @@ const iso = (date) => new Date(date).toISOString();
       reason: `bad\nthing\u0000 ${long}`,
       durationMs: -5,
       firstTokenMs: -1,
+      finishReason: `stop\n${long}`,
+      toolCalls: -1,
+      contentChars: 'many',
+      reasoningChars: 1e15,
       fields: Array.from({ length: 50 }, (_, index) => `f${index}`.padEnd(50, 'y')),
       attempts: Array.from({ length: 30 }, (_, index) => ({
         provider: long,
@@ -103,6 +116,11 @@ const iso = (date) => new Date(date).toISOString();
   assert.ok(record.reason.length <= 240);
   assert.equal(/[\u0000-\u001f\u007f]/.test(record.reason), false, 'control characters are stripped');
   assert.equal(record.durationMs, 0);
+  assert.equal(record.finishReason.length, 40);
+  assert.equal(/[\u0000-\u001f\u007f]/.test(record.finishReason), false);
+  assert.equal(record.toolCalls, 0);
+  assert.equal(record.contentChars, 0);
+  assert.equal(record.reasoningChars, 1_000_000_000);
   assert.equal(record.fields.length, 40);
   assert.equal(record.fields[0].length, 40);
   assert.equal(record.attempts.length, REQUEST_LOG_MAX_ATTEMPTS);

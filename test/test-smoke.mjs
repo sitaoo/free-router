@@ -2188,6 +2188,10 @@ try {
   assert.equal(probeEntry.outcome, 'ok');
   assert.equal(probeEntry.status, 200);
   assert.ok(probeEntry.attempts.some((attempt) => attempt.ok), 'the attempt summary includes the answer');
+  assert.equal(probeEntry.finishReason, 'stop');
+  assert.equal(probeEntry.toolCalls, 0);
+  assert.ok(probeEntry.contentChars > 0, 'the answer volume is recorded, not the answer');
+  assert.equal(typeof probeEntry.reasoningChars, 'number');
   assert.ok(probeEntry.fields.includes('model'));
   assert.ok(probeEntry.fields.includes('messages'));
   const rejectedEntry = logs.entries.find(

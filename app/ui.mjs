@@ -2349,6 +2349,23 @@ function renderLogs() {
         why.title = String(entry.reason);
         resultCell.appendChild(why);
       }
+      // What the answer was made of: an "ok" row with zero characters and a
+      // tool call looks very different from one that carried text.
+      if (entry.finishReason || entry.toolCalls || entry.contentChars) {
+        const shape = document.createElement('div');
+        shape.className = 'note';
+        shape.style.margin = '3px 0 0';
+        shape.style.maxWidth = '160px';
+        shape.style.overflow = 'hidden';
+        shape.style.textOverflow = 'ellipsis';
+        shape.style.whiteSpace = 'nowrap';
+        shape.textContent = t('logs_answer', {
+          finish: entry.finishReason || '-',
+          tools: entry.toolCalls || 0,
+          chars: entry.contentChars || 0,
+        });
+        resultCell.appendChild(shape);
+      }
       return [
         td(new Date(entry.at).toLocaleString(lang), 'muted'),
         td(entry.dialect, 'muted'),
