@@ -224,7 +224,7 @@ custom_providers:
 
 选中的上游从 `X-Free-Router-Provider` 和 `X-Free-Router-Model` 返回，外加 provider 自己的 `model` 字段。
 
-两种方言在路上都被加固。出去的方向，上游请求按 Chat Completions 明示字段重建，客户端自己的记账字段（`features`、`variables`、`files`、`tool_ids`、`metadata`、`models` 等）不会发给会回 `400 Unknown name "features"` 的渠道（Gemini 的兼容层就是）。`stream_options` 只在渠道支持时才带；不支持的渠道设 `"streamOptions": false`，随包的 Gemini 配置已经这样写。回来的方向，流 chunk 不再原样透传，而是统一整形：补齐 `id`、`created`、`object`，`model` 用客户端请求的那个 id（不是渠道内部的），`reasoning` 和 `reasoning_content` 两个字段保持同步，成功流只以一个 `[DONE]` 收尾。响应已提交后上游断掉，会发一条 SSE 错误帧加 `[DONE]`，而不是静默结束。每个请求还会在日志里留下方言和顶层字段名（从不记录字段内容）。
+两种方言在路上都被加固。出去的方向，上游请求按 Chat Completions 明示字段重建，客户端自己的记账字段（`features`、`variables`、`files`、`tool_ids`、`metadata`、`models` 等）不会发给会回 `400 Unknown name "features"` 的渠道（Gemini 的兼容层就是）。`stream_options` 只在渠道支持时才带；不支持的渠道设 `"streamOptions": false`，随包的 Gemini 配置已经这样写。回来的方向，流 chunk 不再原样透传，而是统一整形：补齐 `id`、`created`、`object`，`model` 用客户端请求的那个 id（不是渠道内部的），`reasoning` 和 `reasoning_content` 两个字段保持同步，成功流只以一个 `[DONE]` 收尾。流式工具调用会补上 `index`，带工具调用的那一轮以 `finish_reason: "tool_calls"` 结束，即使渠道报的是 `stop`（Gemini 的兼容层两样都占）：OpenAI 兼容客户端按 `index` 聚合工具调用、只在这个 finish reason 下执行，没修过的流到了客户端就是一条空回答。响应已提交后上游断掉，会发一条 SSE 错误帧加 `[DONE]`，而不是静默结束。每个请求还会在日志里留下方言和顶层字段名（从不记录字段内容）。
 
 ## Responses API
 

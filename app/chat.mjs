@@ -82,11 +82,45 @@ export function createChatStreamNormalizer({ model, id, created } = {}) {
   let streamId = typeof id === 'string' && id ? id : '';
   let createdAt = Number(created);
   let finishSeen = false;
+  // OpenAI clients aggregate streamed tool calls by `index` and only execute
+  // them when the finish reason says tool_calls. Gemini's compatibility layer
+  // sends a finished call without an index and closes with "stop", which
+  // clients read as an empty, tool-less answer. Slots are tracked per choice
+  // index, and a later fragment for the same call id keeps its slot.
+  let sawToolCalls = false;
+  const toolSlots = new Map();
 
   const resolvedId = () => {
     if (!streamId) streamId = generatedId();
     return streamId;
   };
+
+  function slotFor(choiceIndex) {
+    let slot = toolSlots.get(choiceIndex);
+    if (!slot) {
+      slot = { next: 0, byId: new Map() };
+      toolSlots.set(choiceIndex, slot);
+    }
+    return slot;
+  }
+
+  function normalizeToolCall(call, slot) {
+    if (!call || typeof call !== 'object') return;
+    const callId = typeof call.id === 'string' && call.id ? call.id : '';
+    let index;
+    if (callId && slot.byId.has(callId)) index = slot.byId.get(callId);
+    else if (Number.isInteger(call.index) && call.index >= 0) index = call.index;
+    else index = slot.next;
+    call.index = index;
+    if (callId && !slot.byId.has(callId)) slot.byId.set(callId, index);
+    if (index >= slot.next) slot.next = index + 1;
+    if (call.type === undefined) call.type = 'function';
+  }
+
+  // A tool call the provider reported with a plain "stop" still has to look
+  // like a tool-call turn downstream; anything else (length, content_filter)
+  // is left alone because it carries information the client needs.
+  const asToolFinish = (reason) => (sawToolCalls && (!reason || reason === 'stop') ? 'tool_calls' : reason);
 
   function push(payload) {
     if (!payload || typeof payload !== 'object') return payload;
@@ -94,14 +128,24 @@ export function createChatStreamNormalizer({ model, id, created } = {}) {
     if (payload.error) return payload;
     const choices = Array.isArray(payload.choices) ? payload.choices : [];
     for (const choice of choices) {
-      if (choice?.finish_reason) finishSeen = true;
       const delta = choice?.delta;
-      if (!delta || typeof delta !== 'object') continue;
-      if (typeof delta.reasoning === 'string' && typeof delta.reasoning_content !== 'string') {
-        delta.reasoning_content = delta.reasoning;
+      if (delta && typeof delta === 'object') {
+        if (typeof delta.reasoning === 'string' && typeof delta.reasoning_content !== 'string') {
+          delta.reasoning_content = delta.reasoning;
+        }
+        if (typeof delta.reasoning_content === 'string' && typeof delta.reasoning !== 'string') {
+          delta.reasoning = delta.reasoning_content;
+        }
+        const toolCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
+        if (toolCalls.length) {
+          sawToolCalls = true;
+          const slot = slotFor(Number.isInteger(choice?.index) ? choice.index : 0);
+          for (const call of toolCalls) normalizeToolCall(call, slot);
+        }
       }
-      if (typeof delta.reasoning_content === 'string' && typeof delta.reasoning !== 'string') {
-        delta.reasoning = delta.reasoning_content;
+      if (choice?.finish_reason) {
+        finishSeen = true;
+        choice.finish_reason = asToolFinish(choice.finish_reason);
       }
     }
     const upstreamId = typeof payload.id === 'string' && payload.id ? payload.id : '';
@@ -132,7 +176,7 @@ export function createChatStreamNormalizer({ model, id, created } = {}) {
         object: 'chat.completion.chunk',
         created: Number.isFinite(createdAt) && createdAt > 0 ? createdAt : Math.floor(Date.now() / 1000),
         model,
-        choices: [{ index: 0, delta: {}, finish_reason: finishReason || 'stop' }],
+        choices: [{ index: 0, delta: {}, finish_reason: asToolFinish(finishReason || 'stop') }],
       };
     },
   };

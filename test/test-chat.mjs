@@ -111,6 +111,79 @@ import { createChatStreamNormalizer, pickChatRequestFields } from '../app/chat.m
   assert.equal(fromReasoningContent.choices[0].delta.reasoning_content, 'think-b');
 }
 
+// Gemini's compatibility layer streams a whole tool call without `index` and
+// then closes with finish_reason "stop". OpenAI clients aggregate tool calls
+// by index and only run them when the finish reason says tool_calls, so both
+// are repaired before the chunk leaves the gateway.
+{
+  const normalizer = createChatStreamNormalizer({ model: 'free-best' });
+  const first = normalizer.push({
+    choices: [
+      {
+        index: 0,
+        delta: {
+          role: 'assistant',
+          tool_calls: [
+            {
+              id: 'call_a',
+              type: 'function',
+              extra_content: { google: { thought_signature: 'sig' } },
+              function: { name: 'get_time', arguments: '{"tz":"UTC"}' },
+            },
+          ],
+        },
+        finish_reason: null,
+      },
+    ],
+  });
+  assert.equal(first.choices[0].delta.tool_calls[0].index, 0, 'an indexless tool call gets a slot');
+  assert.equal(first.choices[0].delta.tool_calls[0].id, 'call_a');
+  assert.deepEqual(
+    first.choices[0].delta.tool_calls[0].extra_content,
+    { google: { thought_signature: 'sig' } },
+    'provider extensions survive normalization',
+  );
+  assert.equal(first.choices[0].delta.tool_calls[0].type, 'function');
+
+  // A parallel call takes the next slot ...
+  const parallel = normalizer.push({
+    choices: [{ index: 0, delta: { tool_calls: [{ id: 'call_b', function: { name: 'get_date', arguments: '{}' } }] }, finish_reason: null }],
+  });
+  assert.equal(parallel.choices[0].delta.tool_calls[0].index, 1);
+
+  // ... while a later fragment for an earlier id keeps that id's slot.
+  const fragment = normalizer.push({
+    choices: [{ index: 0, delta: { tool_calls: [{ id: 'call_a', function: { arguments: 'x' } }] }, finish_reason: null }],
+  });
+  assert.equal(fragment.choices[0].delta.tool_calls[0].index, 0);
+
+  // An explicit index is kept, and later synthetic slots start after it.
+  const explicit = normalizer.push({
+    choices: [{ index: 0, delta: { tool_calls: [{ id: 'call_c', index: 4, function: { name: 'x', arguments: '{}' } }] }, finish_reason: null }],
+  });
+  assert.equal(explicit.choices[0].delta.tool_calls[0].index, 4);
+  const next = normalizer.push({
+    choices: [{ index: 0, delta: { tool_calls: [{ id: 'call_d', function: { name: 'y', arguments: '{}' } }] }, finish_reason: null }],
+  });
+  assert.equal(next.choices[0].delta.tool_calls[0].index, 5);
+
+  // The terminal frame advertises tool_calls even when the upstream said stop.
+  const stop = normalizer.push({
+    choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+  });
+  assert.equal(stop.choices[0].finish_reason, 'tool_calls');
+  assert.equal(normalizer.terminal('stop').choices[0].finish_reason, 'tool_calls');
+}
+
+// Content-only streams keep the finish reason the upstream sent.
+{
+  const normalizer = createChatStreamNormalizer({ model: 'free-best' });
+  normalizer.push({ choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: null }] });
+  const stop = normalizer.push({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+  assert.equal(stop.choices[0].finish_reason, 'stop');
+  assert.equal(normalizer.terminal('stop').choices[0].finish_reason, 'stop');
+}
+
 // Error payloads pass through untouched, so a mid-stream failure can be
 // forwarded verbatim.
 {

@@ -128,6 +128,34 @@ const mock = http.createServer(async (req, res) => {
       res.end('data: [DONE]\n\n');
       return;
     }
+    // Gemini's compatibility layer: a whole tool call in one delta with no
+    // index, closed with a plain "stop".
+    if (body.stream && body.model === 'tool-call') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(
+        `data: ${JSON.stringify({
+          choices: [
+            {
+              index: 0,
+              delta: {
+                role: 'assistant',
+                tool_calls: [
+                  {
+                    id: 'call_1',
+                    type: 'function',
+                    function: { name: 'get_time', arguments: '{"tz":"UTC"}' },
+                  },
+                ],
+              },
+              finish_reason: null,
+            },
+          ],
+        })}\n\n`,
+      );
+      res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
+      res.end('data: [DONE]\n\n');
+      return;
+    }
     // A stream that dies after its first content chunk: the client must see
     // an error frame and [DONE], not a silent end (and no failover, since the
     // response was already committed).
@@ -232,6 +260,7 @@ fs.writeFileSync(
           'strict-ok',
           'drop-mid',
           'slow-tail',
+          'tool-call',
           'fallback-ok',
         ],
         chatPath: '/chat/completions',
@@ -517,6 +546,34 @@ try {
     const text = await response.text();
     assert.match(text, /tail-start/);
     assert.match(text, /tail-end/);
+  }
+
+  // 11. A tool call streamed without an index and finished with "stop" must
+  // reach the client as an index-addressed tool-call turn, or OpenAI-compatible
+  // clients (Open WebUI among them) drop it and show an empty answer.
+  {
+    const response = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'tool-call',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+        tools: [{ type: 'function', function: { name: 'get_time', parameters: { type: 'object' } } }],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const frames = (await response.text())
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => line.slice(6).trim())
+      .filter((data) => data && data !== '[DONE]')
+      .map((data) => JSON.parse(data));
+    const callFrame = frames.find((frame) => frame.choices?.[0]?.delta?.tool_calls?.length);
+    assert.ok(callFrame, 'the tool call reached the client');
+    assert.equal(callFrame.choices[0].delta.tool_calls[0].index, 0, 'the tool call carries an index');
+    const finishFrame = frames.find((frame) => frame.choices?.[0]?.finish_reason);
+    assert.equal(finishFrame.choices[0].finish_reason, 'tool_calls');
   }
 
   // The request log names the dialect and the top-level fields, never content.
