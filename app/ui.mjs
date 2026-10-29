@@ -388,7 +388,11 @@ td.muted { color: var(--muted); }
 #usage, #pool, #providers, #gateway, #logs { overflow-x: auto; }
 /* A log row is scanned left to right: keep each field on one line and let the
    card scroll instead of breaking model ids and timestamps mid-token. */
-#logs td { white-space: nowrap; }
+#logs { display: grid; gap: 8px; }
+.log-entry { position: relative; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.log-text { margin: 0; padding-right: 60px; font-family: var(--mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.log-copy { position: absolute; top: 6px; right: 8px; font-size: 11px; opacity: .7; }
+.log-copy:hover { opacity: 1; }
 [data-pane], [data-pane] > section, .sec-body { min-width: 0; }
 
 /* ===== Pills ===== */
@@ -858,6 +862,9 @@ body[data-gate="1"] main#app { display: none; }
       <div class="sec-body">
         <div class="row" style="justify-content:flex-end">
           <button id="logs-refresh" class="quiet" data-i18n="logs_refresh">Refresh</button>
+          <button id="logs-copy" class="quiet" data-i18n="logs_copy_all">Copy all</button>
+          <button id="logs-export-jsonl" class="quiet" data-i18n="logs_export_jsonl">Export JSONL</button>
+          <button id="logs-export-text" class="quiet" data-i18n="logs_export_text">Export text</button>
         </div>
         <div id="logs"></div>
         <p class="note" id="logs-note"></p>
@@ -2257,51 +2264,101 @@ function renderUsage() {
 let logsState = null;
 let logsRefreshing = false;
 
-function logResultKind(result) {
-  if (result === 'ok') return 'ok';
-  if (result === 'empty' || result === 'interrupted') return 'warn';
-  if (result === 'aborted' || result === 'rejected') return 'no';
-  return 'bad';
-}
-
 function logReasonText(value, max) {
   const text = String(value || '');
   return text.length > max ? text.slice(0, max) + '…' : text;
 }
 
-function logAttemptsCell(entry) {
-  const attempts = entry.attempts || [];
-  if (!attempts.length) return td('-', 'muted');
-  const cell = document.createElement('td');
-  cell.style.maxWidth = '220px';
-  cell.style.overflow = 'hidden';
-  const count = document.createElement('div');
-  count.textContent = t('logs_tries', { n: attempts.length });
-  cell.appendChild(count);
-  for (const attempt of attempts.slice(0, 3)) {
-    const line = document.createElement('div');
-    line.className = 'mono';
-    line.style.fontSize = '11.5px';
-    line.style.color = 'var(--muted)';
-    line.style.whiteSpace = 'nowrap';
-    line.style.overflow = 'hidden';
-    line.style.textOverflow = 'ellipsis';
-    let text = attempt.provider + ':' + attempt.model;
-    if (attempt.key) text += ' [' + attempt.key + ']';
-    text += ' · ' + (attempt.status === null ? '-' : attempt.status);
-    if (attempt.reason) text += ' ' + logReasonText(attempt.reason, 80);
-    line.textContent = text;
-    line.title = String(attempt.reason || '');
-    cell.appendChild(line);
+// One request as three lines of plain text, in the same shape as the container
+// log: the fields a bug report needs, in the order they are read. The text is
+// what Copy and every export use, so what is on screen is exactly what leaves.
+function logAttemptText(attempt) {
+  let text = attempt.provider + ':' + attempt.model;
+  if (attempt.key) text += ' [' + attempt.key + ']';
+  text += ' ' + (attempt.status === null || attempt.status === undefined ? '-' : attempt.status);
+  if (attempt.kind) text += ' ' + attempt.kind;
+  if (attempt.reason) text += ' ' + logReasonText(attempt.reason, 200);
+  text += ' ' + attempt.ms + 'ms';
+  return text;
+}
+
+function logEntryText(entry) {
+  const status = entry.status === null || entry.status === undefined ? '-' : entry.status;
+  let head = entry.at + ' ' + entry.id + ' ' + entry.dialect + ' ' + (entry.stream ? 'stream' : 'json');
+  head += ' ' + entry.outcome + ' ' + status + ' ' + entry.durationMs + 'ms';
+  if (entry.firstTokenMs !== null && entry.firstTokenMs !== undefined) head += ' 1st=' + entry.firstTokenMs + 'ms';
+  if (Array.isArray(entry.fields) && entry.fields.length) head += ' fields=' + entry.fields.join(',');
+  const lines = [head];
+  let selected = (entry.model || '-') + ' -> ';
+  selected += entry.provider ? entry.provider + ':' + entry.upstreamModel : '-';
+  if (entry.key) selected += ' [' + entry.key + ']';
+  selected += ' finish=' + (entry.finishReason || '-');
+  selected += ' tools=' + (entry.toolCalls || 0);
+  selected += ' chars=' + (entry.contentChars || 0) + '/' + (entry.reasoningChars || 0);
+  if (entry.reason) selected += ' reason=' + entry.reason;
+  lines.push('  ' + selected);
+  const attempts = Array.isArray(entry.attempts) ? entry.attempts : [];
+  if (attempts.length) {
+    lines.push('  ' + t('logs_tries', { n: attempts.length }) + ' ' + attempts.map(logAttemptText).join('; '));
   }
-  if (attempts.length > 3) {
-    const more = document.createElement('div');
-    more.className = 'note';
-    more.style.margin = '2px 0 0';
-    more.textContent = t('logs_more', { n: attempts.length - 3 });
-    cell.appendChild(more);
+  return lines.join('\\n');
+}
+
+function logAllText() {
+  const entries = (logsState && logsState.entries) || [];
+  return entries.map(logEntryText).join('\\n\\n');
+}
+
+function logJsonl() {
+  const entries = (logsState && logsState.entries) || [];
+  return entries.map((entry) => JSON.stringify(entry)).join('\\n');
+}
+
+function logStamp() {
+  return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+}
+
+// Clipboard access needs a secure context; the gateway is usually reached over
+// plain HTTP on the LAN, so keep a textarea + execCommand path for that case.
+function logFallbackCopy(text) {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.top = '-1000px';
+  document.body.appendChild(area);
+  area.select();
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch {
+    ok = false;
   }
-  return cell;
+  document.body.removeChild(area);
+  return ok;
+}
+
+function copyLogText(text) {
+  if (!text) return;
+  const report = (ok) => toast(ok ? t('logs_copied') : t('logs_copy_failed'), ok ? 'good' : 'err');
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => report(true), () => report(logFallbackCopy(text)));
+    return;
+  }
+  report(logFallbackCopy(text));
+}
+
+function downloadLogText(filename, text, type) {
+  if (!text) return;
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function renderLogs() {
@@ -2320,64 +2377,20 @@ function renderLogs() {
     host.appendChild(p);
     return;
   }
-  host.appendChild(table(
-    [
-      { label: t('th_logs_time') },
-      { label: t('th_logs_dialect') },
-      { label: t('th_logs_requested') },
-      { label: t('th_logs_selected') },
-      { label: t('th_logs_result') },
-      { label: t('th_logs_duration'), num: true },
-      { label: t('th_logs_first_token'), num: true },
-      { label: t('th_logs_attempts') },
-    ],
-    entries.map((entry) => {
-      const selected = entry.provider
-        ? entry.provider + ':' + entry.upstreamModel + (entry.key ? ' [' + entry.key + ']' : '')
-        : '-';
-      const resultCell = document.createElement('td');
-      resultCell.appendChild(pill(t('log_' + entry.outcome), logResultKind(entry.outcome)));
-      if (entry.reason) {
-        const why = document.createElement('div');
-        why.className = 'note';
-        why.style.margin = '3px 0 0';
-        why.style.maxWidth = '160px';
-        why.style.overflow = 'hidden';
-        why.style.textOverflow = 'ellipsis';
-        why.style.whiteSpace = 'nowrap';
-        why.textContent = logReasonText(entry.reason, 120);
-        why.title = String(entry.reason);
-        resultCell.appendChild(why);
-      }
-      // What the answer was made of: an "ok" row with zero characters and a
-      // tool call looks very different from one that carried text.
-      if (entry.finishReason || entry.toolCalls || entry.contentChars) {
-        const shape = document.createElement('div');
-        shape.className = 'note';
-        shape.style.margin = '3px 0 0';
-        shape.style.maxWidth = '160px';
-        shape.style.overflow = 'hidden';
-        shape.style.textOverflow = 'ellipsis';
-        shape.style.whiteSpace = 'nowrap';
-        shape.textContent = t('logs_answer', {
-          finish: entry.finishReason || '-',
-          tools: entry.toolCalls || 0,
-          chars: entry.contentChars || 0,
-        });
-        resultCell.appendChild(shape);
-      }
-      return [
-        td(new Date(entry.at).toLocaleString(lang), 'muted'),
-        td(entry.dialect, 'muted'),
-        td(entry.model || '-', 'mono'),
-        td(selected, 'mono'),
-        resultCell,
-        td(entry.durationMs, 'num'),
-        td(entry.firstTokenMs === null || entry.firstTokenMs === undefined ? '-' : entry.firstTokenMs, 'num'),
-        logAttemptsCell(entry),
-      ];
-    }),
-  ));
+  for (const entry of entries) {
+    const box = document.createElement('div');
+    box.className = 'log-entry';
+    const pre = document.createElement('pre');
+    pre.className = 'log-text';
+    pre.textContent = logEntryText(entry);
+    box.appendChild(pre);
+    const copy = document.createElement('button');
+    copy.className = 'quiet log-copy';
+    copy.textContent = t('logs_copy_one');
+    copy.onclick = () => copyLogText(logEntryText(entry));
+    box.appendChild(copy);
+    host.appendChild(box);
+  }
 }
 
 async function refreshLogs(silent) {
@@ -2905,6 +2918,11 @@ function bindOnce() {
     };
   }
   el('logs-refresh').onclick = () => refreshLogs(false);
+  el('logs-copy').onclick = () => copyLogText(logAllText());
+  el('logs-export-jsonl').onclick = () =>
+    downloadLogText('free-router-logs-' + logStamp() + '.jsonl', logJsonl(), 'application/x-ndjson');
+  el('logs-export-text').onclick = () =>
+    downloadLogText('free-router-logs-' + logStamp() + '.log', logAllText(), 'text/plain');
   el('lang').onchange = () => setLang(el('lang').value);
   el('theme-btn').onclick = cycleTheme;
   applyTheme();

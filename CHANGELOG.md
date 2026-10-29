@@ -39,6 +39,7 @@ tags are cut here. Dates are commit dates (`YYYY-MM-DD`).
 
 ### Changed
 
+- The Logs tab is built for bug reports instead of reading at a glance: each request is a block of plain text in the same shape as the container log (timestamp and id, dialect, outcome/status, timings, top-level fields, requested and answered model with finish reason, tool calls and character counts, then every upstream attempt), with a per-block **Copy** button and **Copy all**, **Export JSONL**, and **Export text** actions. Copying falls back to `textarea` + `execCommand` when the page is served over plain HTTP, where the clipboard API is not available. The table, its columns, and their translation keys are gone.
 - Chat Completions requests are rebuilt from the documented fields before they go upstream, so client bookkeeping (`features`, `variables`, `files`, `tool_ids`, `metadata`, `models`, ...) cannot trigger a strict provider's `400 Unknown name`. `stream_options` is forwarded only when the provider accepts it (`streamOptions: false` on the shipped Gemini entry).
 - Chat streams are normalized instead of passed through: missing `id`/`created`/`object` are filled in, `model` is rewritten to the id the client requested, `reasoning` and `reasoning_content` stay in sync, exactly one `[DONE]` terminates a success, and an upstream that dies after the commit emits an SSE error frame plus `[DONE]` rather than ending silently.
 - Each request logs its dialect and top-level field names (never content), so a failing client can be identified from the log alone.

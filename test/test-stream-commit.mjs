@@ -578,6 +578,8 @@ try {
 
   // The finish line records what the answer was made of, so a row that a
   // client rendered as nothing can be explained from the container log alone.
+  // It is written after the response ends, so give the process a beat.
+  await sleep(100);
   assert.match(
     childOutput,
     /chat req_[0-9a-f]{16} ok 200 \d+ms mock:tool-call finish=stop tools=1 chars=0\/0/,

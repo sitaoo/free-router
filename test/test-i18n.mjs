@@ -14,10 +14,8 @@ const NEW_KEYS = [
   'pm_on', 'pm_model', 'pm_label', 'pm_source', 'pm_state', 'pm_limit', 'pm_limit_ph', 'pm_locked_hint',
   'pt_paid', 'pt_blocked', 'prov_unknown_tag', 'disc_probing', 'disc_probe_pending', 'disc_note',
   'tab_logs', 'logs_title', 'logs_blurb', 'logs_refresh', 'logs_empty', 'logs_count',
-  'logs_tries', 'logs_more', 'logs_answer', 'th_logs_time', 'th_logs_dialect', 'th_logs_requested',
-  'th_logs_selected', 'th_logs_result', 'th_logs_duration', 'th_logs_first_token',
-  'th_logs_attempts', 'log_ok', 'log_empty', 'log_interrupted', 'log_aborted',
-  'log_blocked', 'log_failed', 'log_rejected',
+  'logs_tries', 'logs_copy_all', 'logs_copy_one', 'logs_export_jsonl', 'logs_export_text',
+  'logs_copied', 'logs_copy_failed',
 ];
 
 // 1. The exact Chinese sentence the operator approved.
@@ -38,10 +36,6 @@ assert.match(STRINGS.en.disc_probe_pending, /\{n\}/);
 assert.match(STRINGS.en.logs_count, /\{n\}/);
 assert.match(STRINGS.en.logs_count, /\{cap\}/);
 assert.match(STRINGS.en.logs_tries, /\{n\}/);
-assert.match(STRINGS.en.logs_more, /\{n\}/);
-assert.match(STRINGS.en.logs_answer, /\{finish\}/);
-assert.match(STRINGS.en.logs_answer, /\{tools\}/);
-assert.match(STRINGS.en.logs_answer, /\{chars\}/);
 assert.equal(STRINGS['zh-CN'].tab_logs, '日志');
 assert.equal(STRINGS['zh-TW'].tab_logs, '日誌');
 assert.equal(translate(STRINGS, 'zh-CN', 'st_blocked', { at: '10:00' }), '资金不足，10:00 前停用');
