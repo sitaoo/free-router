@@ -48,6 +48,17 @@ for (const placeholder of ['{finish}', '{tools}', '{chars}']) {
 assert.equal('logs_copy_one' in STRINGS.en, false, 'the per-row Copy button is gone');
 assert.equal(STRINGS['zh-CN'].logs_clear, '清除');
 assert.equal(STRINGS['zh-CN'].tab_logs, '日志');
+// "chat" / "responses" are API dialects, not spoken ones: the column says API
+// in every language so nobody reads 方言 / Dialekt as a human language.
+for (const [code] of LANGS) {
+  assert.equal(STRINGS[code].th_logs_dialect, 'API', `${code} th_logs_dialect`);
+  assert.match(STRINGS[code].logs_blurb, /\bAPI\b/, `${code} logs_blurb should name the API column`);
+}
+// The Chinese blurb is read as a sentence, not a schema dump: no "dialect",
+// no "top-level field names", and it names the two API values it counts.
+assert.doesNotMatch(STRINGS['zh-CN'].logs_blurb, /方言|顶层字段名/);
+assert.match(STRINGS['zh-CN'].logs_blurb, /API（chat \/ responses）/);
+assert.match(STRINGS['zh-TW'].logs_blurb, /API（chat \/ responses）/);
 assert.equal(STRINGS['zh-TW'].tab_logs, '日誌');
 assert.equal(translate(STRINGS, 'zh-CN', 'st_blocked', { at: '10:00' }), '资金不足，10:00 前停用');
 assert.equal(translate(STRINGS, 'xx', 'paid_model_warning'), STRINGS.en.paid_model_warning);
