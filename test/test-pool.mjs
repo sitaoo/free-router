@@ -229,13 +229,16 @@ assert.equal(seedScore(40), 30);
   assert.deepEqual(Object.keys(pruned.blocks), ['a:pro']);
   assert.equal(prunePaymentBlocks(pruned.blocks, now).changed, false);
 
-  assert.deepEqual(sanitizePaymentBlocks({ 'a:pro': { until: '2026-10-29T12:00:00.000Z' }, bad: { until: 'x' } }), {
-    'a:pro': {
-      until: '2026-10-29T12:00:00.000Z',
-      reason: '',
-      observedAt: sanitizePaymentBlocks({ 'a:pro': { until: '2026-10-29T12:00:00.000Z' } })['a:pro'].observedAt,
-    },
+  // observedAt defaults to "now", so compare its shape, not a second sample
+  // that can land on the next millisecond.
+  const sanitizedBlocks = sanitizePaymentBlocks({
+    'a:pro': { until: '2026-10-29T12:00:00.000Z' },
+    bad: { until: 'x' },
   });
+  assert.deepEqual(Object.keys(sanitizedBlocks), ['a:pro']);
+  assert.equal(sanitizedBlocks['a:pro'].until, '2026-10-29T12:00:00.000Z');
+  assert.equal(sanitizedBlocks['a:pro'].reason, '');
+  assert.ok(Number.isFinite(Date.parse(sanitizedBlocks['a:pro'].observedAt)));
 
   // The pool surfaces the block on the paid entry, and only there.
   const or = provider('a', [model('pro', 5, 5)], {
