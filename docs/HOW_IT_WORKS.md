@@ -102,7 +102,7 @@ See where requests actually landed, and how much of today's quota is left:
 
 ## Web interface
 
-Open <http://127.0.0.1:8787/> and log in (default password `admin123`, change it in Settings → Admin). The interface has four tabs: status, access keys, providers, and settings. The Status tab shows the live pool priority; the Providers tab holds keys, each provider's model table (free/paid membership and daily limits), and Discovery. It follows the browser language and applies every change to the running process immediately — except host, port, and a few marked settings, which need a restart (there is a Restart button next to Save; under Docker the supervisor brings the server back up). The theme button in the top bar cycles follow-system, light, and dark; the choice is stored in that browser's local storage.
+Open <http://127.0.0.1:8787/> and log in (default password `admin123`, change it in Settings → Admin). The interface has five tabs: status, access keys, providers, settings, and logs. The Status tab shows the live pool priority; the Providers tab holds keys, each provider's model table (free/paid membership and daily limits), and Discovery; the Logs tab lists the last 500 client requests with their outcome, timing, selected `provider:model` and key label, and a per-request summary of every upstream attempt, refreshing every five seconds while it is open. Rows are metadata only — prompts, answers, headers, and key values are never stored — and live in memory, so they are cleared on restart; every gateway response carries `X-Free-Router-Request-Id` matching its row. It follows the browser language and applies every change to the running process immediately — except host, port, and a few marked settings, which need a restart (there is a Restart button next to Save; under Docker the supervisor brings the server back up). The theme button in the top bar cycles follow-system, light, and dark; the choice is stored in that browser's local storage.
 
 ```json
 "webui": {
@@ -263,6 +263,7 @@ GET  /                       web interface (login required)
 POST /api/login              { "password": "..." } -> session cookie
 POST /api/logout             revoke current session
 GET  /api/state              full UI state (session required)
+GET  /api/logs               last client requests, newest first (session required)
 POST /api/keys               provider keys: { "provider", "name"?, "key" }
 POST /api/gateway-keys       gateway keys: { "action": "create|delete|setRequireAuth", ... }
 POST /api/providers          { "action": "create|update|delete", ... }
