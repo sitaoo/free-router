@@ -57,7 +57,7 @@ PID=$!
 echo "$PID" >"$PID_FILE"
 
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  if curl -fsS "http://127.0.0.1:${PROBE_PORT}/health" >/dev/null; then
+  if curl -fsS "http://127.0.0.1:${PROBE_PORT}/healthz" >/dev/null; then
     echo "free-router started (pid $PID, user $(id -un))"
     echo "endpoint: http://127.0.0.1:${PROBE_PORT}/v1"
     exit 0

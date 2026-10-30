@@ -3991,51 +3991,23 @@ async function handler(req, res) {
   if (req.method === 'POST' && url.pathname === '/api/settings') {
     return handleSettings(req, res);
   }
+  // The minimal shape names nothing sensitive and is what container probes
+  // and remote callers get.
+  if (req.method === 'GET' && url.pathname === '/healthz') {
+    return sendJson(res, 200, { ok: true, service: 'free-router', version: VERSION });
+  }
   if (req.method === 'GET' && (url.pathname === '/health' || url.pathname === '/v1/health')) {
-    const defaultCatalog = PROVIDERS.get(registry.defaultProvider);
-    return sendJson(res, 200, {
-      ok: true,
-      service: 'free-router',
-      version: VERSION,
-      defaultProvider: registry.defaultProvider,
-      defaultModel: DEFAULT_MODEL_ALIAS,
-      catalogModels: defaultCatalog?.catalog?.size || 0,
-      catalogFetchedAt: defaultCatalog?.catalogFetchedAt
-        ? new Date(defaultCatalog.catalogFetchedAt).toISOString()
-        : null,
-      catalogError: defaultCatalog?.catalogError || null,
-      providers: registry.health(),
-      discovery: {
-        enabled: discoveryEnabled,
-        intervalMs: DISCOVERY_INTERVAL_MS,
-        lastCheckedAt: discoveryLastCheckedAt
-          ? new Date(discoveryLastCheckedAt).toISOString()
-          : null,
-        freeModelsSeen: discoverySeenIds.length,
-        removedModels: discoveryRemovedIds,
-        excludedModels: excludedModelIds(),
-        unavailableModels: discoveryUnavailableIds,
-        modelVerdicts,
-        // Which providers can contribute new models, and which are only
-        // checked for models that disappeared.
-        addsFrom: [...PROVIDERS.values()].filter((p) => p.discover || p.probeFreeTier).map((p) => p.name),
-        availabilityOnly: [...PROVIDERS.values()]
-          .filter((p) => p.usesCatalog && !p.catalogHasPricing && !p.probeFreeTier)
-          .map((p) => p.name),
-        evaluations: modelEvaluations,
-        probing: [...probeRunning],
-        probePending: Object.fromEntries(
-          [...PROVIDERS.values()]
-            .map((provider) => [provider.name, probePendingCount(provider.name)])
-            .filter(([, count]) => count > 0),
-        ),
-        error: discoveryError || null,
-      },
-      lastSelection,
-      usage: usageSummary(),
-      pool: poolStatus(),
-      paymentBlocks,
-    });
+    // The full payload lists provider key labels, payment blocks, usage and
+    // the whole pool. Serve it to loopback (container probes) and to an
+    // authenticated admin; a LAN or proxied caller gets the minimal answer.
+    const local = isLoopbackAddress(req.socket.remoteAddress);
+    if (!local && webuiAuthFailure(req)) {
+      return sendJson(res, 200, { ok: true, service: 'free-router', version: VERSION });
+    }
+    return sendJson(res, 200, healthPayload());
+  }
+  if (req.method === 'GET' && url.pathname === '/api/health') {
+    return sendJson(res, 200, healthPayload());
   }
   if (req.method === 'GET' && url.pathname === '/v1/models') {
     const gatewayFailure = gatewayGuardFailure(req);
@@ -4071,6 +4043,55 @@ async function handler(req, res) {
   return sendJson(res, 404, {
     error: { message: `Unknown endpoint: ${req.method} ${url.pathname}`, type: 'not_found' },
   });
+}
+
+function healthPayload() {
+  const defaultCatalog = PROVIDERS.get(registry.defaultProvider);
+  return {
+    ok: true,
+    service: 'free-router',
+    version: VERSION,
+    defaultProvider: registry.defaultProvider,
+    defaultModel: DEFAULT_MODEL_ALIAS,
+    catalogModels: defaultCatalog?.catalog?.size || 0,
+    catalogFetchedAt: defaultCatalog?.catalogFetchedAt
+      ? new Date(defaultCatalog.catalogFetchedAt).toISOString()
+      : null,
+    catalogError: defaultCatalog?.catalogError || null,
+    providers: registry.health(),
+    discovery: {
+      enabled: discoveryEnabled,
+      intervalMs: DISCOVERY_INTERVAL_MS,
+      lastCheckedAt: discoveryLastCheckedAt
+        ? new Date(discoveryLastCheckedAt).toISOString()
+        : null,
+      freeModelsSeen: discoverySeenIds.length,
+      removedModels: discoveryRemovedIds,
+      excludedModels: excludedModelIds(),
+      unavailableModels: discoveryUnavailableIds,
+      modelVerdicts,
+      // Which providers can contribute new models, and which are only
+      // checked for models that disappeared.
+      addsFrom: [...PROVIDERS.values()]
+        .filter((provider) => provider.discover || provider.probeFreeTier)
+        .map((provider) => provider.name),
+      availabilityOnly: [...PROVIDERS.values()]
+        .filter((provider) => provider.usesCatalog && !provider.catalogHasPricing && !provider.probeFreeTier)
+        .map((provider) => provider.name),
+      evaluations: modelEvaluations,
+      probing: [...probeRunning],
+      probePending: Object.fromEntries(
+        [...PROVIDERS.values()]
+          .map((provider) => [provider.name, probePendingCount(provider.name)])
+          .filter(([, count]) => count > 0),
+      ),
+      error: discoveryError || null,
+    },
+    lastSelection,
+    usage: usageSummary(),
+    pool: poolStatus(),
+    paymentBlocks,
+  };
 }
 
 const server = http.createServer((req, res) => {

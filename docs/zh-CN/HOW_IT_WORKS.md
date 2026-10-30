@@ -153,7 +153,7 @@ tab）。一个网关 Key 都没有时，`/v1` 保持开放，方便本地用。
 
 ## 网关 API Key
 
-给调 `/v1/*` 的客户端用的命名凭证（`sk-fr-…`，只在创建时显示一次）。建第一个 Key 即启用鉴权；删光即关闭（访问标题行的开关零 Key 时拒绝打开）。`/v1/models`、`/v1/chat/completions` 和 `/v1/responses` 都校验；`/health` 保持开放，给容器探活用。
+给调 `/v1/*` 的客户端用的命名凭证（`sk-fr-…`，只在创建时显示一次）。建第一个 Key 即启用鉴权；删光即关闭（访问标题行的开关零 Key 时拒绝打开）。`/v1/models`、`/v1/chat/completions` 和 `/v1/responses` 都校验；`/healthz` 保持开放，给容器探活用，`/health` 的完整内容只发给本机回环或管理员会话。
 
 ## Provider Key（多账号）
 
@@ -268,13 +268,15 @@ POST /api/settings           调优参数、会话 TTL、迁移提示
 POST /api/webui-password     { "password": "..." }（存哈希，吊销所有会话）
 POST /api/server             { "host", "port" }（重启生效）
 POST /api/restart            退出等 supervisor 重启（要会话）
-GET  /health
+GET  /healthz                最小探活：ok、service、version（始终开放）
+GET  /health                 本机回环或管理员会话返回完整内容，其他调用者只拿到最小内容
+GET  /api/health             完整内容（需要管理员会话）
 GET  /v1/models              开了鉴权就要网关 Key
 POST /v1/chat/completions    开了鉴权就要网关 Key
 POST /v1/responses           同一套模型池，Responses 方言
 ```
 
-`GET /health` 报 `package.json` 的 `version`（当前 `1.0.0`），发版用`v1.0.0` 这种 git tag。
+`GET /healthz` 和 `GET /health` 报 `package.json` 的 `version`（当前 `1.0.0`），发版用`v1.0.0` 这种 git tag。完整的 `/health` 内容会列出各渠道 Key 名称、欠费封禁、用量和整个池子，所以只发给本机回环调用（容器探活和本机脚本）或已登录的管理员；其他调用者只拿到和 `/healthz` 一样的三字段。`/api/health` 始终返回完整内容，但需要管理员会话。
 
 `GET /v1/models` 依次返回 `free-best` 别名、池里全部免费文本模型、以及显式选中的付费模型。免费模型用裸 ID 列出（跨渠道去重）；当已选付费模型与某个免费条目同名时，它改以 `provider:model` 出现。点名免费模型会试当前提供同一 slug 的每家渠道；点名付费模型只用被选中的那一个 `provider:model`。
 

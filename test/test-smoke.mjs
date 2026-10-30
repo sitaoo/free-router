@@ -1210,6 +1210,11 @@ try {
   assert.equal(health.version, PACKAGE_VERSION);
   assert.equal(health.defaultModel, 'free-best');
 
+  // /healthz is the probe shape: nothing about keys, usage or the pool.
+  const healthz = await fetch(`http://127.0.0.1:${routerPort}/healthz`);
+  assert.equal(healthz.status, 200);
+  assert.deepEqual(Object.keys(await healthz.json()).sort(), ['ok', 'service', 'version']);
+
   const freeKeys = health.pool.free.map((entry) => `${entry.provider}:${entry.id}`);
   const paidKeys = health.pool.paid.map((entry) => `${entry.provider}:${entry.id}`);
   const entryFor = (key) => health.pool.free.find((entry) => `${entry.provider}:${entry.id}` === key);
@@ -2049,6 +2054,8 @@ try {
   assert.equal(uiState.error?.type, 'unauthorized');
   const unauthLogs = await fetch(`${base}/api/logs`);
   assert.equal(unauthLogs.status, 401, 'the request log needs the admin session');
+  const unauthHealth = await fetch(`${base}/api/health`);
+  assert.equal(unauthHealth.status, 401, 'the detailed health payload needs the admin session');
   const unauthClear = await fetch(`${base}/api/logs`, { method: 'DELETE' });
   assert.equal(unauthClear.status, 401, 'clearing the request log needs the admin session');
   // Web UI management APIs require the admin session (default password).

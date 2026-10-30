@@ -156,7 +156,7 @@ The admin password is stored as a salted scrypt hash, never plaintext. `FREE_ROU
 
 ## Gateway API keys
 
-Named client credentials (`sk-fr-…`, shown once at creation) for anything calling `/v1/*`. Creating the first key enables auth; deleting the last one disables it again (or flip the switch in the Access title row — it refuses to enable with zero keys). Keys are checked on `/v1/models`, `/v1/chat/completions`, and `/v1/responses`; `/health` stays open for container probes.
+Named client credentials (`sk-fr-…`, shown once at creation) for anything calling `/v1/*`. Creating the first key enables auth; deleting the last one disables it again (or flip the switch in the Access title row — it refuses to enable with zero keys). Keys are checked on `/v1/models`, `/v1/chat/completions`, and `/v1/responses`; `/healthz` stays open for container probes, and `/health` reveals its full payload only to loopback or an admin session.
 
 ## Provider keys (multi-account)
 
@@ -274,13 +274,15 @@ POST /api/settings           tuning knobs, session TTL, migration notice
 POST /api/webui-password     { "password": "..." } (stored hashed, revokes sessions)
 POST /api/server             { "host", "port" } (restart to apply)
 POST /api/restart            exit for supervisor restart (session required)
-GET  /health
+GET  /healthz                minimal probe: ok, service, version (always open)
+GET  /health                 full payload from loopback or an admin session; minimal otherwise
+GET  /api/health             full payload (session required)
 GET  /v1/models              gateway key required once auth is on
 POST /v1/chat/completions    gateway key required once auth is on
 POST /v1/responses           same pool, keys, limits, translated Responses dialect
 ```
 
-`GET /health` reports `version` from `package.json` (currently `1.0.0`). Releases are git tags of the form `v1.0.0`.
+`GET /healthz` and `GET /health` report `version` from `package.json` (currently `1.0.0`). Releases are git tags of the form `v1.0.0`. The full `/health` payload names provider key labels, payment blocks, usage and the whole pool, so it is served only to a loopback caller (the container healthcheck and local scripts) or to a logged-in admin; any other caller gets the same three fields as `/healthz`. `/api/health` always returns the full payload and requires the admin session.
 
 `GET /v1/models` returns the `free-best` alias, every free text-chat model in the pool, then the explicitly selected paid models. Free models are listed by bare ID (deduplicated across providers); when a selected paid model would collide with a free listing of the same ID, it appears as `provider:model` instead. Naming a free model tries every provider that currently offers that same slug; naming a paid model uses exactly the selected `provider:model`.
 
