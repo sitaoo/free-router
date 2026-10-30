@@ -41,11 +41,32 @@ export function isSupportedLang(code) {
   return LANGS.some(([entry]) => entry === code);
 }
 
-// Pure lookup with English fallback and {var} interpolation. Shared
-// semantics with the browser runtime in ui.mjs (which duplicates this tiny
-// function to avoid shipping module loaders to the page).
+// CLDR plural category ("one", "few", "many", …) for a count, so a string can
+// ship a `_one` / `_few` variant next to its base form.
+export function pluralCategory(lang, n) {
+  try {
+    return new Intl.PluralRules(lang).select(Number(n));
+  } catch (error) {
+    return 'other';
+  }
+}
+
+// Pure lookup with English fallback and {var} interpolation. When the caller
+// passes a numeric {n}, a `<key>_<category>` variant is preferred: the current
+// locale's variant first, then its base wording, so a missing variant never
+// drops a sentence back into English. Shared semantics with the browser
+// runtime in ui.mjs (which duplicates this tiny function to avoid shipping
+// module loaders to the page).
 export function translate(strings, lang, key, vars) {
-  const value = strings?.[lang]?.[key] ?? strings?.en?.[key] ?? key;
+  const dict = strings?.[lang] || {};
+  const base = strings?.en || {};
+  let value;
+  if (vars && typeof vars.n === 'number') {
+    const variant = `${key}_${pluralCategory(lang, vars.n)}`;
+    value = dict[variant] ?? dict[key] ?? base[variant] ?? base[key] ?? key;
+  } else {
+    value = dict[key] ?? base[key] ?? key;
+  }
   if (!vars) return value;
   return String(value).replace(/\{(\w+)\}/g, (_, name) =>
     vars[name] === undefined || vars[name] === null ? '' : String(vars[name]),
@@ -2314,6 +2335,241 @@ const PICKER_STRINGS = {
   "ar": { prov_filter_ph: "تصفية النماذج", prov_no_match: "لا يوجد نموذج مطابق." },
 };
 
+// Keys the theme, provider and tuning work introduced after the first
+// translation pass. Nine locales never got them and silently fell back to
+// English; fill them in so the UI reads as one language everywhere.
+const COMPLETION_STRINGS = {
+  "ja": {
+    theme_title: "テーマ: {mode}。クリックで切り替え。", theme_system: "システムに従う", theme_light: "ライト", theme_dark: "ダーク",
+    prov_preset: "プリセット", prov_custom: "カスタム", prov_models_pick: "モデル（無料は事前に選択済み）:",
+    prov_no_catalog: "カタログはまだありません — 下にモデルを貼り付けてください。初回更新後にここへ表示されます。",
+    prov_truncated: "先頭 200 件を表示しています。", prov_paid_tag: "（有料）",
+    prov_flags_note: "カタログは /models 一覧を取得して利用可否を確認します。価格が公開されていれば価格から無料判定するため、プローブは不要です。",
+    srv_port_desc: "再起動後に反映されます。", tun_timeout_desc: "リクエストごとの上限。すぐに反映されます。",
+    tun_refresh_desc: "プロバイダーのカタログを再取得する頻度。", tun_redact_desc: "ログと上流への送信内容からキーを除去します。",
+    tun_socks: "SOCKS 優先ホスト", tun_socks_desc: "SOCKS プロキシを優先するホスト（カンマ区切り）。",
+    tun_retention_desc: "使用履歴を保持する日数。", tun_timezone_desc: "日次クォータの区切り、例: America/Los_Angeles。",
+    admin_pass_t: "管理者パスワード", admin_pass_d: "変更するとすべてのセッションがログアウトされます。",
+    admin_pw_changed: "最終変更: {at}", admin_pw_never: "未変更。",
+    sess_d: "ログインセッションの有効期間。0 は無期限。",
+    disc_enabled_desc: "定期的にカタログを走査して新たに無料になったモデルを探します。", disc_interval_desc: "ディスカバリーの実行頻度。",
+    gw_th_name: "名前", gw_th_key: "キー", gw_th_created: "作成日時",
+    pt_name: "プロバイダー", pt_url: "URL", pt_keys: "キー", pt_models: "モデル", pt_free: "無料",
+    prov_add_show: "プロバイダーを追加", prov_add_hide: "フォームを隠す", prov_cancel: "キャンセル",
+    np_key_ph: "api-key（任意）", prov_auto_note: "モデルを空欄にすると、カタログから無料モデルを自動検出します。",
+    prov_fetch: "モデルを取得",
+    srv_lan: "LAN アクセスを許可", srv_lan_on: "オン: アクセス可能", srv_lan_off: "オフ: ループバックのみ。",
+    srv_lan_docker: "コンテナ内表示: これはコンテナのアドレスです。LAN からはホストのアドレスを使用してください（ホストで hostname -I を実行）。",
+    srv_lan_nokey: "ゲートウェイキーがありません: /v1 はネットワーク全体に公開されています。アクセスで作成してください。",
+  },
+  "ko": {
+    theme_title: "테마: {mode}. 클릭하여 전환.", theme_system: "시스템 설정 따르기", theme_light: "라이트", theme_dark: "다크",
+    prov_preset: "프리셋", prov_custom: "사용자 지정", prov_models_pick: "모델 (무료는 미리 선택됨):",
+    prov_no_catalog: "아직 카탈로그가 없습니다 — 아래에 모델을 붙여 넣으세요. 첫 새로 고침 후 여기에 표시됩니다.",
+    prov_truncated: "처음 200개만 표시합니다.", prov_paid_tag: "(유료)",
+    prov_flags_note: "카탈로그는 /models 목록을 가져와 사용 가능 여부를 확인합니다. 가격이 공개되면 가격으로 무료 여부를 판별하므로 프로브가 필요 없습니다.",
+    srv_port_desc: "재시작 후 적용됩니다.", tun_timeout_desc: "요청당 상한. 즉시 적용됩니다.",
+    tun_refresh_desc: "공급자 카탈로그를 다시 가져오는 주기.", tun_redact_desc: "로그와 업스트림 페이로드에서 키를 제거합니다.",
+    tun_socks: "SOCKS 우선 호스트", tun_socks_desc: "SOCKS 프록시를 우선하는 호스트 (쉼표로 구분).",
+    tun_retention_desc: "사용 기록을 보관할 일수.", tun_timezone_desc: "일일 할당량 경계, 예: America/Los_Angeles.",
+    admin_pass_t: "관리자 비밀번호", admin_pass_d: "변경하면 모든 세션이 로그아웃됩니다.",
+    admin_pw_changed: "마지막 변경: {at}", admin_pw_never: "변경한 적 없음.",
+    sess_d: "로그인 세션 만료 기간. 0은 무제한.",
+    disc_enabled_desc: "주기적으로 카탈로그를 검사해 새로 무료가 된 모델을 찾습니다.", disc_interval_desc: "검색 실행 주기.",
+    gw_th_name: "이름", gw_th_key: "키", gw_th_created: "생성됨",
+    pt_name: "공급자", pt_url: "URL", pt_keys: "키", pt_models: "모델", pt_free: "무료",
+    prov_add_show: "공급자 추가", prov_add_hide: "양식 숨기기", prov_cancel: "취소",
+    np_key_ph: "api-key (선택)", prov_auto_note: "모델을 비워 두면 카탈로그에서 무료 모델을 자동으로 찾습니다.",
+    prov_fetch: "모델 가져오기",
+    srv_lan: "LAN 액세스 허용", srv_lan_on: "켜짐: 다음으로 접근 가능", srv_lan_off: "꺼짐: 루프백만.",
+    srv_lan_docker: "컨테이너 보기: 컨테이너 주소입니다. LAN에서는 호스트 주소를 사용하세요 (호스트에서 hostname -I 실행).",
+    srv_lan_nokey: "게이트웨이 키 없음: /v1이 네트워크 전체에 공개됩니다. 액세스에서 생성하세요.",
+  },
+  "es": {
+    theme_title: "Tema: {mode}. Haz clic para cambiar.", theme_system: "seguir el sistema", theme_light: "claro", theme_dark: "oscuro",
+    prov_preset: "Preajuste", prov_custom: "Personalizado", prov_models_pick: "Modelos (los gratuitos ya están marcados):",
+    prov_no_catalog: "Aún no hay catálogo: pega los modelos abajo; aparecerán aquí tras la primera actualización.",
+    prov_truncated: "Mostrando los primeros 200.", prov_paid_tag: "(de pago)",
+    prov_flags_note: "El catálogo obtiene la lista /models para comprobar la disponibilidad. Si se publican precios, lo gratuito se detecta por precio y no hace falta sondear.",
+    srv_port_desc: "Se aplica tras reiniciar.", tun_timeout_desc: "Límite por petición. Se aplica al instante.",
+    tun_refresh_desc: "Cada cuánto se recargan los catálogos de proveedores.", tun_redact_desc: "Elimina las claves de los registros y de las cargas enviadas al proveedor.",
+    tun_socks: "Hosts con SOCKS preferente", tun_socks_desc: "Hosts separados por comas que prefieren el proxy SOCKS.",
+    tun_retention_desc: "Cuántos días de historial de uso se conservan.", tun_timezone_desc: "Límites diarios de cuota, p. ej. America/Los_Angeles.",
+    admin_pass_t: "Contraseña de administrador", admin_pass_d: "Cambiarla cierra todas las sesiones.",
+    admin_pw_changed: "Último cambio: {at}", admin_pw_never: "Nunca cambiada.",
+    sess_d: "Las sesiones de inicio caducan tras este tiempo. 0 significa nunca.",
+    disc_enabled_desc: "Escanea catálogos periódicamente en busca de modelos recién gratuitos.", disc_interval_desc: "Cada cuánto se ejecuta el descubrimiento.",
+    gw_th_name: "Nombre", gw_th_key: "Clave", gw_th_created: "Creado",
+    pt_name: "Proveedor", pt_url: "URL", pt_keys: "Claves", pt_models: "Modelos", pt_free: "Gratis",
+    prov_add_show: "Añadir proveedor", prov_add_hide: "Ocultar formulario", prov_cancel: "Cancelar",
+    np_key_ph: "api-key (opcional)", prov_auto_note: "Deja los modelos vacíos para descubrir gratis automáticamente desde el catálogo.",
+    prov_fetch: "Obtener modelos",
+    srv_lan: "Permitir acceso LAN", srv_lan_on: "Activado: accesible vía", srv_lan_off: "Desactivado: solo loopback.",
+    srv_lan_docker: "Vista del contenedor: son direcciones del contenedor. Desde tu LAN usa la dirección del host (ejecuta hostname -I en el host).",
+    srv_lan_nokey: "Sin claves de gateway: /v1 está abierto a toda la red. Crea una en Acceso.",
+  },
+  "fr": {
+    theme_title: "Thème : {mode}. Cliquez pour changer.", theme_system: "suivre le système", theme_light: "clair", theme_dark: "sombre",
+    prov_preset: "Préréglage", prov_custom: "Personnalisé", prov_models_pick: "Modèles (gratuits pré-cochés) :",
+    prov_no_catalog: "Pas encore de catalogue — collez les modèles ci-dessous ; ils apparaîtront ici après le premier rafraîchissement.",
+    prov_truncated: "Affichage des 200 premiers.", prov_paid_tag: "(payant)",
+    prov_flags_note: "Le catalogue récupère la liste /models pour vérifier la disponibilité. Si des prix sont publiés, la gratuité est déduite des prix, sans sondage.",
+    srv_port_desc: "Prend effet après un redémarrage.", tun_timeout_desc: "Plafond par requête. Appliqué immédiatement.",
+    tun_refresh_desc: "Fréquence de rechargement des catalogues des fournisseurs.", tun_redact_desc: "Retire les clés des journaux et des charges envoyées en amont.",
+    tun_socks: "Hôtes privilégiant SOCKS", tun_socks_desc: "Hôtes séparés par des virgules qui préfèrent le proxy SOCKS.",
+    tun_retention_desc: "Nombre de jours d'historique d'utilisation conservés.", tun_timezone_desc: "Limites quotidiennes de quota, p. ex. America/Los_Angeles.",
+    admin_pass_t: "Mot de passe administrateur", admin_pass_d: "Le changer déconnecte toutes les sessions.",
+    admin_pw_changed: "Dernière modification : {at}", admin_pw_never: "Jamais modifié.",
+    sess_d: "Les sessions expirent après cette durée. 0 signifie jamais.",
+    disc_enabled_desc: "Analyse périodiquement les catalogues pour trouver de nouveaux modèles gratuits.", disc_interval_desc: "Fréquence d'exécution de la découverte.",
+    gw_th_name: "Nom", gw_th_key: "Clé", gw_th_created: "Créé",
+    pt_name: "Fournisseur", pt_url: "URL", pt_keys: "Clés", pt_models: "Modèles", pt_free: "Gratuit",
+    prov_add_show: "Ajouter un fournisseur", prov_add_hide: "Masquer le formulaire", prov_cancel: "Annuler",
+    np_key_ph: "api-key (facultatif)", prov_auto_note: "Laissez les modèles vides pour découvrir automatiquement les gratuits depuis le catalogue.",
+    prov_fetch: "Récupérer les modèles",
+    srv_lan: "Autoriser l'accès LAN", srv_lan_on: "Activé : accessible via", srv_lan_off: "Désactivé : loopback uniquement.",
+    srv_lan_docker: "Vue conteneur : ce sont des adresses de conteneur. Depuis votre LAN, utilisez l'adresse de l'hôte (exécutez hostname -I sur l'hôte).",
+    srv_lan_nokey: "Aucune clé de passerelle : /v1 est ouvert à tout le réseau. Créez-en une dans Accès.",
+  },
+  "de": {
+    theme_title: "Design: {mode}. Klicken zum Wechseln.", theme_system: "System folgen", theme_light: "hell", theme_dark: "dunkel",
+    prov_preset: "Voreinstellung", prov_custom: "Benutzerdefiniert", prov_models_pick: "Modelle (kostenlose vorausgewählt):",
+    prov_no_catalog: "Noch kein Katalog — Modelle unten einfügen; sie erscheinen nach der ersten Aktualisierung hier.",
+    prov_truncated: "Zeigt die ersten 200.", prov_paid_tag: "(kostenpflichtig)",
+    prov_flags_note: "Der Katalog ruft die /models-Liste für die Verfügbarkeit ab. Werden Preise veröffentlicht, wird kostenlos anhand der Preise erkannt, ohne Testaufruf.",
+    srv_port_desc: "Wirkt nach einem Neustart.", tun_timeout_desc: "Obergrenze pro Anfrage. Gilt sofort.",
+    tun_refresh_desc: "Wie oft Anbieterkataloge neu geladen werden.", tun_redact_desc: "Entfernt Schlüssel aus Protokollen und Upstream-Payloads.",
+    tun_socks: "SOCKS-bevorzugte Hosts", tun_socks_desc: "Kommagetrennte Hosts, die den SOCKS-Proxy bevorzugen.",
+    tun_retention_desc: "Wie viele Tage Nutzungsverlauf behalten werden.", tun_timezone_desc: "Tagesgrenzen für Kontingente, z. B. America/Los_Angeles.",
+    admin_pass_t: "Admin-Passwort", admin_pass_d: "Eine Änderung meldet alle Sitzungen ab.",
+    admin_pw_changed: "Zuletzt geändert: {at}", admin_pw_never: "Nie geändert.",
+    sess_d: "Anmeldesitzungen laufen danach ab. 0 bedeutet nie.",
+    disc_enabled_desc: "Durchsucht Kataloge regelmäßig nach neu kostenlosen Modellen.", disc_interval_desc: "Wie oft die Erkennung läuft.",
+    gw_th_name: "Name", gw_th_key: "Schlüssel", gw_th_created: "Erstellt",
+    pt_name: "Anbieter", pt_url: "URL", pt_keys: "Schlüssel", pt_models: "Modelle", pt_free: "Kostenlos",
+    prov_add_show: "Anbieter hinzufügen", prov_add_hide: "Formular ausblenden", prov_cancel: "Abbrechen",
+    np_key_ph: "api-key (optional)", prov_auto_note: "Modelle leer lassen, um kostenlose automatisch aus dem Katalog zu finden.",
+    prov_fetch: "Modelle abrufen",
+    srv_lan: "LAN-Zugriff erlauben", srv_lan_on: "An: erreichbar über", srv_lan_off: "Aus: nur Loopback.",
+    srv_lan_docker: "Container-Ansicht: das sind Container-Adressen. Aus deinem LAN die Host-Adresse verwenden (auf dem Host hostname -I ausführen).",
+    srv_lan_nokey: "Keine Gateway-Schlüssel: /v1 ist für das ganze Netz offen. Erstelle einen unter Zugriff.",
+  },
+  "ru": {
+    theme_title: "Тема: {mode}. Нажмите, чтобы переключить.", theme_system: "как в системе", theme_light: "светлая", theme_dark: "тёмная",
+    prov_preset: "Пресет", prov_custom: "Свой", prov_models_pick: "Модели (бесплатные отмечены):",
+    prov_no_catalog: "Каталога пока нет — вставьте модели ниже; они появятся здесь после первого обновления.",
+    prov_truncated: "Показаны первые 200.", prov_paid_tag: "(платно)",
+    prov_flags_note: "Каталог запрашивает список /models для проверки доступности. Если цены опубликованы, бесплатность определяется по цене, без проверки запросом.",
+    srv_port_desc: "Применится после перезапуска.", tun_timeout_desc: "Лимит на запрос. Применяется сразу.",
+    tun_refresh_desc: "Как часто перезагружаются каталоги провайдеров.", tun_redact_desc: "Убирает ключи из журналов и полезной нагрузки к провайдеру.",
+    tun_socks: "Узлы с приоритетом SOCKS", tun_socks_desc: "Узлы через запятую, предпочитающие SOCKS-прокси.",
+    tun_retention_desc: "Сколько дней истории использования хранить.", tun_timezone_desc: "Границы суточной квоты, напр. America/Los_Angeles.",
+    admin_pass_t: "Пароль администратора", admin_pass_d: "Смена завершит все сессии.",
+    admin_pw_changed: "Последнее изменение: {at}", admin_pw_never: "Не менялся.",
+    sess_d: "Сессии входа истекают через это время. 0 — никогда.",
+    disc_enabled_desc: "Периодически сканирует каталоги на новые бесплатные модели.", disc_interval_desc: "Как часто запускается обнаружение.",
+    gw_th_name: "Имя", gw_th_key: "Ключ", gw_th_created: "Создан",
+    pt_name: "Провайдер", pt_url: "URL", pt_keys: "Ключи", pt_models: "Модели", pt_free: "Бесплатно",
+    prov_add_show: "Добавить провайдера", prov_add_hide: "Скрыть форму", prov_cancel: "Отмена",
+    np_key_ph: "api-key (необязательно)", prov_auto_note: "Оставьте модели пустыми, чтобы автоматически найти бесплатные из каталога.",
+    prov_fetch: "Получить модели",
+    srv_lan: "Разрешить доступ из LAN", srv_lan_on: "Вкл.: доступно через", srv_lan_off: "Выкл.: только loopback.",
+    srv_lan_docker: "Вид из контейнера: это адреса контейнера. Из LAN используйте адрес хоста (выполните hostname -I на хосте).",
+    srv_lan_nokey: "Нет ключей шлюза: /v1 открыт всей сети. Создайте ключ в разделе Доступ.",
+  },
+  "pt": {
+    theme_title: "Tema: {mode}. Clique para alternar.", theme_system: "seguir o sistema", theme_light: "claro", theme_dark: "escuro",
+    prov_preset: "Predefinição", prov_custom: "Personalizado", prov_models_pick: "Modelos (gratuitos pré-marcados):",
+    prov_no_catalog: "Ainda sem catálogo — cole os modelos abaixo; eles aparecem aqui após a primeira atualização.",
+    prov_truncated: "Mostrando os primeiros 200.", prov_paid_tag: "(pago)",
+    prov_flags_note: "O catálogo busca a lista /models para verificar a disponibilidade. Se os preços forem publicados, o gratuito é detectado pelo preço, sem sondagem.",
+    srv_port_desc: "Vale após reiniciar.", tun_timeout_desc: "Limite por pedido. Aplica-se de imediato.",
+    tun_refresh_desc: "Com que frequência os catálogos dos provedores são recarregados.", tun_redact_desc: "Remove chaves dos logs e das cargas enviadas ao provedor.",
+    tun_socks: "Hosts com SOCKS preferencial", tun_socks_desc: "Hosts separados por vírgulas que preferem o proxy SOCKS.",
+    tun_retention_desc: "Quantos dias de histórico de uso manter.", tun_timezone_desc: "Limites diários de cota, ex.: America/Los_Angeles.",
+    admin_pass_t: "Senha de administrador", admin_pass_d: "Alterá-la encerra todas as sessões.",
+    admin_pw_changed: "Última alteração: {at}", admin_pw_never: "Nunca alterada.",
+    sess_d: "As sessões de login expiram após esse tempo. 0 significa nunca.",
+    disc_enabled_desc: "Verifica catálogos periodicamente em busca de modelos recém-gratuitos.", disc_interval_desc: "Com que frequência a descoberta é executada.",
+    gw_th_name: "Nome", gw_th_key: "Chave", gw_th_created: "Criado",
+    pt_name: "Provedor", pt_url: "URL", pt_keys: "Chaves", pt_models: "Modelos", pt_free: "Grátis",
+    prov_add_show: "Adicionar provedor", prov_add_hide: "Ocultar formulário", prov_cancel: "Cancelar",
+    np_key_ph: "api-key (opcional)", prov_auto_note: "Deixe os modelos vazios para descobrir gratuitos automaticamente pelo catálogo.",
+    prov_fetch: "Buscar modelos",
+    srv_lan: "Permitir acesso LAN", srv_lan_on: "Ligado: acessível via", srv_lan_off: "Desligado: apenas loopback.",
+    srv_lan_docker: "Visão do contêiner: são endereços do contêiner. Na sua LAN use o endereço do host (execute hostname -I no host).",
+    srv_lan_nokey: "Sem chaves de gateway: /v1 está aberto a toda a rede. Crie uma em Acesso.",
+  },
+  "it": {
+    theme_title: "Tema: {mode}. Clicca per cambiare.", theme_system: "segui il sistema", theme_light: "chiaro", theme_dark: "scuro",
+    prov_preset: "Preset", prov_custom: "Personalizzato", prov_models_pick: "Modelli (gratuiti preselezionati):",
+    prov_no_catalog: "Nessun catalogo ancora — incolla i modelli sotto; appariranno qui dopo il primo aggiornamento.",
+    prov_truncated: "Mostrati i primi 200.", prov_paid_tag: "(a pagamento)",
+    prov_flags_note: "Il catalogo recupera l'elenco /models per la disponibilità. Se i prezzi sono pubblicati, il gratuito si rileva dai prezzi, senza sondaggi.",
+    srv_port_desc: "Ha effetto dopo un riavvio.", tun_timeout_desc: "Limite per richiesta. Si applica subito.",
+    tun_refresh_desc: "Ogni quanto vengono ricaricati i cataloghi dei provider.", tun_redact_desc: "Rimuove le chiavi dai log e dai payload verso l'upstream.",
+    tun_socks: "Host con SOCKS preferito", tun_socks_desc: "Host separati da virgole che preferiscono il proxy SOCKS.",
+    tun_retention_desc: "Quanti giorni di cronologia d'uso conservare.", tun_timezone_desc: "Confini della quota giornaliera, es. America/Los_Angeles.",
+    admin_pass_t: "Password amministratore", admin_pass_d: "Cambiarla disconnette tutte le sessioni.",
+    admin_pw_changed: "Ultima modifica: {at}", admin_pw_never: "Mai modificata.",
+    sess_d: "Le sessioni di accesso scadono dopo questo tempo. 0 significa mai.",
+    disc_enabled_desc: "Scansiona periodicamente i cataloghi per modelli diventati gratuiti.", disc_interval_desc: "Ogni quanto viene eseguita la scoperta.",
+    gw_th_name: "Nome", gw_th_key: "Chiave", gw_th_created: "Creato",
+    pt_name: "Provider", pt_url: "URL", pt_keys: "Chiavi", pt_models: "Modelli", pt_free: "Gratuito",
+    prov_add_show: "Aggiungi provider", prov_add_hide: "Nascondi modulo", prov_cancel: "Annulla",
+    np_key_ph: "api-key (facoltativo)", prov_auto_note: "Lascia vuoti i modelli per scoprire automaticamente i gratuiti dal catalogo.",
+    prov_fetch: "Recupera modelli",
+    srv_lan: "Consenti accesso LAN", srv_lan_on: "Attivo: raggiungibile via", srv_lan_off: "Disattivo: solo loopback.",
+    srv_lan_docker: "Vista container: sono indirizzi del container. Dalla LAN usa l'indirizzo dell'host (esegui hostname -I sull'host).",
+    srv_lan_nokey: "Nessuna chiave gateway: /v1 è aperto a tutta la rete. Creane una in Accesso.",
+  },
+  "ar": {
+    theme_title: "السمة: {mode}. انقر للتبديل.", theme_system: "اتباع النظام", theme_light: "فاتح", theme_dark: "داكن",
+    prov_preset: "إعداد مسبق", prov_custom: "مخصص", prov_models_pick: "النماذج (المجانية محددة مسبقًا):",
+    prov_no_catalog: "لا يوجد كتالوج بعد — الصق النماذج أدناه؛ ستظهر هنا بعد أول تحديث.",
+    prov_truncated: "يتم عرض أول 200.", prov_paid_tag: "(مدفوع)",
+    prov_flags_note: "يجلب الكتالوج قائمة /models للتحقق من التوفر. عند نشر الأسعار يُستدل على المجانية من السعر دون فحص.",
+    srv_port_desc: "يسري بعد إعادة التشغيل.", tun_timeout_desc: "الحد الأقصى لكل طلب. يُطبق فورًا.",
+    tun_refresh_desc: "عدد مرات إعادة جلب كتالوجات المزودين.", tun_redact_desc: "يزيل المفاتيح من السجلات ومن البيانات المرسلة للمزود.",
+    tun_socks: "مضيفات تفضّل SOCKS", tun_socks_desc: "مضيفات مفصولة بفواصل تفضّل وسيط SOCKS.",
+    tun_retention_desc: "عدد أيام سجل الاستخدام المحفوظة.", tun_timezone_desc: "حدود الحصة اليومية، مثل America/Los_Angeles.",
+    admin_pass_t: "كلمة مرور المسؤول", admin_pass_d: "تغييرها يسجّل الخروج من كل الجلسات.",
+    admin_pw_changed: "آخر تغيير: {at}", admin_pw_never: "لم تتغير قط.",
+    sess_d: "تنتهي جلسات الدخول بعد هذه المدة. 0 تعني أبدًا.",
+    disc_enabled_desc: "يفحص الكتالوجات دوريًا بحثًا عن نماذج أصبحت مجانية.", disc_interval_desc: "عدد مرات تشغيل الاكتشاف.",
+    gw_th_name: "الاسم", gw_th_key: "المفتاح", gw_th_created: "أُنشئ",
+    pt_name: "المزود", pt_url: "URL", pt_keys: "المفاتيح", pt_models: "النماذج", pt_free: "مجاني",
+    prov_add_show: "إضافة مزود", prov_add_hide: "إخفاء النموذج", prov_cancel: "إلغاء",
+    np_key_ph: "api-key (اختياري)", prov_auto_note: "اترك النماذج فارغة لاكتشاف المجاني تلقائيًا من الكتالوج.",
+    prov_fetch: "جلب النماذج",
+    srv_lan: "السماح بالوصول عبر LAN", srv_lan_on: "مفعّل: يمكن الوصول عبر", srv_lan_off: "معطّل: loopback فقط.",
+    srv_lan_docker: "عرض الحاوية: هذه عناوين الحاوية. من شبكتك استخدم عنوان المضيف (نفّذ hostname -I على المضيف).",
+    srv_lan_nokey: "لا توجد مفاتيح بوابة: /v1 مفتوح لكل الشبكة. أنشئ واحدًا في الوصول.",
+  },
+};
+
+// Counted forms, selected by Intl.PluralRules when the caller passes a numeric
+// {n}. English needs only a singular; Russian needs one/few/many. A locale
+// without a form reads its own base wording, never the English variant.
+const PLURAL_STRINGS = {
+  en: {
+    gw_on_one: "required (1 key)",
+    prov_rot_one: "1 key configured; requests use it.",
+    disc_probe_pending_one: "1 model left",
+    logs_tries_one: "1 attempt",
+    sess_revoked_one: "Signed out 1 session.",
+    audit_note_one: "1 entry from {p} (newest first).",
+  },
+  "ru": {
+    gw_on_one: "требуется ({n} ключ)",
+    gw_on_few: "требуется ({n} ключа)",
+    gw_on_many: "требуется ({n} ключей)",
+    logs_tries_one: "{n} попытка",
+    logs_tries_few: "{n} попытки",
+    logs_tries_many: "{n} попыток",
+  },
+};
+
 for (const [code, strings] of Object.entries(REQUEST_LOG_STRINGS)) {
   Object.assign(STRINGS[code], strings);
 }
@@ -2335,14 +2591,24 @@ for (const [code, strings] of Object.entries(TUNING_STRINGS)) {
 for (const [code, strings] of Object.entries(PICKER_STRINGS)) {
   Object.assign(STRINGS[code], strings);
 }
+for (const [code, strings] of Object.entries(COMPLETION_STRINGS)) {
+  Object.assign(STRINGS[code], strings);
+}
+for (const [code, strings] of Object.entries(PLURAL_STRINGS)) {
+  Object.assign(STRINGS[code], strings);
+}
 
 export function keyCount() {
   return Object.keys(STRINGS.en || {}).length;
 }
 
+// Plural variants are optional per language: a locale without `_one` reads its
+// own base wording, never English. They are not counted as missing.
+const PLURAL_SUFFIX = /_(zero|one|two|few|many|other)$/;
+
 // Keys present in `en` but missing in another language (empty means clean).
 export function missingKeys(code) {
   const base = new Set(Object.keys(STRINGS.en || {}));
   const other = new Set(Object.keys(STRINGS[code] || {}));
-  return [...base].filter((key) => !other.has(key));
+  return [...base].filter((key) => !PLURAL_SUFFIX.test(key) && !other.has(key));
 }

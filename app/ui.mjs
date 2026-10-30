@@ -335,7 +335,7 @@ input:hover, select:hover { border-color: var(--muted); }
 input:focus, select:focus {
   outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring);
 }
-select { max-width: 280px; padding-right: 10px; }
+select { max-width: 280px; padding-inline-end: 10px; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
 .row label { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
 .check { font-size: 13px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
@@ -350,12 +350,13 @@ select { max-width: 280px; padding-right: 10px; }
   transition: background .18s;
 }
 .switch .slider:before {
-  content: ""; position: absolute; height: 16px; width: 16px; left: 3px; top: 3px;
+  content: ""; position: absolute; height: 16px; width: 16px; inset-inline-start: 3px; top: 3px;
   background: var(--panel); border-radius: 50%; transition: transform .18s;
   box-shadow: 0 1px 3px rgba(0, 0, 0, .28);
 }
 .switch input:checked + .slider { background: var(--accent); }
 .switch input:checked + .slider:before { transform: translateX(18px); }
+[dir="rtl"] .switch input:checked + .slider:before { transform: translateX(-18px); }
 .switch input:focus-visible + .slider { outline: 2px solid var(--accent); outline-offset: 2px; }
 .title-switch { display: flex; align-items: center; gap: 10px; }
 .title-switch .switch { margin-top: 0; }
@@ -380,7 +381,7 @@ th {
 tbody tr { transition: background .12s; }
 tbody tr:hover { background: var(--hover); }
 tbody tr:last-child td { border-bottom: 0; }
-td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.num, th.num { text-align: end; font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* The five numeric columns fit their own header instead of claiming a share
    of the width; the room they give up goes to the attempts column. */
 #logs th.num, #logs td.num { width: 1%; }
@@ -444,7 +445,7 @@ td.muted { color: var(--muted); }
 .entry:first-child { border-top: 0; }
 .entry .mono { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .entry .idx { width: 34px; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
-.entry .st { font-size: 12px; color: var(--muted); min-width: 96px; text-align: right; }
+.entry .st { font-size: 12px; color: var(--muted); min-width: 96px; text-align: end; }
 .entry button { width: 30px; height: 30px; padding: 0; border-radius: 8px; border-color: transparent; background: transparent; color: var(--muted); }
 .entry button:hover { background: var(--hover); color: var(--fg); }
 .entry button.danger:hover { background: var(--bad-soft); color: var(--bad); }
@@ -460,11 +461,11 @@ td.muted { color: var(--muted); }
 .setrow .set-desc { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
 .setrow .set-ctl { flex: none; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .setrow .set-ctl .switch { margin-top: 0; }
-.setrow input.mono { text-align: right; }
+.setrow input.mono { text-align: end; }
 /* Searchable select: the timezone list is ~420 entries, so it is a combobox
    over a filtered listbox rather than a <select> nobody can scan. */
 .combo { position: relative; display: block; }
-.combo input { width: 220px; padding-right: 26px; }
+.combo input { width: 220px; padding-inline-end: 26px; }
 /* Zone ids stay left-to-right even in an RTL interface: they are identifiers,
    and a reversed "Asia/Shanghai" reads as a different string. */
 .setrow .combo input { direction: ltr; text-align: left; font-family: var(--mono); }
@@ -536,7 +537,7 @@ body[data-gate="1"] main#app { display: none; }
 
 /* ===== Toast ===== */
 #toast {
-  position: fixed; right: 20px; bottom: 20px; z-index: 60;
+  position: fixed; inset-inline-end: 20px; bottom: 20px; z-index: 60;
   padding: 12px 16px; border-radius: 11px; max-width: 430px;
   background: var(--panel); border: 1px solid var(--line); color: var(--fg);
   box-shadow: var(--shadow-pop); font-size: 13px;
@@ -544,8 +545,8 @@ body[data-gate="1"] main#app { display: none; }
   transition: opacity .18s, transform .18s; pointer-events: none;
 }
 #toast.show { opacity: 1; transform: none; }
-#toast.good { border-left: 3px solid var(--ok); }
-#toast.err { border-left: 3px solid var(--bad); }
+#toast.good { border-inline-start: 3px solid var(--ok); }
+#toast.err { border-inline-start: 3px solid var(--bad); }
 
 /* ===== Modal ===== */
 .overlay {
@@ -598,6 +599,9 @@ body[data-gate="1"] main#app { display: none; }
   .cards { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
   .modal { padding: 16px 16px 20px; }
   .overlay { padding: 24px 10px; }
+  /* A toast pinned to one corner covers a third of a phone screen; use the
+     full width instead. */
+  #toast { inset-inline: 10px; max-width: none; }
 }
 @media (max-width: 420px) {
   main { padding: 14px 10px 48px; }
@@ -626,7 +630,7 @@ body[data-gate="1"] main#app { display: none; }
     <div class="head-actions">
       <select id="lang" title="Language" data-i18n-title="lang_name"></select>
       <button id="theme-btn" class="icononly" type="button" title="Theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h20v14H2zM8 21h8M12 17v4"/></svg></button>
-      <button id="logout-top" class="icononly" style="display:none" data-i18n-title="logout" aria-label="Log out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></button>
+      <button id="logout-top" class="icononly" style="display:none" data-i18n-title="logout" data-i18n-aria="logout" aria-label="Log out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></button>
     </div>
   </div>
 </header>
@@ -960,9 +964,27 @@ function detectLang() {
   return hit ? hit[0] : 'en';
 }
 
+function pluralCategory(n) {
+  try {
+    return new Intl.PluralRules(lang).select(Number(n));
+  } catch (error) {
+    return 'other';
+  }
+}
+
 function t(key, vars) {
   const table = FR_STR[lang] || {};
-  const value = table[key] !== undefined ? table[key] : (FR_STR.en[key] !== undefined ? FR_STR.en[key] : key);
+  const base = FR_STR.en || {};
+  let value;
+  if (vars && typeof vars.n === 'number') {
+    const variant = key + '_' + pluralCategory(vars.n);
+    value = table[variant] !== undefined ? table[variant]
+      : table[key] !== undefined ? table[key]
+        : base[variant] !== undefined ? base[variant]
+          : base[key] !== undefined ? base[key] : key;
+  } else {
+    value = table[key] !== undefined ? table[key] : (base[key] !== undefined ? base[key] : key);
+  }
   if (!vars) return value;
   // NOTE: this script is embedded in a JS template literal, so backslashes
   // must be doubled here to arrive intact in the served page.
@@ -1044,6 +1066,9 @@ if (themeQuery && themeQuery.addEventListener) {
 
 function applyI18n() {
   document.documentElement.lang = lang;
+  // Arabic is the only right-to-left locale; the layout flips with the
+  // attribute, and the CSS keeps a few directional rules in logical form.
+  document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
   document.querySelectorAll('[data-i18n]').forEach((node) => {
     const value = t(node.dataset.i18n);
     if (/<[a-z][^>]*>/i.test(value)) node.innerHTML = value;
@@ -1054,6 +1079,9 @@ function applyI18n() {
   });
   document.querySelectorAll('[data-i18n-title]').forEach((node) => {
     node.setAttribute('title', t(node.dataset.i18nTitle));
+  });
+  document.querySelectorAll('[data-i18n-aria]').forEach((node) => {
+    node.setAttribute('aria-label', t(node.dataset.i18nAria));
   });
   const select = el('lang');
   if (select && !select.options.length) {
@@ -1132,6 +1160,7 @@ function table(headers, rows) {
   const headRow = document.createElement('tr');
   for (const header of headers) {
     const cell = document.createElement('th');
+    cell.scope = 'col';
     cell.textContent = header.label;
     if (header.num) cell.className = 'num';
     headRow.appendChild(cell);
@@ -2252,7 +2281,11 @@ let activeTab = 'status';
 function switchTab(name) {
   activeTab = name;
   for (const button of document.querySelectorAll('#tabs button')) {
-    button.classList.toggle('active', button.dataset.tab === name);
+    const active = button.dataset.tab === name;
+    button.classList.toggle('active', active);
+    // Screen readers announce the current section; the colour alone does not.
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
   }
   for (const pane of document.querySelectorAll('[data-pane]')) {
     pane.hidden = pane.dataset.pane !== name;
@@ -2695,6 +2728,7 @@ function logTable(entries) {
   const headRow = document.createElement('tr');
   for (const header of headers) {
     const cell = document.createElement('th');
+    cell.scope = 'col';
     cell.textContent = header.label;
     if (header.num) cell.className = 'num';
     headRow.appendChild(cell);
@@ -3006,7 +3040,7 @@ function renderSession() {
     : t('sess_never');
   const changedAt = state.webui.passwordChangedAt;
   el('admin-pw-changed').textContent = changedAt
-    ? t('admin_pw_changed', { at: new Date(changedAt).toLocaleString() })
+    ? t('admin_pw_changed', { at: new Date(changedAt).toLocaleString(lang) })
     : t('admin_pw_never');
 }
 
@@ -3033,7 +3067,7 @@ function renderAudit() {
         { label: t('th_audit_result') },
       ],
       entries.map((entry) => [
-        td(entry.at ? new Date(entry.at).toLocaleString() : '—'),
+        td(entry.at ? new Date(entry.at).toLocaleString(lang) : '—'),
         td(entry.actor, 'mono'),
         td(entry.action, 'mono'),
         td(entry.target || '—', 'mono'),
@@ -3105,8 +3139,8 @@ function renderActiveSessions() {
       };
       return [
         td(row.current ? row.id + ' · ' + t('sess_current') : row.id, 'mono'),
-        td(row.createdAt ? new Date(row.createdAt).toLocaleString() : '—'),
-        td(row.expiresAt ? new Date(row.expiresAt).toLocaleString() : t('sess_never')),
+        td(row.createdAt ? new Date(row.createdAt).toLocaleString(lang) : '—'),
+        td(row.expiresAt ? new Date(row.expiresAt).toLocaleString(lang) : t('sess_never')),
         td(row.ip || '—', 'mono'),
         td(row.client || '—'),
         td(revoke),

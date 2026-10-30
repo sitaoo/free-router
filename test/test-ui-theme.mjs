@@ -45,6 +45,18 @@ const inline = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[
 assert.equal(inline.length >= 2, true, 'page has boot and runtime scripts');
 assert.doesNotThrow(() => new Function(inline.join('\n')), 'inline scripts must parse together');
 
+// Accessibility and right-to-left: Arabic flips the document, icon buttons
+// carry a translated accessible name, table headers declare their scope, and
+// the active tab is announced.
+assert.match(page, /document\.documentElement\.dir = lang === 'ar' \? 'rtl' : 'ltr'/);
+assert.match(page, /\[dir="rtl"\]/, 'RTL-specific rules present');
+assert.match(page, /data-i18n-aria="logout"/, 'logout icon button needs a translated aria-label');
+assert.match(page, /setAttribute\('aria-label', t\(node\.dataset\.i18nAria\)\)/);
+assert.match(page, /cell\.scope = 'col'/);
+assert.match(page, /setAttribute\('aria-current', 'page'\)/);
+// Dates follow the selected locale instead of the browser default.
+assert.equal(/toLocaleString\(\)/.test(page), false, 'dates must pass lang to toLocaleString');
+
 // Provider/discovery controls: verified presets, a probe toggle, a manual run,
 // and the paid-model warning in the model table.
 for (const preset of ['groq', 'cerebras', 'mistral', 'huggingface']) {

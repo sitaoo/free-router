@@ -126,4 +126,22 @@ for (const code of ['en', 'zh-CN', 'zh-TW', 'ja']) {
   assert.equal(missingKeys(code).includes('paid_model_warning'), false, `${code} warning key`);
 }
 
+// 7. Every locale is complete: no key may silently fall back to English.
+for (const [code] of LANGS) {
+  const missing = missingKeys(code);
+  assert.deepEqual(missing, [], `${code} still relies on the English fallback: ${missing.join(', ')}`);
+}
+
+// 8. Counts select a plural variant when the locale ships one; locales without
+// one read their own base wording, never the English variant.
+assert.equal(translate(STRINGS, 'en', 'gw_on', { n: 1 }), 'required (1 key)');
+assert.equal(translate(STRINGS, 'en', 'gw_on', { n: 3 }), 'required (3 keys)');
+assert.equal(translate(STRINGS, 'en', 'logs_tries', { n: 1 }), '1 attempt');
+assert.equal(translate(STRINGS, 'ru', 'gw_on', { n: 1 }), 'требуется (1 ключ)');
+assert.equal(translate(STRINGS, 'ru', 'gw_on', { n: 3 }), 'требуется (3 ключа)');
+assert.equal(translate(STRINGS, 'ru', 'gw_on', { n: 7 }), 'требуется (7 ключей)');
+// A locale without a variant keeps its own sentence, not the English one.
+assert.equal(translate(STRINGS, 'de', 'prov_rot', { n: 1 }), STRINGS.de.prov_rot.replace('{n}', '1'));
+assert.equal(translate(STRINGS, 'en', 'gw_on', { n: 'main' }), 'required (main keys)');
+
 console.log('i18n unit tests passed');
