@@ -849,6 +849,16 @@ body[data-gate="1"] main#app { display: none; }
           </div>
         </div>
         <p class="note" id="sess-note"></p>
+        <div class="setrow" style="display:block">
+          <div class="set-text">
+            <div class="set-title" data-i18n="sess_list_t">Active sessions</div>
+            <div class="set-desc" data-i18n="sess_list_d">Every browser signed in right now. Revoking one signs that browser out immediately; it has to log in again.</div>
+          </div>
+          <div id="sessions"></div>
+          <div class="row" style="justify-content:flex-end">
+            <button id="sess-revoke-others" class="ghost" data-i18n="sess_revoke_others">Sign out everywhere else</button>
+          </div>
+        </div>
       </div>
     </section>
   </div>
@@ -2804,6 +2814,75 @@ function renderSession() {
     : t('admin_pw_never');
 }
 
+// Admin sessions are listed from their own endpoint: /api/state already
+// carries the caller's expiry, but the full list changes rarely and should not
+// ride the 5-second state poll.
+let activeSessions = null;
+function renderActiveSessions() {
+  const host = el('sessions');
+  host.textContent = '';
+  const rows = (activeSessions && activeSessions.sessions) || [];
+  if (!rows.length) {
+    const p = document.createElement('p');
+    p.className = 'note';
+    p.style.margin = '0';
+    p.textContent = t('sess_none');
+    host.appendChild(p);
+    return;
+  }
+  host.appendChild(table(
+    [
+      { label: t('th_sess_id') },
+      { label: t('th_sess_created') },
+      { label: t('th_sess_expires') },
+      { label: t('th_sess_ip') },
+      { label: t('th_sess_client') },
+      { label: '' },
+    ],
+    rows.map((row) => {
+      const revoke = document.createElement('button');
+      revoke.className = 'quiet danger';
+      revoke.textContent = row.current ? t('logout') : t('sess_revoke');
+      revoke.onclick = async () => {
+        if (!confirm(row.current ? t('sess_confirm_self') : t('sess_confirm', { id: row.id }))) return;
+        revoke.disabled = true;
+        try {
+          const result = await api('api/sessions', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'revoke', id: row.id }),
+          });
+          if (result.signedOut) {
+            showLogin();
+            return;
+          }
+          toast(t('sess_revoked', { n: result.removed }), 'good');
+          await refreshActiveSessions();
+        } catch (error) {
+          toast(String(error.message || error), 'err');
+          revoke.disabled = false;
+        }
+      };
+      return [
+        td(row.current ? row.id + ' · ' + t('sess_current') : row.id, 'mono'),
+        td(row.createdAt ? new Date(row.createdAt).toLocaleString() : '—'),
+        td(row.expiresAt ? new Date(row.expiresAt).toLocaleString() : t('sess_never')),
+        td(row.ip || '—', 'mono'),
+        td(row.client || '—'),
+        td(revoke),
+      ];
+    }),
+  ));
+}
+
+async function refreshActiveSessions() {
+  try {
+    activeSessions = await api('api/sessions');
+    renderActiveSessions();
+  } catch (error) {
+    if (String(error.message || '').includes('login')) showLogin();
+  }
+}
+
 /* ===== Timezone combobox =====
    A plain <select> of ~420 IANA zones is unusable by scrolling, and a free-text
    box let typos through to the config where they only surfaced in the log after
@@ -3092,6 +3171,7 @@ function bindOnce() {
       switchTab(button.dataset.tab);
       // Fetch on first visit; the interval keeps it fresh while visible.
       if (button.dataset.tab === 'logs') refreshLogs(true);
+      if (button.dataset.tab === 'settings') refreshActiveSessions();
     };
   }
   el('logs-refresh').onclick = () => refreshLogs(false);
@@ -3163,6 +3243,19 @@ function bindOnce() {
       el('admin-pass').value = '';
       toast(t('admin_changed'), 'good');
       showLogin();
+    } catch (error) {
+      toast(String(error.message || error), 'err');
+    }
+  };
+  el('sess-revoke-others').onclick = async () => {
+    if (!confirm(t('sess_others_confirm'))) return;
+    try {
+      const result = await api('api/sessions', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'revoke-others' }),
+      });
+      toast(t('sess_revoked', { n: result.removed }), 'good');
+      await refreshActiveSessions();
     } catch (error) {
       toast(String(error.message || error), 'err');
     }
@@ -3318,6 +3411,7 @@ function showLogin() {
   el('logout-top').style.display = 'none';
   state = null;
   logsState = null;
+  activeSessions = null;
   applyI18n();
 }
 

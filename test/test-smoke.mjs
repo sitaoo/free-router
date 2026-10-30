@@ -2669,6 +2669,54 @@ try {
     }
   }
 
+  // Session manager: the admin can see every signed-in browser, sign out all
+  // the others, and revoke their own session (which clears the cookie). The
+  // listing carries a hash id, never the token.
+  {
+    const loginAs = async () => {
+      const response = await fetch(`${base}/api/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: 's3cret-newpw' }),
+      });
+      assert.equal(response.status, 200);
+      return String(response.headers.get('set-cookie') || '').split(';')[0];
+    };
+    const cookieA = await loginAs();
+    const cookieB = await loginAs();
+    const post = (body) =>
+      fetch(`${base}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: cookieA, 'Sec-Fetch-Site': 'same-origin' },
+        body: JSON.stringify(body),
+      });
+
+    const listing = await fetch(`${base}/api/sessions`, { headers: { Cookie: cookieA } }).then((res) =>
+      res.json(),
+    );
+    assert.ok(listing.sessions.length >= 2, 'both logins must be listed');
+    assert.equal(listing.sessions.filter((entry) => entry.current).length, 1);
+    const own = listing.sessions.find((entry) => entry.current);
+    assert.match(own.id, /^[0-9a-f]{12}$/);
+    assert.equal(JSON.stringify(listing).includes(cookieA.split('=')[1]), false, 'token leaked');
+    assert.match(own.ip, /127\.0\.0\.1|::1/);
+    assert.equal((await fetch(`${base}/api/sessions`)).status, 401, 'listing needs a session');
+
+    const others = await post({ action: 'revoke-others' });
+    assert.equal(others.status, 200);
+    assert.ok((await others.json()).removed >= 1);
+    assert.equal((await fetch(`${base}/api/state`, { headers: { Cookie: cookieB } })).status, 401);
+    assert.equal((await fetch(`${base}/api/state`, { headers: { Cookie: cookieA } })).status, 200);
+
+    assert.equal((await post({ action: 'revoke', id: '000000000000' })).status, 404);
+    const self = await post({ action: 'revoke', id: own.id });
+    assert.equal(self.status, 200);
+    assert.equal((await self.json()).signedOut, true);
+    assert.match(String(self.headers.get('set-cookie') || ''), /Max-Age=0/);
+    assert.equal((await fetch(`${base}/api/state`, { headers: { Cookie: cookieA } })).status, 401);
+    assert.equal((await post({ action: 'nonsense' })).status, 401, 'the revoked session cannot act');
+  }
+
   // Restart must be last: the server exits and stops answering. Re-login
   // first since the password change above revoked all sessions.
   const relogin = await fetch(`${base}/api/login`, {

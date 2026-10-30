@@ -82,6 +82,7 @@ import {
 } from './net.mjs';
 import { normalizeTimeZone } from './timezones.mjs';
 import { mergeVerdict, verdictFor as cachedVerdictFor } from './verdicts.mjs';
+import { listSessions, pruneExpiredSessions, revokeSessions } from './sessions.mjs';
 import {
   gatewayKeyState,
   gatewayUsageFor,
@@ -456,10 +457,7 @@ function webuiSessionToken(req) {
   return match ? decodeURIComponent(match[1]) : '';
 }
 function pruneWebuiSessions() {
-  const now = Date.now();
-  for (const [token, expiresAt] of webuiSessions) {
-    if (expiresAt <= now) webuiSessions.delete(token);
-  }
+  pruneExpiredSessions(webuiSessions);
 }
 let secretRedactor = config.redactSecrets === false ? null : createSecretRedactor(redactorEnv());
 
@@ -2994,8 +2992,8 @@ function uiGuardFailure(req) {
 function webuiAuthFailure(req) {
   const token = webuiSessionToken(req);
   if (!token || !webuiSessions.has(token)) return 'web UI login required';
-  const expiresAt = webuiSessions.get(token);
-  if (expiresAt <= Date.now()) {
+  const session = webuiSessions.get(token);
+  if (!session || session.expiresAt <= Date.now()) {
     webuiSessions.delete(token);
     return 'session expired, please log in again';
   }
@@ -3969,7 +3967,12 @@ async function handleLogin(req, res) {
   pruneWebuiSessions();
   const ttlHours = sessionTtlHours();
   const expiresAt = ttlHours > 0 ? Date.now() + Math.round(ttlHours * 3600000) : Number.POSITIVE_INFINITY;
-  webuiSessions.set(token, expiresAt);
+  webuiSessions.set(token, {
+    expiresAt,
+    createdAt: Date.now(),
+    ip: clientIp,
+    userAgent: String(req.headers['user-agent'] || ''),
+  });
   // Cookie lifetime mirrors the server-side TTL; "never" becomes a browser
   // session cookie so it still dies with the browser.
   const maxAge = ttlHours > 0 ? `; Max-Age=${Math.round(ttlHours * 3600)}` : '';
@@ -4104,10 +4107,9 @@ async function handler(req, res) {
           passwordChangedAt: config.webui?.passwordChangedAt || null,
           sessionTtlHours: sessionTtlHours(),
           sessionExpiresAt: (() => {
-            const expiresAt = webuiSessions.get(webuiSessionToken(req));
-            return expiresAt === undefined
-              ? null
-              : Number.isFinite(expiresAt) ? new Date(expiresAt).toISOString() : null;
+            const session = webuiSessions.get(webuiSessionToken(req));
+            if (!session) return null;
+            return Number.isFinite(session.expiresAt) ? new Date(session.expiresAt).toISOString() : null;
           })(),
         },
         providers: uiProviderState(),
@@ -4136,6 +4138,53 @@ async function handler(req, res) {
       { ok: true, cleared: clientRequestLog.clear() },
       { 'Cache-Control': 'no-store' },
     );
+  }
+  if (req.method === 'GET' && url.pathname === '/api/sessions') {
+    // Tokens never leave the server: rows carry a hash-derived id only.
+    pruneWebuiSessions();
+    return sendJson(
+      res,
+      200,
+      {
+        ttlHours: sessionTtlHours(),
+        sessions: listSessions(webuiSessions, { currentToken: webuiSessionToken(req) }),
+      },
+      { 'Cache-Control': 'no-store' },
+    );
+  }
+  if (req.method === 'POST' && url.pathname === '/api/sessions') {
+    let body;
+    try {
+      body = await readJson(req, 16 * 1024);
+    } catch (error) {
+      return sendJson(res, 400, { error: { message: String(error), type: 'invalid_request_error' } });
+    }
+    const action = String(body.action || '');
+    const currentToken = webuiSessionToken(req);
+    const clearedCookie = `fr_session=; Path=/; HttpOnly; SameSite=Lax${secureCookie() ? '; Secure' : ''}; Max-Age=0`;
+    if (action === 'revoke') {
+      const id = String(body.id || '').slice(0, 64);
+      const removed = revokeSessions(webuiSessions, { id, currentToken });
+      if (!removed) {
+        return sendJson(res, 404, { error: { message: `unknown session: ${id}`, type: 'not_found' } });
+      }
+      const signedOut = !webuiSessions.has(currentToken);
+      log(`revoked a web UI session via web interface${signedOut ? ' (the current one)' : ''}`);
+      return sendJson(
+        res,
+        200,
+        { ok: true, removed, signedOut },
+        signedOut
+          ? { 'Cache-Control': 'no-store', 'Set-Cookie': clearedCookie }
+          : { 'Cache-Control': 'no-store' },
+      );
+    }
+    if (action === 'revoke-others') {
+      const removed = revokeSessions(webuiSessions, { others: true, currentToken });
+      log(`revoked ${removed} other web UI session(s) via web interface`);
+      return sendJson(res, 200, { ok: true, removed }, { 'Cache-Control': 'no-store' });
+    }
+    return sendJson(res, 400, { error: { message: `unknown action: ${action}`, type: 'invalid_request_error' } });
   }
   if (req.method === 'POST' && url.pathname === '/api/keys') {
     return handleKeyUpdate(req, res);

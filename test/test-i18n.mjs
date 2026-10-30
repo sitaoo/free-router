@@ -24,6 +24,9 @@ const NEW_KEYS = [
   'log_rejected',
   'gw_th_expires', 'gw_th_used', 'gw_limit_ph', 'gw_expires_title', 'gw_limit_prompt',
   'gw_expires_prompt', 'gw_updated', 'gw_edit',
+  'sess_list_t', 'sess_list_d', 'sess_revoke', 'sess_revoke_others', 'sess_others_confirm',
+  'sess_current', 'sess_revoked', 'sess_none', 'sess_confirm', 'sess_confirm_self',
+  'th_sess_id', 'th_sess_created', 'th_sess_expires', 'th_sess_ip', 'th_sess_client',
 ];
 
 // 1. The exact Chinese sentence the operator approved.
@@ -74,6 +77,13 @@ assert.match(STRINGS.en.gw_expires_prompt, /\{n\}/);
 assert.match(STRINGS.en.gw_updated, /\{n\}/);
 assert.equal(STRINGS['zh-CN'].gw_edit, '编辑');
 assert.equal(STRINGS['zh-TW'].gw_edit, '編輯');
+// Session manager strings: the revocation confirmation is a real warning in
+// every language, and the counts keep their placeholder.
+assert.match(STRINGS.en.sess_revoked, /\{n\}/);
+assert.match(STRINGS.en.sess_confirm, /\{id\}/);
+for (const [code] of LANGS) {
+  assert.ok(STRINGS[code].sess_confirm_self.length > 20, `${code} sess_confirm_self`);
+}
 assert.equal(translate(STRINGS, 'zh-CN', 'st_blocked', { at: '10:00' }), '资金不足，10:00 前停用');
 assert.equal(translate(STRINGS, 'xx', 'paid_model_warning'), STRINGS.en.paid_model_warning);
 

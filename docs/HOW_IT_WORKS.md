@@ -123,7 +123,7 @@ Set `enabled: false` to remove `/` and `/api/*` entirely. `trustedHosts` lets th
 There are two independent gates:
 
 - **Web UI + management APIs** (`/`, `/api/*`): admin password login issuing
-an `HttpOnly` session cookie. Sessions expire after `webui.sessionTtlHours` (default 24, `0` means never, browser-session cookie in that case). Changing the password revokes all sessions.
+an `HttpOnly` session cookie. Sessions expire after `webui.sessionTtlHours` (default 24, `0` means never, browser-session cookie in that case). Changing the password revokes all sessions. The Admin section lists the active sessions (hash id, sign-in time, expiry, IP, client) from `GET /api/sessions`, with a per-row **Revoke** and a **Sign out everywhere else** button; revoking the row marked *this browser* clears the cookie, and revoking any other signs that browser out on its next request. Session tokens never leave the server — rows carry a 12-character SHA-256 prefix.
 - **Gateway API** (`/v1/*`): bearer keys once at least one exists (Access
 tab). Without any gateway key, `/v1` stays open for local use.
 
