@@ -48,6 +48,11 @@ for (const placeholder of ['{finish}', '{tools}', '{chars}']) {
 }
 assert.equal('logs_copy_one' in STRINGS.en, false, 'the per-row Copy button is gone');
 assert.equal(STRINGS['zh-CN'].logs_clear, '清除');
+// Timings are shown in seconds, so the headers must say so in every language.
+assert.equal(STRINGS['zh-CN'].th_logs_duration, '耗时 (s)');
+assert.equal(STRINGS['zh-CN'].th_logs_first_token, '首字耗时 (s)');
+assert.equal(STRINGS.en.th_logs_duration, 'Duration (s)');
+assert.equal(STRINGS.en.th_logs_first_token, 'First token (s)');
 assert.equal(STRINGS['zh-CN'].tab_logs, '日志');
 // "chat" / "responses" are API dialects, not spoken ones: the column says API
 // in every language so nobody reads 方言 / Dialekt as a human language.

@@ -380,7 +380,10 @@ th {
 tbody tr { transition: background .12s; }
 tbody tr:hover { background: var(--hover); }
 tbody tr:last-child td { border-bottom: 0; }
-td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* The five numeric columns fit their own header instead of claiming a share
+   of the width; the room they give up goes to the attempts column. */
+#logs th.num, #logs td.num { width: 1%; }
 td.mono { font-size: 12.5px; }
 td.muted { color: var(--muted); }
 #providers { display: block; }
@@ -2265,6 +2268,23 @@ function logReasonText(value, max) {
   return text.length > max ? text.slice(0, max) + '…' : text;
 }
 
+// Timings read as seconds with one decimal in the table; Copy and the exports
+// keep raw milliseconds because that is what a bug report wants.
+function logSeconds(ms) {
+  if (ms === null || ms === undefined) return '-';
+  const value = Number(ms);
+  if (!Number.isFinite(value)) return '-';
+  return (value / 1000).toLocaleString(lang, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+
+// Counts and speeds get the interface language's thousands separators.
+function logNumber(value, digits) {
+  if (value === null || value === undefined) return '-';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '-';
+  return number.toLocaleString(lang, { maximumFractionDigits: digits === undefined ? 0 : digits });
+}
+
 // One request as three lines of plain text, in the same shape as the container
 // log: the fields a bug report needs, in the order they are read. The text is
 // what Copy and every export use, so what is on screen is exactly what leaves.
@@ -2476,13 +2496,13 @@ function renderLogs() {
         td(entry.model || '-', 'mono'),
         td(selected, 'mono'),
         resultCell,
-        td(entry.durationMs, 'num'),
-        td(entry.firstTokenMs === null || entry.firstTokenMs === undefined ? '-' : entry.firstTokenMs, 'num'),
+        td(logSeconds(entry.durationMs), 'num'),
+        td(logSeconds(entry.firstTokenMs), 'num'),
         // 0 tokens means the upstream never reported usage, not an empty
         // answer: that row still shows its character and tool-call counts.
-        td(entry.inputTokens ? entry.inputTokens : '-', 'num'),
-        td(entry.outputTokens ? entry.outputTokens : '-', 'num'),
-        td(entry.outputTps === null || entry.outputTps === undefined ? '-' : entry.outputTps + ' tok/s', 'num'),
+        td(entry.inputTokens ? logNumber(entry.inputTokens) : '-', 'num'),
+        td(entry.outputTokens ? logNumber(entry.outputTokens) : '-', 'num'),
+        td(entry.outputTps === null || entry.outputTps === undefined ? '-' : logNumber(entry.outputTps, 1) + ' tok/s', 'num'),
         logAttemptsCell(entry),
       ];
     }),

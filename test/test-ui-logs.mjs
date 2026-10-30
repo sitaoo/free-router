@@ -72,6 +72,20 @@ assert.match(page, /logs_tries/, 'the attempts cell counts its lines');
 assert.doesNotMatch(page, /log-copy/, 'no per-row copy button');
 assert.doesNotMatch(page, /logs_copy_one/, 'the per-row copy wording is gone');
 
+// 5b. Numeric columns read in seconds with one decimal and thousands
+// separators, and shrink to their own text so the attempts column keeps the
+// rest of the width.
+assert.match(page, /function logSeconds\(/);
+assert.match(page, /function logNumber\(/);
+assert.match(page, /minimumFractionDigits: 1/, 'seconds keep one decimal place');
+assert.match(page, /toLocaleString\(lang/, 'separators follow the interface language');
+assert.match(page, /td\(logSeconds\(entry\.durationMs\), 'num'\)/);
+assert.match(page, /logSeconds\(entry\.firstTokenMs\)/);
+assert.match(page, /logNumber\(entry\.inputTokens\)/);
+assert.match(page, /logNumber\(entry\.outputTokens\)/);
+assert.match(page, /logNumber\(entry\.outputTps, 1\)/);
+assert.match(page, /#logs th\.num, #logs td\.num \{ width: 1%; \}/, 'numeric columns shrink to their content');
+
 // 6. Copy and the exports use the same plain-text shape: three lines per
 // request, the fields a bug report needs.
 assert.match(page, /function logEntryText\(/);
