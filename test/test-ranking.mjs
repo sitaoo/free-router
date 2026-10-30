@@ -11,6 +11,7 @@ import {
   UNATTRIBUTED_FAIL_KINDS,
   USAGE_KINDS,
   classifyFailure,
+  isClientFaultExhaustion,
   isCredentialFault,
   latencyAdjustment,
   metadataBonus,
@@ -102,6 +103,24 @@ assert.equal(classifyFailure(503, 'server overloaded, retry later', false), 'ove
 assert.equal(classifyFailure(503, 'internal error', false), 'serverError');
 // New kinds never score as quality.
 assert.deepEqual(qualityTotals({ ok: 5, payment: 3, overloaded: 2 }), { ok: 5, fail: 0 });
+
+// A rejected request body is the client's fault, not the model's. Without
+// its own kind a 400 lands in 'other' and every candidate in the failover
+// chain earns a quality failure for the same bad request.
+assert.equal(classifyFailure(400, 'invalid temperature', false), 'clientError');
+assert.equal(classifyFailure(413, 'request too large', false), 'clientError');
+assert.equal(classifyFailure(422, 'schema mismatch', false), 'clientError');
+assert.equal(classifyFailure(400, 'empty response', false), 'clientError', 'status wins over message');
+assert.deepEqual(qualityTotals({ ok: 5, clientError: 4 }), { ok: 5, fail: 0 });
+assert.ok(UNATTRIBUTED_FAIL_KINDS.has('clientError'));
+assert.ok(!QUALITY_FAIL_KINDS.has('clientError'));
+
+// When every attempt failed because of the request itself, the gateway can
+// answer 400 instead of pretending the pool is exhausted (502).
+assert.equal(isClientFaultExhaustion([{ kind: 'clientError' }, { kind: 'clientError' }]), true);
+assert.equal(isClientFaultExhaustion([{ kind: 'clientError' }, { kind: 'rateLimit' }]), false);
+assert.equal(isClientFaultExhaustion([]), false);
+assert.equal(isClientFaultExhaustion(undefined), false);
 
 // Capability portrait (moved verbatim from server.mjs; behavior pinned).
 assert.equal(metadataScore(null), 2);

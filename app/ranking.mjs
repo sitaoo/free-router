@@ -7,8 +7,9 @@
 // - capacity: serving conditions (rateLimit, timeout, overloaded, aborted).
 //   These drive cooldowns and failover, never the quality score.
 // - unattributed: routing/config/billing faults (notFound, forbidden,
-//   payment) plus credential faults (401, which never even reaches a kind
-//   bucket). Recorded for observability, never scored as model quality.
+//   payment, clientError) plus credential faults (401, which never even
+//   reaches a kind bucket). Recorded for observability, never scored as
+//   model quality.
 export const USAGE_KINDS = [
   'ok',
   'rateLimit',
@@ -20,12 +21,18 @@ export const USAGE_KINDS = [
   'aborted',
   'payment',
   'overloaded',
+  'clientError',
   'other',
 ];
 
 export const QUALITY_FAIL_KINDS = new Set(['empty', 'serverError', 'other']);
 export const CAPACITY_FAIL_KINDS = new Set(['rateLimit', 'timeout', 'overloaded', 'aborted']);
-export const UNATTRIBUTED_FAIL_KINDS = new Set(['notFound', 'forbidden', 'payment']);
+export const UNATTRIBUTED_FAIL_KINDS = new Set([
+  'notFound',
+  'forbidden',
+  'payment',
+  'clientError',
+]);
 
 // Documented score scale: every base signal (config anchors 30-94,
 // evaluations 0-91, explicit overrides, usage ±12, portrait bonus 0-8)
@@ -55,12 +62,27 @@ export function classifyFailure(status, message, timedOut = false) {
   if (status === 403) return 'forbidden';
   if (status === 402) return 'payment';
   if (status === 529) return 'overloaded';
+  // A rejected request body (bad parameter, too large, schema mismatch) is
+  // the caller's fault. It must not count against the model, and when every
+  // candidate answers the same way the client deserves a 400, not a 502.
+  if (status === 400 || status === 413 || status === 422) return 'clientError';
   if (status >= 500) {
     if (/overload/i.test(message || '')) return 'overloaded';
     return 'serverError';
   }
   if (/empty|reasoning only|no useful/i.test(message)) return 'empty';
   return '';
+}
+
+// True when the failover chain failed only because the request itself was
+// refused. Callers answer 400 in that case instead of reporting that the
+// whole pool is exhausted.
+export function isClientFaultExhaustion(failures) {
+  return (
+    Array.isArray(failures) &&
+    failures.length > 0 &&
+    failures.every((failure) => failure?.kind === 'clientError')
+  );
 }
 
 // A 401 means the credential is wrong, not the model. Callers must skip

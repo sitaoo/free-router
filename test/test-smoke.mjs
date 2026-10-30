@@ -1783,9 +1783,14 @@ try {
       ],
     }),
   });
-  assert.equal(geminiSkipProvider.status, 502);
+  // The provider rejected the request body (missing thought_signature), so
+  // every failure is the caller's fault: answer 400 with the upstream reason
+  // instead of claiming the pool is exhausted.
+  assert.equal(geminiSkipProvider.status, 400);
   const geminiSkipBody = await geminiSkipProvider.json();
+  assert.equal(geminiSkipBody.error.type, 'invalid_request_error');
   assert.equal(geminiSkipBody.error.failures.length, 1);
+  assert.equal(geminiSkipBody.error.failures[0].kind, 'clientError');
   assert.match(geminiSkipBody.error.failures[0].reason, /thought_signature/);
   assert.equal(geminiRequests, geminiBeforeSkip + 1);
 
@@ -1964,8 +1969,10 @@ try {
     [
       'tokenrouter:z-ai/glm-5.3-free',
       'bai:glm-5.3-flash',
-      'openrouter:acme/extra-1:free',
+      // The thought-signature 400 is a client fault now, so it no longer
+      // cools the model down or drags its score below the sibling.
       'gemini:gemini-3.8-flash',
+      'openrouter:acme/extra-1:free',
       'gemini:gemini-3.7-flash',
       'extra:extra-1',
       'quotamock:daily-exhausted',

@@ -62,7 +62,7 @@ import {
 import { loadSweBenchScores, sweBenchScoreFor } from './swe-bench.mjs';
 import { describeLanAccess, lanGuard, loginLockout, recordLoginFailure } from './net.mjs';
 import { normalizeTimeZone } from './timezones.mjs';
-import { PINNED_SCORE, USAGE_KINDS, classifyFailure, ewmaLatency, isCredentialFault, latencyAdjustment, metadataBonus, metadataScore, normalizeScore, pickExplorationTarget, qualityTotals } from './ranking.mjs';
+import { PINNED_SCORE, USAGE_KINDS, classifyFailure, ewmaLatency, isClientFaultExhaustion, isCredentialFault, latencyAdjustment, metadataBonus, metadataScore, normalizeScore, pickExplorationTarget, qualityTotals } from './ranking.mjs';
 import {
   createStreamSignatureExtractor,
   createThoughtSignatureCache,
@@ -2643,6 +2643,7 @@ async function runChatRequest(req, res, options, record) {
         model: candidate.model,
         key: slot?.name || undefined,
         status: result.status,
+        kind: result.kind || '',
         reason: result.reason,
       });
       // A paid model that answers "no funds" is parked for 24h, by
@@ -2664,7 +2665,11 @@ async function runChatRequest(req, res, options, record) {
         return;
       }
       const providerWaitMs = applyProviderVerdict(candidate, result);
-      if (result.kind) setCooldown(candidate, result.kind, result.reason, providerWaitMs, slot);
+      // A client-side rejection says nothing about the model or the key, so
+      // it neither cools the candidate down nor poisons its quality record.
+      if (result.kind && result.kind !== 'clientError') {
+        setCooldown(candidate, result.kind, result.reason, providerWaitMs, slot);
+      }
       log(`failed ${candidateKey(candidate)}${slotLabel}: ${result.status} ${result.reason}`);
       if (result.fatal) {
         // Wrong key: retire it and try the next key on the same candidate.
@@ -2696,11 +2701,16 @@ async function runChatRequest(req, res, options, record) {
   }
 
   if (!res.headersSent) {
-    record.reason = 'all models failed';
-    sendJson(res, 502, {
+    // If every candidate refused the request itself, the pool is not
+    // exhausted: the caller sent something no provider accepts.
+    const clientFault = isClientFaultExhaustion(failures);
+    record.reason = clientFault ? 'request rejected by every provider' : 'all models failed';
+    sendJson(res, clientFault ? 400 : 502, {
       error: {
-        message: `All models failed for ${requestedModel}`,
-        type: 'free_router_exhausted',
+        message: clientFault
+          ? failures[0]?.reason || 'request rejected by every provider'
+          : `All models failed for ${requestedModel}`,
+        type: clientFault ? 'invalid_request_error' : 'free_router_exhausted',
         failures,
       },
     });
