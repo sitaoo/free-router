@@ -82,7 +82,8 @@ import {
 } from './net.mjs';
 import { normalizeTimeZone } from './timezones.mjs';
 import { mergeVerdict, verdictFor as cachedVerdictFor } from './verdicts.mjs';
-import { listSessions, pruneExpiredSessions, revokeSessions } from './sessions.mjs';
+import { listSessions, pruneExpiredSessions, revokeSessions, sessionId } from './sessions.mjs';
+import { formatAuditLine, parseAuditLines } from './audit.mjs';
 import {
   gatewayKeyState,
   gatewayUsageFor,
@@ -711,6 +712,24 @@ function log(message, detail = undefined) {
   const prefix = `[${new Date().toISOString()}]`;
   if (detail === undefined) console.log(prefix, message);
   else console.log(prefix, message, detail);
+}
+
+// Security-relevant actions go to an append-only JSONL file next to the
+// state. Writes are best effort (an audit failure must never fail the action)
+// and the file rotates once at 5 MB, keeping one previous file.
+const AUDIT_PATH = path.join(LAYOUT.dataDir, 'audit.log');
+const AUDIT_MAX_BYTES = 5 * 1024 * 1024;
+function audit(action, { actor = 'admin', target = '', result = 'ok', detail = '', ip = '' } = {}) {
+  try {
+    if (fs.existsSync(AUDIT_PATH) && fs.statSync(AUDIT_PATH).size > AUDIT_MAX_BYTES) {
+      fs.renameSync(AUDIT_PATH, `${AUDIT_PATH}.1`);
+    }
+    fs.appendFileSync(AUDIT_PATH, `${formatAuditLine({ action, actor, target, result, detail, ip })}\n`, {
+      mode: 0o600,
+    });
+  } catch (error) {
+    log(`failed to write audit log: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function candidateKey(candidate) {
@@ -3154,6 +3173,10 @@ async function handleKeyUpdate(req, res) {
     }
     refreshSecretRedactor();
     log(`${key ? 'set' : 'cleared'} provider key [${keyName}] for ${name} via web interface`);
+    audit(key ? 'provider.key.set' : 'provider.key.clear', {
+      target: `${name}:${keyName}`,
+      ip: clientAddress(req),
+    });
     if (key) await refreshProviderCatalog(name);
     return sendJson(res, 200, { ok: true, provider: name, name: keyName, configured: Boolean(key) });
   }
@@ -3171,6 +3194,10 @@ async function handleKeyUpdate(req, res) {
   registry.setApiKey(name, key);
   refreshSecretRedactor();
   log(`${key ? 'set' : 'cleared'} ${provider.keyEnv} via web interface`);
+  audit(key ? 'provider.key.set' : 'provider.key.clear', {
+    target: `${name}:env`,
+    ip: clientAddress(req),
+  });
   if (key) await refreshProviderCatalog(name);
   return sendJson(res, 200, { ok: true, provider: name, configured: Boolean(key) });
 }
@@ -3230,6 +3257,10 @@ async function handleGatewayKeys(req, res) {
       });
     }
     refreshSecretRedactor();
+    audit('gateway.require-auth', {
+      ip: clientAddress(req),
+      detail: gatewayAuthRequired() ? 'enabled' : 'disabled',
+    });
     return sendJson(res, 200, { ok: true, requireAuth: gatewayAuthRequired() });
   }
 
@@ -3253,6 +3284,7 @@ async function handleGatewayKeys(req, res) {
     }
     refreshSecretRedactor();
     log(`deleted gateway API key [${keyName}] via web interface`);
+    audit('gateway.key.delete', { target: keyName, ip: clientAddress(req) });
     return sendJson(res, 200, { ok: true });
   }
 
@@ -3283,6 +3315,11 @@ async function handleGatewayKeys(req, res) {
       });
     }
     log(`updated gateway API key [${keyName}] via web interface`);
+    audit('gateway.key.update', {
+      target: keyName,
+      ip: clientAddress(req),
+      detail: `dailyLimit=${policy.dailyLimit || 0} expiresAt=${policy.expiresAt || '-'}`,
+    });
     return sendJson(res, 200, { ok: true, key: gatewayKeySummary(updated) });
   }
 
@@ -3318,6 +3355,11 @@ async function handleGatewayKeys(req, res) {
     }
     refreshSecretRedactor();
     log(`created gateway API key [${keyName}] via web interface`);
+    audit('gateway.key.create', {
+      target: keyName,
+      ip: clientAddress(req),
+      detail: `dailyLimit=${policy.dailyLimit || 0} expiresAt=${policy.expiresAt || '-'}`,
+    });
     return sendJson(res, 200, {
       ok: true,
       name: keyName,
@@ -3368,6 +3410,7 @@ async function handleWebuiPassword(req, res) {
   webuiSessions.clear();
   refreshSecretRedactor();
   log('web UI password changed via web interface; all sessions revoked');
+  audit('auth.password', { ip: clientAddress(req), detail: 'password changed; all sessions revoked' });
   return sendJson(res, 200, { ok: true });
 }
 
@@ -3403,6 +3446,10 @@ async function handleServerConfig(req, res) {
       error: { message: `could not write ${OVERLAY_FILENAME}: ${reason}`, type: 'config_write_failed' },
     });
   }
+  audit('server.config', {
+    ip: clientAddress(req),
+    detail: Object.keys(body).join(',') || 'none',
+  });
   return sendJson(res, 200, { ok: true, host: config.host, port: config.port, notes });
 }
 
@@ -3904,6 +3951,10 @@ async function handleSettings(req, res) {
     deleteOverlayValue(['migratedFromEnv']);
   }
   if (!persistOrFail(res)) return undefined;
+  audit('settings.update', {
+    ip: clientAddress(req),
+    detail: Object.keys(body).join(',') || 'none',
+  });
   return sendJson(res, 200, { ok: true, notes });
 }
 
@@ -3915,6 +3966,7 @@ async function handleRestart(req, res) {
   sendJson(res, 200, { ok: true });
   setTimeout(() => {
     log('restart requested via web interface; exiting for supervisor restart');
+    audit('system.restart', { actor: 'system', detail: 'requested from the web interface' });
     try {
       if (stateSaveTimer) flushStateSave();
     } catch {
@@ -3952,6 +4004,7 @@ async function handleLogin(req, res) {
   const lock = loginLockout(loginFailures.get(clientIp));
   if (lock.locked) {
     log(`blocked web UI login brute force from ${clientIp}`);
+    audit('auth.login.locked', { actor: 'anonymous', result: 'fail', ip: clientIp, detail: 'too many failed attempts' });
     return sendJson(res, 429, { error: { message: 'too many failed attempts', type: 'rate_limited' } }, {
       'Retry-After': String(Math.ceil((lock.retryAfterMs || 0) / 1000)),
     });
@@ -3959,6 +4012,7 @@ async function handleLogin(req, res) {
   if (!(await checkWebuiPassword(password))) {
     loginFailures.set(clientIp, recordLoginFailure(loginFailures.get(clientIp)));
     log(`failed web UI login from ${clientIp}`);
+    audit('auth.login', { actor: 'anonymous', result: 'fail', ip: clientIp, detail: 'invalid password' });
     return sendJson(res, 401, { error: { message: 'invalid password', type: 'unauthorized' } });
   }
   loginFailures.delete(clientIp);
@@ -3973,6 +4027,7 @@ async function handleLogin(req, res) {
     ip: clientIp,
     userAgent: String(req.headers['user-agent'] || ''),
   });
+  audit('auth.login', { ip: clientIp, target: sessionId(token), detail: 'session created' });
   // Cookie lifetime mirrors the server-side TTL; "never" becomes a browser
   // session cookie so it still dies with the browser.
   const maxAge = ttlHours > 0 ? `; Max-Age=${Math.round(ttlHours * 3600)}` : '';
@@ -4026,7 +4081,9 @@ async function handler(req, res) {
     return handleLogin(req, res);
   }
   if (req.method === 'POST' && url.pathname === '/api/logout') {
-    webuiSessions.delete(webuiSessionToken(req));
+    const logoutToken = webuiSessionToken(req);
+    webuiSessions.delete(logoutToken);
+    audit('auth.logout', { ip: clientAddress(req), target: sessionId(logoutToken) });
     res.writeHead(200, {
       'Content-Type': 'application/json; charset=utf-8',
       'Set-Cookie': `fr_session=; Path=/; HttpOnly; SameSite=Lax${secureCookie() ? '; Secure' : ''}; Max-Age=0`,
@@ -4130,6 +4187,28 @@ async function handler(req, res) {
     // buffer is already bounded, so there is nothing to page or filter here.
     return sendJson(res, 200, clientRequestLog.snapshot(), { 'Cache-Control': 'no-store' });
   }
+  if (req.method === 'GET' && url.pathname === '/api/audit') {
+    // Session-protected by the global /api/* gate. Reads the tail of the
+    // append-only file; `limit` is capped so a big file cannot be pulled in
+    // one response.
+    const requested = Number(url.searchParams.get('limit') || 100);
+    const limit = Number.isFinite(requested) ? Math.min(500, Math.max(1, Math.floor(requested))) : 100;
+    let records = [];
+    try {
+      if (fs.existsSync(AUDIT_PATH)) {
+        const lines = fs.readFileSync(AUDIT_PATH, 'utf8').split(/\r?\n/).filter(Boolean);
+        records = parseAuditLines(lines.slice(-limit).join('\n'));
+      }
+    } catch (error) {
+      log(`failed to read audit log: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return sendJson(
+      res,
+      200,
+      { path: displayPath(AUDIT_PATH), limit, entries: records.reverse() },
+      { 'Cache-Control': 'no-store' },
+    );
+  }
   if (req.method === 'DELETE' && url.pathname === '/api/logs') {
     // Clearing only touches the in-memory ring; nothing on disk to erase.
     return sendJson(
@@ -4170,6 +4249,11 @@ async function handler(req, res) {
       }
       const signedOut = !webuiSessions.has(currentToken);
       log(`revoked a web UI session via web interface${signedOut ? ' (the current one)' : ''}`);
+      audit('auth.session.revoke', {
+        target: id,
+        ip: clientAddress(req),
+        detail: signedOut ? 'current session' : '',
+      });
       return sendJson(
         res,
         200,
@@ -4182,6 +4266,10 @@ async function handler(req, res) {
     if (action === 'revoke-others') {
       const removed = revokeSessions(webuiSessions, { others: true, currentToken });
       log(`revoked ${removed} other web UI session(s) via web interface`);
+      audit('auth.session.revoke-others', {
+        ip: clientAddress(req),
+        detail: `${removed} session(s)`,
+      });
       return sendJson(res, 200, { ok: true, removed }, { 'Cache-Control': 'no-store' });
     }
     return sendJson(res, 400, { error: { message: `unknown action: ${action}`, type: 'invalid_request_error' } });
@@ -4342,6 +4430,7 @@ if (guardReasons.length) {
 
 server.listen(PORT, HOST, async () => {
   log(`Free Router ${VERSION} listening on http://${HOST}:${PORT}/v1 (config: ${displayPath(CONFIG_PATH)}, ${CONFIG_FORMAT})`);
+  audit('system.boot', { actor: 'system', detail: `version ${VERSION} on ${HOST}:${PORT}` });
   if (UI_ENABLED) log(`web interface on http://${HOST}:${PORT}/`);
   if (gatewayAuthRequired()) {
     log(`gateway auth enabled (${gatewayKeys().length} API key(s))`);

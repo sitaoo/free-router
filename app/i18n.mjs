@@ -2250,6 +2250,22 @@ const SESSION_STRINGS = {
   "ar": { sess_list_t: "الجلسات النشطة", sess_list_d: "كل المتصفحات المسجّلة الآن. إلغاء واحدة يُخرج ذلك المتصفح فوراً ويجب عليه تسجيل الدخول من جديد.", sess_revoke: "إلغاء", sess_revoke_others: "الخروج من كل المتصفحات الأخرى", sess_others_confirm: "الخروج من كل المتصفحات الأخرى؟", sess_current: "هذا المتصفح", sess_revoked: "تم إنهاء {n} جلسة.", sess_none: "لا توجد جلسات نشطة.", sess_confirm: "إلغاء الجلسة {id}؟", sess_confirm_self: "هذا هو المتصفح الذي تستخدمه. إلغاؤه سيخرجك الآن. هل تريد المتابعة؟", th_sess_id: "الجلسة", th_sess_created: "تسجيل الدخول", th_sess_expires: "ينتهي", th_sess_ip: "IP", th_sess_client: "العميل" },
 };
 
+// Audit log strings, one unit so every locale stays complete.
+const AUDIT_STRINGS = {
+  en: { audit_t: "Audit log", audit_d: "Append-only record of sign-ins, key changes, and settings edits, newest first. Values are flattened and capped; no key, password, or prompt is ever written.", audit_refresh: "Refresh", audit_empty: "No audit entries yet.", audit_note: "{n} entries from {p} (newest first).", th_audit_time: "Time", th_audit_actor: "Actor", th_audit_action: "Action", th_audit_target: "Target", th_audit_result: "Result" },
+  "zh-CN": { audit_t: "审计日志", audit_d: "只追加的记录：登录、Key 变更、设置修改，最新的在前。字段会被压平并截断，绝不写入 Key、密码或提示词。", audit_refresh: "刷新", audit_empty: "暂无审计记录。", audit_note: "{p} 中的 {n} 条记录（最新在前）。", th_audit_time: "时间", th_audit_actor: "操作者", th_audit_action: "动作", th_audit_target: "对象", th_audit_result: "结果" },
+  "zh-TW": { audit_t: "稽核日誌", audit_d: "只追加的紀錄：登入、Key 變更、設定修改，最新的在前。欄位會被壓平並截斷，絕不寫入 Key、密碼或提示詞。", audit_refresh: "重新整理", audit_empty: "尚無稽核紀錄。", audit_note: "{p} 中的 {n} 筆紀錄（最新在前）。", th_audit_time: "時間", th_audit_actor: "操作者", th_audit_action: "動作", th_audit_target: "對象", th_audit_result: "結果" },
+  "ja": { audit_t: "監査ログ", audit_d: "サインイン、キー変更、設定変更を追記のみで記録します（新しい順）。値は平坦化・切り詰めされ、キー・パスワード・プロンプトは書き込みません。", audit_refresh: "更新", audit_empty: "監査記録はまだありません。", audit_note: "{p} の {n} 件（新しい順）。", th_audit_time: "日時", th_audit_actor: "実行者", th_audit_action: "操作", th_audit_target: "対象", th_audit_result: "結果" },
+  "ko": { audit_t: "감사 로그", audit_d: "로그인, 키 변경, 설정 변경을 추가 전용으로 기록합니다(최신순). 값은 평탄화·절단되며 키, 비밀번호, 프롬프트는 기록하지 않습니다.", audit_refresh: "새로 고침", audit_empty: "감사 기록이 없습니다.", audit_note: "{p}의 {n}개 항목(최신순).", th_audit_time: "시간", th_audit_actor: "주체", th_audit_action: "작업", th_audit_target: "대상", th_audit_result: "결과" },
+  "es": { audit_t: "Registro de auditoría", audit_d: "Registro de solo adición de inicios de sesión, cambios de claves y ajustes, lo más reciente primero. Los valores se aplanan y recortan; nunca se escriben claves, contraseñas ni prompts.", audit_refresh: "Actualizar", audit_empty: "Aún no hay registros.", audit_note: "{n} registros de {p} (lo más reciente primero).", th_audit_time: "Hora", th_audit_actor: "Actor", th_audit_action: "Acción", th_audit_target: "Objetivo", th_audit_result: "Resultado" },
+  "fr": { audit_t: "Journal d'audit", audit_d: "Journal en ajout seul des connexions, changements de clés et réglages, du plus récent au plus ancien. Les valeurs sont aplaties et tronquées ; aucune clé, aucun mot de passe ni prompt n'est écrit.", audit_refresh: "Actualiser", audit_empty: "Aucune entrée d'audit.", audit_note: "{n} entrées de {p} (plus récentes d'abord).", th_audit_time: "Heure", th_audit_actor: "Acteur", th_audit_action: "Action", th_audit_target: "Cible", th_audit_result: "Résultat" },
+  "de": { audit_t: "Audit-Protokoll", audit_d: "Nur anhängendes Protokoll von Anmeldungen, Schlüsseländerungen und Einstellungen, neueste zuerst. Werte werden geglättet und gekürzt; Schlüssel, Passwörter und Prompts werden nie geschrieben.", audit_refresh: "Aktualisieren", audit_empty: "Noch keine Audit-Einträge.", audit_note: "{n} Einträge aus {p} (neueste zuerst).", th_audit_time: "Zeit", th_audit_actor: "Akteur", th_audit_action: "Aktion", th_audit_target: "Ziel", th_audit_result: "Ergebnis" },
+  "ru": { audit_t: "Журнал аудита", audit_d: "Только дописываемый журнал входов, изменений ключей и настроек, новые сверху. Значения выравниваются и обрезаются; ключи, пароли и промпты не записываются.", audit_refresh: "Обновить", audit_empty: "Записей пока нет.", audit_note: "Записей: {n} из {p} (новые сверху).", th_audit_time: "Время", th_audit_actor: "Кто", th_audit_action: "Действие", th_audit_target: "Объект", th_audit_result: "Результат" },
+  "pt": { audit_t: "Registro de auditoria", audit_d: "Registro somente de adição de entradas, mudanças de chaves e ajustes, mais recente primeiro. Valores são achatados e truncados; nunca são gravadas chaves, senhas ou prompts.", audit_refresh: "Atualizar", audit_empty: "Ainda não há registros.", audit_note: "{n} registros de {p} (mais recente primeiro).", th_audit_time: "Hora", th_audit_actor: "Autor", th_audit_action: "Ação", th_audit_target: "Alvo", th_audit_result: "Resultado" },
+  "it": { audit_t: "Registro di audit", audit_d: "Registro in sola aggiunta di accessi, modifiche alle chiavi e impostazioni, più recente prima. I valori sono appiattiti e troncati; chiavi, password e prompt non vengono mai scritti.", audit_refresh: "Aggiorna", audit_empty: "Nessuna voce di audit.", audit_note: "{n} voci da {p} (più recenti prima).", th_audit_time: "Ora", th_audit_actor: "Attore", th_audit_action: "Azione", th_audit_target: "Destinazione", th_audit_result: "Esito" },
+  "ar": { audit_t: "سجل التدقيق", audit_d: "سجل للإضافة فقط لتسجيلات الدخول وتغييرات المفاتيح والإعدادات، الأحدث أولاً. تُسطَّح القيم وتُقصّ؛ لا تُكتب المفاتيح أو كلمات المرور أو الطلبات أبداً.", audit_refresh: "تحديث", audit_empty: "لا توجد سجلات بعد.", audit_note: "{n} سجلاً من {p} (الأحدث أولاً).", th_audit_time: "الوقت", th_audit_actor: "الفاعل", th_audit_action: "الإجراء", th_audit_target: "الهدف", th_audit_result: "النتيجة" },
+};
+
 for (const [code, strings] of Object.entries(REQUEST_LOG_STRINGS)) {
   Object.assign(STRINGS[code], strings);
 }
@@ -2257,6 +2273,9 @@ for (const [code, strings] of Object.entries(GATEWAY_KEY_STRINGS)) {
   Object.assign(STRINGS[code], strings);
 }
 for (const [code, strings] of Object.entries(SESSION_STRINGS)) {
+  Object.assign(STRINGS[code], strings);
+}
+for (const [code, strings] of Object.entries(AUDIT_STRINGS)) {
   Object.assign(STRINGS[code], strings);
 }
 

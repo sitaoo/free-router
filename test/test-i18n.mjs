@@ -27,6 +27,8 @@ const NEW_KEYS = [
   'sess_list_t', 'sess_list_d', 'sess_revoke', 'sess_revoke_others', 'sess_others_confirm',
   'sess_current', 'sess_revoked', 'sess_none', 'sess_confirm', 'sess_confirm_self',
   'th_sess_id', 'th_sess_created', 'th_sess_expires', 'th_sess_ip', 'th_sess_client',
+  'audit_t', 'audit_d', 'audit_refresh', 'audit_empty', 'audit_note',
+  'th_audit_time', 'th_audit_actor', 'th_audit_action', 'th_audit_target', 'th_audit_result',
 ];
 
 // 1. The exact Chinese sentence the operator approved.
@@ -83,6 +85,13 @@ assert.match(STRINGS.en.sess_revoked, /\{n\}/);
 assert.match(STRINGS.en.sess_confirm, /\{id\}/);
 for (const [code] of LANGS) {
   assert.ok(STRINGS[code].sess_confirm_self.length > 20, `${code} sess_confirm_self`);
+}
+// The audit blurb promises what is never written; keep that promise in every
+// language and keep both placeholders in the note.
+assert.match(STRINGS.en.audit_note, /\{n\}/);
+assert.match(STRINGS.en.audit_note, /\{p\}/);
+for (const [code] of LANGS) {
+  assert.match(STRINGS[code].audit_d, /key|ключ|キー|키|clave|clé|schlüssel|chave|chiavi|المفاتيح/i, `${code} audit_d`);
 }
 assert.equal(translate(STRINGS, 'zh-CN', 'st_blocked', { at: '10:00' }), '资金不足，10:00 前停用');
 assert.equal(translate(STRINGS, 'xx', 'paid_model_warning'), STRINGS.en.paid_model_warning);

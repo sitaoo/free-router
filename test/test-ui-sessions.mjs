@@ -22,7 +22,8 @@ assert.ok(sessionsAt < page.indexOf('data-pane="logs"'), 'sessions stay in Setti
 // from the 5-second state poll.
 assert.match(page, /api\('api\/sessions'\)/);
 assert.match(page, /function refreshActiveSessions\(/);
-assert.match(page, /button\.dataset\.tab === 'settings'\) refreshActiveSessions\(\)/);
+assert.match(page, /button\.dataset\.tab === 'settings'/);
+assert.match(page, /refreshActiveSessions\(\);/);
 assert.equal(/state\.sessions/.test(page), false, 'sessions must not ride /api/state');
 
 // 3. Revocation posts an action and handles signing yourself out.

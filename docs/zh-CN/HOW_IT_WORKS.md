@@ -123,7 +123,7 @@ npm run models -- --json
 有两道独立的门：
 
 - **Web UI + 管理接口**（`/`、`/api/*`）：管理密码登录，发 `HttpOnly`
-会话 cookie。会话 `webui.sessionTtlHours` 后过期（默认 24，`0` 表示永不过期，此时是浏览器会话 cookie）。改密码会吊销所有会话。管理区会列出当前活跃会话（哈希 id、登录时间、到期时间、IP、客户端，来自 `GET /api/sessions`），每行有**撤销**，还有一个**退出其他所有浏览器**按钮；撤销标着*当前浏览器*的那行会清掉 Cookie，撤销其他行会让那个浏览器在下次请求时掉线。会话 token 永远不出服务端——列表里只有 12 位 SHA-256 前缀。
+会话 cookie。会话 `webui.sessionTtlHours` 后过期（默认 24，`0` 表示永不过期，此时是浏览器会话 cookie）。改密码会吊销所有会话。管理区会列出当前活跃会话（哈希 id、登录时间、到期时间、IP、客户端，来自 `GET /api/sessions`），每行有**撤销**，还有一个**退出其他所有浏览器**按钮；撤销标着*当前浏览器*的那行会清掉 Cookie，撤销其他行会让那个浏览器在下次请求时掉线。会话 token 永远不出服务端——列表里只有 12 位 SHA-256 前缀。所有安全相关的动作都会以一行一个 JSON 追加到 `data/audit.log`：登录成功与失败（带客户端 IP）、锁定、登出、改密码、撤销会话、网关 Key 的增删改和鉴权开关、渠道 Key 的设置与清除、服务器与设置修改、重启，以及每次启动。字段会被压平（换行伪造不出第二条记录）并截断，绝不写入任何 Key 值、密码或提示词。文件超过 5 MB 转成 `audit.log.1`，可通过 `GET /api/audit` 或设置页的**审计日志**表格查看。
 - **网关接口**（`/v1/*`）：存在至少一个 Key 时要求 bearer Key（访问
 tab）。一个网关 Key 都没有时，`/v1` 保持开放，方便本地用。
 
@@ -266,6 +266,9 @@ POST /api/logout             吊销当前会话
 GET  /api/state              完整 UI 状态（要会话）
 GET  /api/logs               最近的客户端调用，最新在前（要会话）
 DELETE /api/logs             清空内存中的调用记录（要会话）
+GET  /api/sessions           活跃的管理会话，只带哈希 id（要会话）
+POST /api/sessions           撤销一个会话或除自己外的全部会话（要会话）
+GET  /api/audit              data/audit.log 的尾部，最新在前（要会话）
 POST /api/keys               provider Key：{ "provider", "name"?, "key" }
 POST /api/gateway-keys       网关 Key：{ "action": "create|delete|setRequireAuth", ... }
 POST /api/providers          { "action": "create|update|delete", ... }

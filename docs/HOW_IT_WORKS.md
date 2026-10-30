@@ -123,7 +123,7 @@ Set `enabled: false` to remove `/` and `/api/*` entirely. `trustedHosts` lets th
 There are two independent gates:
 
 - **Web UI + management APIs** (`/`, `/api/*`): admin password login issuing
-an `HttpOnly` session cookie. Sessions expire after `webui.sessionTtlHours` (default 24, `0` means never, browser-session cookie in that case). Changing the password revokes all sessions. The Admin section lists the active sessions (hash id, sign-in time, expiry, IP, client) from `GET /api/sessions`, with a per-row **Revoke** and a **Sign out everywhere else** button; revoking the row marked *this browser* clears the cookie, and revoking any other signs that browser out on its next request. Session tokens never leave the server — rows carry a 12-character SHA-256 prefix.
+an `HttpOnly` session cookie. Sessions expire after `webui.sessionTtlHours` (default 24, `0` means never, browser-session cookie in that case). Changing the password revokes all sessions. The Admin section lists the active sessions (hash id, sign-in time, expiry, IP, client) from `GET /api/sessions`, with a per-row **Revoke** and a **Sign out everywhere else** button; revoking the row marked *this browser* clears the cookie, and revoking any other signs that browser out on its next request. Session tokens never leave the server — rows carry a 12-character SHA-256 prefix. Every security-relevant action is appended to `data/audit.log` as one JSON object per line: sign-in success and failure (with the client IP), lockouts, sign-out, password changes, session revocations, gateway key create/update/delete and the require-auth switch, provider key set/clear, server and settings edits, restarts, and each boot. Values are flattened (a newline cannot forge a second record) and capped, and no key value, password, or prompt is ever written. The file rotates to `audit.log.1` at 5 MB and is readable through `GET /api/audit` or the Settings tab's **Audit log** table.
 - **Gateway API** (`/v1/*`): bearer keys once at least one exists (Access
 tab). Without any gateway key, `/v1` stays open for local use.
 
@@ -272,6 +272,9 @@ POST /api/logout             revoke current session
 GET  /api/state              full UI state (session required)
 GET  /api/logs               last client requests, newest first (session required)
 DELETE /api/logs             clear the in-memory request list (session required)
+GET  /api/sessions           active admin sessions with hash ids (session required)
+POST /api/sessions           revoke one session or all others (session required)
+GET  /api/audit              tail of data/audit.log, newest first (session required)
 POST /api/keys               provider keys: { "provider", "name"?, "key" }
 POST /api/gateway-keys       gateway keys: { "action": "create|delete|setRequireAuth", ... }
 POST /api/providers          { "action": "create|update|delete", ... }

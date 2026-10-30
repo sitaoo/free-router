@@ -861,6 +861,19 @@ body[data-gate="1"] main#app { display: none; }
         </div>
       </div>
     </section>
+    <section>
+      <div class="sec-head">
+        <h2 data-i18n="audit_t">Audit log</h2>
+        <p data-i18n="audit_d">Append-only record of sign-ins, key changes, and settings edits, newest first. Values are flattened and capped; no key, password, or prompt is ever written.</p>
+      </div>
+      <div class="sec-body">
+        <div class="row" style="justify-content:flex-end">
+          <button id="audit-refresh" class="ghost" data-i18n="audit_refresh">Refresh</button>
+        </div>
+        <div id="audit"></div>
+        <p class="note" id="audit-note"></p>
+      </div>
+    </section>
   </div>
 
   <div data-pane="logs" hidden>
@@ -2814,6 +2827,51 @@ function renderSession() {
     : t('admin_pw_never');
 }
 
+// Audit trail: the last 100 lines of the append-only file, fetched when the
+// Settings tab opens (and on demand) rather than with every state poll.
+let auditState = null;
+function renderAudit() {
+  const host = el('audit');
+  host.textContent = '';
+  const entries = (auditState && auditState.entries) || [];
+  if (!entries.length) {
+    const p = document.createElement('p');
+    p.className = 'note';
+    p.style.margin = '0';
+    p.textContent = t('audit_empty');
+    host.appendChild(p);
+  } else {
+    host.appendChild(table(
+      [
+        { label: t('th_audit_time') },
+        { label: t('th_audit_actor') },
+        { label: t('th_audit_action') },
+        { label: t('th_audit_target') },
+        { label: t('th_audit_result') },
+      ],
+      entries.map((entry) => [
+        td(entry.at ? new Date(entry.at).toLocaleString() : '—'),
+        td(entry.actor, 'mono'),
+        td(entry.action, 'mono'),
+        td(entry.target || '—', 'mono'),
+        td(entry.result === 'fail' ? t('log_failed') : t('log_ok'), entry.result === 'fail' ? 'bad' : 'ok'),
+      ]),
+    ));
+  }
+  el('audit-note').textContent = auditState
+    ? t('audit_note', { n: entries.length, p: auditState.path })
+    : '';
+}
+
+async function refreshAudit() {
+  try {
+    auditState = await api('api/audit?limit=100');
+    renderAudit();
+  } catch (error) {
+    if (String(error.message || '').includes('login')) showLogin();
+  }
+}
+
 // Admin sessions are listed from their own endpoint: /api/state already
 // carries the caller's expiry, but the full list changes rarely and should not
 // ride the 5-second state poll.
@@ -3171,7 +3229,10 @@ function bindOnce() {
       switchTab(button.dataset.tab);
       // Fetch on first visit; the interval keeps it fresh while visible.
       if (button.dataset.tab === 'logs') refreshLogs(true);
-      if (button.dataset.tab === 'settings') refreshActiveSessions();
+      if (button.dataset.tab === 'settings') {
+        refreshActiveSessions();
+        refreshAudit();
+      }
     };
   }
   el('logs-refresh').onclick = () => refreshLogs(false);
@@ -3247,6 +3308,7 @@ function bindOnce() {
       toast(String(error.message || error), 'err');
     }
   };
+  el('audit-refresh').onclick = () => refreshAudit();
   el('sess-revoke-others').onclick = async () => {
     if (!confirm(t('sess_others_confirm'))) return;
     try {
@@ -3412,6 +3474,7 @@ function showLogin() {
   state = null;
   logsState = null;
   activeSessions = null;
+  auditState = null;
   applyI18n();
 }
 

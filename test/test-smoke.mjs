@@ -2717,6 +2717,46 @@ try {
     assert.equal((await post({ action: 'nonsense' })).status, 401, 'the revoked session cannot act');
   }
 
+  // Audit trail: security-relevant actions append JSONL lines under data/,
+  // readable only with a session, newest first, and never carrying a secret.
+  {
+    const login = await fetch(`${base}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: 's3cret-newpw' }),
+    });
+    assert.equal(login.status, 200);
+    const cookie = String(login.headers.get('set-cookie') || '').split(';')[0];
+    assert.equal((await fetch(`${base}/api/audit`)).status, 401);
+    const response = await fetch(`${base}/api/audit?limit=200`, { headers: { Cookie: cookie } });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    const audit = await response.json();
+    const actions = audit.entries.map((entry) => entry.action);
+    for (const expected of ['system.boot', 'auth.login', 'gateway.key.create', 'gateway.key.delete']) {
+      assert.ok(actions.includes(expected), `audit is missing ${expected}`);
+    }
+    assert.ok(
+      actions.includes('auth.session.revoke') || actions.includes('auth.session.revoke-others'),
+      'session revocation must be audited',
+    );
+    const times = audit.entries.map((entry) => Date.parse(entry.at));
+    assert.ok(times.every(Number.isFinite));
+    assert.ok(times[0] >= times[times.length - 1], 'entries are newest first');
+    const text = JSON.stringify(audit);
+    for (const secret of ['bai-test-key', '$scrypt$', 's3cret-newpw']) {
+      assert.equal(text.includes(secret), false, `audit leaked ${secret}`);
+    }
+    // The key name is the point of the record; its value never is.
+    assert.ok(text.includes('quota-test'), 'the key name is recorded');
+    assert.match(audit.path, /audit\.log$/);
+    const auditFile = path.join(tempDir, 'audit.log');
+    assert.ok(fs.existsSync(auditFile), 'audit.log must live in the data dir');
+    const lines = fs.readFileSync(auditFile, 'utf8').trim().split('\n');
+    assert.ok(lines.length >= 5);
+    for (const line of lines) assert.equal(JSON.parse(line).action.length > 0, true);
+  }
+
   // Restart must be last: the server exits and stops answering. Re-login
   // first since the password change above revoked all sessions.
   const relogin = await fetch(`${base}/api/login`, {
