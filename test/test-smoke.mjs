@@ -2736,6 +2736,11 @@ try {
     const listed = policyState.gateway.keys.find((entry) => entry.name === 'quota-test');
     assert.equal(listed.dailyLimit, 1);
     assert.equal(listed.usedToday, 1);
+    // The row's Copy button needs the real value; the table still renders the
+    // masked form, and the state endpoint stays behind the admin session.
+    assert.equal(listed.key, quotaKey.key, 'the full key is available to the admin');
+    assert.notEqual(listed.masked, listed.key);
+    assert.equal(listed.masked.includes(quotaKey.key), false);
     const expiredListed = policyState.gateway.keys.find((entry) => entry.name === 'expired-test');
     assert.match(expiredListed.expiresAt, /^2020-01-01T/);
 

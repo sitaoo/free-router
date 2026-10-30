@@ -4397,6 +4397,10 @@ async function handler(req, res) {
           requireAuth: gatewayAuthRequired(),
           keys: gatewayKeys().map((entry) => ({
             name: entry.name,
+            // The full value is what the Copy button puts on the clipboard.
+            // /api/state already requires the admin session and is no-store;
+            // the table itself keeps showing only the masked form.
+            key: entry.key,
             masked: maskSecret(entry.key),
             createdAt: entry.createdAt || null,
             expiresAt: entry.expiresAt || null,

@@ -141,8 +141,7 @@ name. The server resolves `keyEnv` from the merged config, so nothing outside a 
 a second assignment.
 - The env file is written atomically with mode `0600`, and an existing file is
 chmod'ed down to match.
-- Keys are returned masked, never in full (a new gateway key is shown once,
-at creation).
+- Provider keys are returned masked, never in full. Gateway client keys are different on purpose: the Access tab shows each one masked with a **Copy** button that puts the full value on the clipboard, because the operator has to hand it to a client and the gateway is already plain HTTP on the LAN. `/api/state` (admin session only, `no-store`) carries the value; a new key is still shown once at creation.
 - The secret redactor is rebuilt after a key change, so a key added through the
 UI is still stripped from upstream payloads.
 

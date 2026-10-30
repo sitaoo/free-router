@@ -2548,6 +2548,22 @@ const COMPLETION_STRINGS = {
   },
 };
 
+// Per-row gateway key copy button.
+const GATEWAY_COPY_STRINGS = {
+  en: { gw_copy: "Copy" },
+  "zh-CN": { gw_copy: "复制" },
+  "zh-TW": { gw_copy: "複製" },
+  "ja": { gw_copy: "コピー" },
+  "ko": { gw_copy: "복사" },
+  "es": { gw_copy: "Copiar" },
+  "fr": { gw_copy: "Copier" },
+  "de": { gw_copy: "Kopieren" },
+  "ru": { gw_copy: "Копировать" },
+  "pt": { gw_copy: "Copiar" },
+  "it": { gw_copy: "Copia" },
+  "ar": { gw_copy: "نسخ" },
+};
+
 // Counted forms, selected by Intl.PluralRules when the caller passes a numeric
 // {n}. English needs only a singular; Russian needs one/few/many. A locale
 // without a form reads its own base wording, never the English variant.
@@ -2592,6 +2608,9 @@ for (const [code, strings] of Object.entries(PICKER_STRINGS)) {
   Object.assign(STRINGS[code], strings);
 }
 for (const [code, strings] of Object.entries(COMPLETION_STRINGS)) {
+  Object.assign(STRINGS[code], strings);
+}
+for (const [code, strings] of Object.entries(GATEWAY_COPY_STRINGS)) {
   Object.assign(STRINGS[code], strings);
 }
 for (const [code, strings] of Object.entries(PLURAL_STRINGS)) {

@@ -8,6 +8,7 @@ tags are cut here. Dates are commit dates (`YYYY-MM-DD`).
 
 ### Added
 
+- Each gateway key row in the Access tab has a **Copy** button that puts the full key value on the clipboard (the table still shows the masked form). `/api/state` now carries the value for an admin session, since the operator has to hand the key to a client and the gateway is already plain HTTP on the LAN; the clipboard falls back to a textarea when the page is served over plain HTTP.
 - Provider presets for SambaNova, SiliconFlow, Cloudflare Workers AI, Ollama, and LM Studio. The Cloudflare URL carries a `YOUR_ACCOUNT_ID` placeholder; the two local endpoints accept any placeholder key because they do not check one.
 - `GET /v1/models/{id}` returns one entry from the model list (alias and `provider:model` forms included) or `404 model_not_found`, so OpenAI clients that fetch a model before using it get a real answer.
 - `POST /v1/embeddings` as a passthrough to the provider named in `model` (`provider:model`, or the default provider for a bare id), with the usual key rotation, per-attempt timeout, request-log row, and metrics counters. Embeddings are not routed across providers and have no fallback.

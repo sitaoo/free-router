@@ -2166,6 +2166,13 @@ function renderGateway() {
         { label: '' },
       ],
       keys.map((entry) => {
+        // The cell keeps the masked form; this puts the real key on the
+        // clipboard, including over plain HTTP where the clipboard API is
+        // unavailable and copyLogText falls back to a textarea.
+        const copy = document.createElement('button');
+        copy.className = 'quiet';
+        copy.textContent = t('gw_copy');
+        copy.onclick = () => copyLogText(entry.key);
         const edit = document.createElement('button');
         edit.className = 'quiet';
         edit.textContent = t('gw_edit');
@@ -2219,7 +2226,7 @@ function renderGateway() {
         const actions = document.createElement('div');
         actions.className = 'row';
         actions.style.gap = '0.35rem';
-        actions.append(edit, del);
+        actions.append(copy, edit, del);
         const used = entry.dailyLimit
           ? String(entry.usedToday || 0) + ' / ' + entry.dailyLimit
           : String(entry.usedToday || 0);

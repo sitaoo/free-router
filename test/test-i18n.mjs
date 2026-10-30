@@ -23,6 +23,7 @@ const NEW_KEYS = [
   'log_ok', 'log_empty', 'log_interrupted', 'log_aborted', 'log_blocked', 'log_failed',
   'log_rejected',
   'gw_th_expires', 'gw_th_used', 'gw_limit_ph', 'gw_expires_title', 'gw_limit_prompt',
+  'gw_copy',
   'gw_expires_prompt', 'gw_updated', 'gw_edit',
   'sess_list_t', 'sess_list_d', 'sess_revoke', 'sess_revoke_others', 'sess_others_confirm',
   'sess_current', 'sess_revoked', 'sess_none', 'sess_confirm', 'sess_confirm_self',
