@@ -10,3 +10,6 @@ router.log
 router.pid
 discovered-free-models.json
 node_modules/
+
+# Local agent/editor state (launch configs, session worktrees).
+.claude/

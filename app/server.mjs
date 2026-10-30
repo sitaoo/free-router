@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  backupOverlayFile,
   buildLiveConfig,
   ensureConfigFile,
   ensureDir,
@@ -164,7 +165,16 @@ const { config: baseConfig, format: CONFIG_FORMAT } = loadConfigFile(CONFIG_PATH
 const overlayLoaded = loadOverlayFile(OVERLAY_PATH);
 let overlay = overlayLoaded.overlay;
 if (overlayLoaded.error) {
-  log(`ignoring unreadable overlay ${displayPath(OVERLAY_PATH)}: ${overlayLoaded.error}`);
+  // Starting on defaults here would quietly drop every key, key slot and the
+  // admin password the operator configured — worse than not starting at all.
+  // Refuse, point at the file, and leave the broken one untouched for repair.
+  console.error(
+    `refusing to start: cannot parse ${displayPath(OVERLAY_PATH)}: ${overlayLoaded.error}`,
+  );
+  console.error(
+    `Fix the JSON in that file, or restore ${displayPath(OVERLAY_PATH)}.bak from the last save.`,
+  );
+  process.exit(1);
 }
 if (runOverlayMigrations(overlay)) persistOverlayFile();
 const config = buildLiveConfig(baseConfig, overlay);
@@ -214,6 +224,7 @@ function editableProviderRaw(name) {
   return raw;
 }
 function persistOverlayFile() {
+  backupOverlayFile(OVERLAY_PATH);
   saveOverlayFile(OVERLAY_PATH, overlay);
 }
 function tombstone(listKey, name, present) {
@@ -4193,10 +4204,51 @@ server.listen(PORT, HOST, async () => {
   scheduleNextDiscovery();
 });
 
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => {
-    log(`received ${signal}; shutting down`);
-    if (stateSaveTimer) flushStateSave();
-    server.close(() => process.exit(0));
+// How long a shutdown waits for in-flight requests before cutting their
+// sockets. Long enough for a normal answer to finish, short enough to fit
+// inside Docker's default 10 s stop timeout.
+const SHUTDOWN_GRACE_MS = 8000;
+
+// Bind failures are fatal and should say why: EADDRINUSE otherwise surfaces as
+// an unhandled 'error' event with a stack that hides the one useful fact.
+server.on('error', (error) => {
+  const code = error?.code;
+  if (code === 'EADDRINUSE') {
+    console.error(`cannot listen on ${HOST}:${PORT}: address already in use (is free-router already running?)`);
+  } else if (code === 'EACCES') {
+    console.error(`cannot listen on ${HOST}:${PORT}: permission denied (ports below 1024 need privileges)`);
+  } else {
+    console.error(`server error: ${error?.message || error}`);
+  }
+  process.exit(1);
+});
+
+let shuttingDown = false;
+function shutdown(signal) {
+  // A second signal means "now": the first pass already tried to drain.
+  if (shuttingDown) {
+    log(`received ${signal} during shutdown; exiting now`);
+    process.exit(1);
+  }
+  shuttingDown = true;
+  log(`received ${signal}; shutting down`);
+  if (stateSaveTimer) flushStateSave();
+  // An in-flight SSE stream keeps close() waiting until the upstream finishes,
+  // which can take minutes. Give connections a grace period, then cut them.
+  const forceExit = setTimeout(() => {
+    log('shutdown grace period elapsed; closing remaining connections');
+    server.closeAllConnections?.();
+    process.exit(0);
+  }, SHUTDOWN_GRACE_MS);
+  forceExit.unref();
+  server.close(() => {
+    clearTimeout(forceExit);
+    process.exit(0);
   });
+  // Idle keep-alive sockets are not tracked by close(); drop them so a quiet
+  // process exits at once instead of after keepAliveTimeout.
+  server.closeIdleConnections?.();
+}
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => shutdown(signal));
 }

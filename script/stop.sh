@@ -26,12 +26,37 @@ if ! PID_FILE="$(find_pid_file)"; then
 fi
 
 PID="$(cat "$PID_FILE")"
-if kill -0 "$PID" 2>/dev/null; then
-  kill "$PID"
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    kill -0 "$PID" 2>/dev/null || break
-    sleep 0.2
-  done
+if ! kill -0 "$PID" 2>/dev/null; then
+  rm -f "$DATA_DIR/router.pid" "$REPO/router.pid"
+  echo "free-router is not running (removed stale pid file)"
+  exit 0
 fi
+
+# The pid may have been reused after a crash: only signal a process whose
+# command line is actually free-router, never whatever else got that pid.
+if [ -r "/proc/$PID/cmdline" ] && ! tr '\0' ' ' <"/proc/$PID/cmdline" | grep -q "app/server.mjs"; then
+  rm -f "$DATA_DIR/router.pid" "$REPO/router.pid"
+  echo "pid $PID is not free-router (removed stale pid file)" >&2
+  exit 1
+fi
+
+# SIGTERM first: the server drains in-flight requests for up to 8 s, so give
+# it longer than that before escalating, then insist.
+kill "$PID" 2>/dev/null || true
+for _ in $(seq 1 50); do
+  kill -0 "$PID" 2>/dev/null || break
+  sleep 0.2
+done
+if kill -0 "$PID" 2>/dev/null; then
+  echo "free-router (pid $PID) ignored SIGTERM for 10s; sending SIGKILL" >&2
+  kill -9 "$PID" 2>/dev/null || true
+  sleep 0.5
+fi
+
+if kill -0 "$PID" 2>/dev/null; then
+  echo "free-router (pid $PID) is still running; leaving $PID_FILE in place" >&2
+  exit 1
+fi
+
 rm -f "$DATA_DIR/router.pid" "$REPO/router.pid"
 echo "free-router stopped"

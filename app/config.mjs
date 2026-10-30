@@ -512,17 +512,33 @@ export function ensureDir(dir) {
   }
 }
 
-// Reads the overlay file; missing or corrupt files behave as an empty
-// overlay (the returned error lets the caller log it once).
+// Reads the overlay file; a missing or blank file is an empty overlay (editors
+// leave zero-byte files behind), while real corruption returns an error and an
+// empty overlay so the caller can refuse to boot instead of silently starting
+// from defaults with no keys and the default password.
 export function loadOverlayFile(overlayPath) {
   try {
     if (!fs.existsSync(overlayPath)) return { overlay: {}, error: '' };
     const raw = fs.readFileSync(overlayPath, 'utf8');
+    if (!raw.trim()) return { overlay: {}, error: '' };
     const parsed = JSON.parse(raw);
     if (!isPlainObject(parsed)) return { overlay: {}, error: 'overlay is not an object' };
     return { overlay: parsed, error: '' };
   } catch (error) {
     return { overlay: {}, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+// Copies the current overlay aside before it is overwritten, so a bad write or
+// a hand-edit gone wrong always has a previous version to fall back to.
+// Returns whether a backup was written; a missing file is not an error.
+export function backupOverlayFile(overlayPath) {
+  try {
+    if (!fs.existsSync(overlayPath)) return false;
+    fs.copyFileSync(overlayPath, `${overlayPath}.bak`);
+    return true;
+  } catch {
+    return false;
   }
 }
 

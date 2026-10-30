@@ -52,7 +52,18 @@ fi
 
 PROBE_PORT="$(probe_port)" || PROBE_PORT=8787
 
-nohup node "$REPO/app/server.mjs" >>"$LOG_DIR/router.log" 2>&1 &
+# Rotate at boot: a long-running instance can write hundreds of MB, and
+# appending to a single file forever fills the disk. One previous file is
+# enough for post-mortems (10 MB cap, checked only when starting).
+LOG_FILE="$LOG_DIR/router.log"
+if [ -f "$LOG_FILE" ]; then
+  LOG_SIZE="$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)"
+  if [ "$LOG_SIZE" -gt 10485760 ]; then
+    mv -f "$LOG_FILE" "$LOG_FILE.1"
+  fi
+fi
+
+nohup node "$REPO/app/server.mjs" >>"$LOG_FILE" 2>&1 &
 PID=$!
 echo "$PID" >"$PID_FILE"
 

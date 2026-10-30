@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isChatModel, normalizeCatalogPayload, normalizeModelSlug, supportsRequest } from '../app/providers.mjs';
 import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from '../app/quota.mjs';
@@ -2651,4 +2651,26 @@ try {
   await close(quotaMock);
   await close(geminiMock);
   fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 3 });
+}
+
+// A corrupt overlay must stop the boot instead of quietly starting from
+// defaults (no keys, default admin password). The message has to name the
+// file and the backup, and the process must exit non-zero before listening.
+{
+  const corruptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'free-router-corrupt-'));
+  const corruptConfig = path.join(corruptDir, 'config.json');
+  fs.writeFileSync(corruptConfig, JSON.stringify({ port: 8799 }));
+  fs.writeFileSync(path.join(corruptDir, 'config.local.json'), '{"gateway": {');
+  const boot = spawnSync(process.execPath, [path.join(HERE, '..', 'app', 'server.mjs')], {
+    env: { ...process.env, FREE_ROUTER_CONFIG: corruptConfig },
+    encoding: 'utf8',
+    timeout: 15000,
+  });
+  assert.equal(boot.status, 1, 'a corrupt overlay must abort the boot');
+  assert.match(boot.stderr, /cannot parse/);
+  assert.match(boot.stderr, /config\.local\.json/);
+  assert.match(boot.stderr, /\.bak/);
+  // The broken file is left untouched for repair, not rewritten.
+  assert.equal(fs.readFileSync(path.join(corruptDir, 'config.local.json'), 'utf8'), '{"gateway": {');
+  fs.rmSync(corruptDir, { recursive: true, force: true });
 }

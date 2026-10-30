@@ -51,6 +51,8 @@ mkdir -p data && cp .env.example data/.env
 
 The gateway listens on `127.0.0.1:8787` by default. Stop it with `./script/stop.sh`. Run these scripts as a normal user. If started as root, they re-exec as the directory owner and refuse to stay root.
 
+`stop.sh` sends `SIGTERM` and waits: the server stops accepting connections, gives in-flight requests up to 8 seconds to finish, then closes whatever is left, so a long SSE answer cannot hold shutdown hostage; a second signal exits at once, and the script escalates to `SIGKILL` after 10 seconds. It reports success only after confirming the process is gone, and it checks the pid's command line first so a recycled pid is never signalled. `start.sh` rotates `data/logs/router.log` to `router.log.1` at boot when the file is over 10 MB, keeping one previous log.
+
 If `ALL_PROXY` (or `HTTPS_PROXY`; `socks5`/`socks5h` only) names a SOCKS proxy, upstream calls go through curl. A direct request is tried first unless the host is listed in `socksFirstHosts`, and the fallback is only used when direct DNS fails. The bridge streams curl's output as it arrives, so an SSE answer reaches the client token by token instead of in one burst after the transfer ends.
 
 ## Run with Docker
@@ -65,7 +67,7 @@ mkdir -p data && cp .env.example data/.env
 docker compose -f docker/compose.yaml up -d
 ```
 
-The published port only reaches a server listening on `0.0.0.0`, so that seed is required; a fresh container left on the default `127.0.0.1` is unreachable even from the host. Because that binding also accepts LAN connections, the server refuses to start while the admin password is still `admin123` or no gateway key exists — the password and key in the seed satisfy the check. Open `http://127.0.0.1:8787/` with the seeded password; clients use the seeded gateway key. To keep the published port local-only, map `127.0.0.1:8787:8787` instead of `8787:8787`. On first boot the `.env` seed is migrated into `data/config.local.json` and `.env` files are ignored afterwards, so later UI edits always stick. Keys are never baked into the image. Discovery state lives in `data/` and persists across rebuilds via the mounted volume.
+The container's stdout log is bounded as well (`json-file`, 10 MB × 3 files, set in `docker/compose.yaml`), so a busy gateway cannot fill the host disk, and `stop_grace_period` is 12 seconds so the 8-second drain on `SIGTERM` finishes before Docker resorts to `SIGKILL`. The published port only reaches a server listening on `0.0.0.0`, so that seed is required; a fresh container left on the default `127.0.0.1` is unreachable even from the host. Because that binding also accepts LAN connections, the server refuses to start while the admin password is still `admin123` or no gateway key exists — the password and key in the seed satisfy the check. Open `http://127.0.0.1:8787/` with the seeded password; clients use the seeded gateway key. To keep the published port local-only, map `127.0.0.1:8787:8787` instead of `8787:8787`. On first boot the `.env` seed is migrated into `data/config.local.json` and `.env` files are ignored afterwards, so later UI edits always stick. Keys are never baked into the image. Discovery state lives in `data/` and persists across rebuilds via the mounted volume.
 
 ```bash
 docker compose -f docker/compose.yaml ps
@@ -170,6 +172,8 @@ On first boot, keys found in `.env` are imported into `config.local.json` once (
 ## Layered configuration
 
 `app/config/config.json` holds defaults and stays merge-clean (byte-identical to upstream where possible). Everything the operator changes — via the web UI or the first-boot `.env` seed — is written to the gitignored `data/config.local.json`, which the server deep-merges over defaults at startup (objects merge per key, arrays and scalars are replaced). The base file is never written at runtime. All operator state (overlay, discovery state, `.env` seed, logs) lives under `data/`; a boot-time upgrade moves legacy root files (`config.local.json`, `discovered-free-models.json`, `.env`) there automatically, and logs live in `data/logs/`.
+
+If `data/config.local.json` exists but cannot be parsed, the server refuses to start instead of falling back to defaults: booting without keys and with the default admin password is worse than a stopped gateway. The error names the file and the `.bak` copy; every save writes that copy before overwriting, so the previous version is always one `cp` away, and the broken file itself is left untouched for repair. A blank file (what an interrupted editor save leaves behind) is not corruption and reads as an empty overlay.
 
 Consequences worth knowing:
 
