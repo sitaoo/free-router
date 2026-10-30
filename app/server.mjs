@@ -50,6 +50,7 @@ import {
   timeoutBackoffMs,
 } from './cooldown.mjs';
 import { createRequestLog, outputTokensPerSecond, parseRequestLogLines } from './request-log.mjs';
+import { formatMetrics } from './metrics.mjs';
 import { estimateRequestTokens, fitsContext } from './context.mjs';
 import { installUpstreamProxy } from './proxy.mjs';
 import { isInsufficientFunds, msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
@@ -643,9 +644,9 @@ function recordGatewayKeyUse(name) {
   scheduleStateSave();
 }
 
-// Returns null when the call may proceed, else the refusal to send. Counting
-// happens here, so every authenticated /v1 call (models included) uses quota.
-function gatewayGuard(req) {
+// Validates the bearer key without counting the call. /metrics uses this so a
+// scrape never eats into a client's daily quota.
+function gatewayCredentialFailure(req) {
   if (!gatewayAuthRequired()) return null;
   const key = bearerKey(req);
   if (!key) {
@@ -666,7 +667,17 @@ function gatewayGuard(req) {
       retryAfterMs: state.retryAfterMs,
     };
   }
-  recordGatewayKeyUse(entry.name);
+  return null;
+}
+
+// Returns null when the call may proceed, else the refusal to send. Counting
+// happens here, so every authenticated /v1 call (models included) uses quota.
+function gatewayGuard(req) {
+  if (!gatewayAuthRequired()) return null;
+  const failure = gatewayCredentialFailure(req);
+  if (failure) return failure;
+  const entry = gatewayKeys().find((item) => item.key === bearerKey(req));
+  if (entry) recordGatewayKeyUse(entry.name);
   return null;
 }
 
@@ -682,6 +693,32 @@ const thoughtSignatures = createThoughtSignatureCache();
 // Finished client gateway calls for the Logs tab. Metadata only, in memory:
 // nothing here survives a restart and nothing carries request content.
 const clientRequestLog = createRequestLog();
+// Process lifetime counters for /metrics. The request log is a bounded ring
+// and is cleared by the operator, so it cannot answer "how many requests has
+// this process served"; these counters only ever grow.
+const processTotals = {
+  startedAt: Date.now(),
+  requests: 0,
+  outcomes: {},
+  inputTokens: 0,
+  outputTokens: 0,
+  durationMs: 0,
+  firstTokenMs: 0,
+  firstTokenSamples: 0,
+};
+
+function recordProcessTotals(entry) {
+  processTotals.requests += 1;
+  const outcome = entry.outcome || 'failed';
+  processTotals.outcomes[outcome] = (processTotals.outcomes[outcome] || 0) + 1;
+  processTotals.durationMs += Number(entry.durationMs) || 0;
+  if (typeof entry.firstTokenMs === 'number') {
+    processTotals.firstTokenMs += entry.firstTokenMs;
+    processTotals.firstTokenSamples += 1;
+  }
+  processTotals.inputTokens += Number(entry.inputTokens) || 0;
+  processTotals.outputTokens += Number(entry.outputTokens) || 0;
+}
 let discoverySeenIds = [];
 let discoveryRemovedIds = [];
 let discoveryLastCheckedAt = 0;
@@ -2613,6 +2650,7 @@ async function handleChat(req, res, options = {}) {
   } finally {
     const entry = finishRequestRecord(record, res, startedAt);
     const stored = clientRequestLog.add(secretRedactor ? secretRedactor.redact(entry).value : entry);
+    recordProcessTotals(stored);
     appendRequestLog(stored);
   }
 }
@@ -4361,6 +4399,33 @@ async function handler(req, res) {
   }
   if (req.method === 'GET' && url.pathname === '/api/health') {
     return sendJson(res, 200, healthPayload());
+  }
+  // Prometheus scrape target. It follows the same credential rule as /v1
+  // (bearer key once keys exist) but does not count the scrape against the
+  // key's daily quota.
+  if (req.method === 'GET' && url.pathname === '/metrics') {
+    const failure = gatewayCredentialFailure(req);
+    if (failure) return sendGatewayFailure(res, failure);
+    const pool = orderedPool();
+    const now = Date.now();
+    const text = formatMetrics({
+      version: VERSION,
+      startedAt: processTotals.startedAt,
+      now,
+      pool: { free: pool.free, paid: pool.paid },
+      totals: processTotals,
+      cooldowns: [...cooldowns.values()].filter((entry) => Number(entry?.until) > now),
+      gatewayKeys: gatewayKeys().map((entry) => ({
+        name: entry.name,
+        usedToday: gatewayKeyUsedToday(entry.name),
+        dailyLimit: entry.dailyLimit ?? null,
+      })),
+    });
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    return res.end(text);
   }
   if (req.method === 'GET' && url.pathname === '/v1/models') {
     const gatewayFailure = gatewayGuard(req);

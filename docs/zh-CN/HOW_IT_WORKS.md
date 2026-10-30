@@ -282,9 +282,12 @@ GET  /healthz                最小探活：ok、service、version（始终开�
 GET  /health                 本机回环或管理员会话返回完整内容，其他调用者只拿到最小内容
 GET  /api/health             完整内容（需要管理员会话）
 GET  /v1/models              开了鉴权就要网关 Key
+GET  /metrics               Prometheus 文本；与 /v1 同一 Bearer Key，但不计入每日配额
 POST /v1/chat/completions    开了鉴权就要网关 Key
 POST /v1/responses           同一套模型池，Responses 方言
 ```
+
+`GET /metrics` 是 Prometheus 抓取目标，输出文本格式。它报告进程生命周期的计数器（按结果分的请求数、请求总耗时、首 token 总耗时、上游报告过的输入/输出 token），以及当前值（免费/付费池大小、冷却中的模型数、每个网关 Key 今日调用数与每日限额）和版本号。计数器只存在内存里，随进程重启归零；管理员清空日志页不会重置它们。鉴权规则与 `/v1` 相同（存在 Key 时需要 Bearer），但抓取不计入该 Key 的每日配额，Prometheus 可以轮询而不会吃掉客户端的额度。
 
 `GET /healthz` 和 `GET /health` 报 `package.json` 的 `version`（当前 `1.0.0`），发版用`v1.0.0` 这种 git tag。完整的 `/health` 内容会列出各渠道 Key 名称、欠费封禁、用量和整个池子，所以只发给本机回环调用（容器探活和本机脚本）或已登录的管理员；其他调用者只拿到和 `/healthz` 一样的三字段。`/api/health` 始终返回完整内容，但需要管理员会话。
 

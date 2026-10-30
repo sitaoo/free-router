@@ -287,10 +287,13 @@ POST /api/restart            exit for supervisor restart (session required)
 GET  /healthz                minimal probe: ok, service, version (always open)
 GET  /health                 full payload from loopback or an admin session; minimal otherwise
 GET  /api/health             full payload (session required)
+GET  /metrics               Prometheus text; same bearer key as /v1, not counted against quota
 GET  /v1/models              gateway key required once auth is on
 POST /v1/chat/completions    gateway key required once auth is on
 POST /v1/responses           same pool, keys, limits, translated Responses dialect
 ```
+
+`GET /metrics` is a Prometheus scrape target in text exposition format. It reports process lifetime counters (requests by outcome, total request duration, first-token duration, input/output tokens reported by upstreams), current gauges (free and paid pool size, models cooling down, per-gateway-key calls today and daily limits), and the version. Counters are kept in memory and reset with the process; the operator clearing the Logs tab does not reset them. It follows the same bearer-key rule as `/v1` but a scrape is not counted against the key's daily quota, so a Prometheus server can poll it without consuming a client's allowance.
 
 `GET /healthz` and `GET /health` report `version` from `package.json` (currently `1.0.0`). Releases are git tags of the form `v1.0.0`. The full `/health` payload names provider key labels, payment blocks, usage and the whole pool, so it is served only to a loopback caller (the container healthcheck and local scripts) or to a logged-in admin; any other caller gets the same three fields as `/healthz`. `/api/health` always returns the full payload and requires the admin session.
 

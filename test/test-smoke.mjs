@@ -2263,6 +2263,19 @@ try {
   assert.deepEqual(afterLogsClear.entries, []);
   assert.equal(afterLogsClear.capacity, 500);
 
+  // Prometheus scrape: process lifetime counters survive Clear, and the text
+  // never carries a key value.
+  const metricsResponse = await fetch(`${base}/metrics`);
+  assert.equal(metricsResponse.status, 200);
+  assert.match(metricsResponse.headers.get('content-type') || '', /text\/plain/);
+  const metricsText = await metricsResponse.text();
+  assert.match(metricsText, /^free_router_up 1$/m);
+  assert.match(metricsText, /^free_router_info\{version="/m);
+  assert.match(metricsText, /free_router_requests_total\{outcome="ok"\} [1-9]/);
+  assert.match(metricsText, /free_router_request_duration_seconds_count [1-9]/);
+  assert.match(metricsText, /free_router_pool_models\{kind="free"\} [1-9]/);
+  assert.equal(metricsText.includes('bai-rotated-key'), false, 'no key value in metrics');
+
   const cleared = await fetch(`${base}/api/keys`, {
     method: 'POST',
     headers: uiHeaders,
