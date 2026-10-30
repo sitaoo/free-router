@@ -3,7 +3,14 @@
 // deduplicated, with hostname and container-view flag passed through.
 import assert from 'node:assert/strict';
 
-import { describeLanAccess, isLanOpen, lanGuard, loginLockout, recordLoginFailure } from '../app/net.mjs';
+import {
+  describeLanAccess,
+  isLanOpen,
+  isLocalHostname,
+  lanGuard,
+  loginLockout,
+  recordLoginFailure,
+} from '../app/net.mjs';
 
 const fakeInterfaces = {
   lo: [
@@ -79,5 +86,24 @@ assert.equal(lanGuard({ host: '0.0.0.0', keyCount: 0, isDefaultPassword: true })
   assert.equal(locked.retryAfterMs, 5 * 60 * 1000);
   assert.deepEqual(loginLockout(state, NOW + 5 * 60 * 1000 + 1), { locked: false });
 }
+
+// Host-header allowlist: loopback/LAN/local names always pass; a public
+// hostname only when the operator trusted it, so a reverse proxy can work
+// without disabling the rebinding guard.
+assert.equal(isLocalHostname('localhost'), true);
+assert.equal(isLocalHostname('127.0.0.1'), true);
+assert.equal(isLocalHostname('192.168.1.20'), true);
+assert.equal(isLocalHostname('[::1]'), true);
+assert.equal(isLocalHostname('router'), true);
+assert.equal(isLocalHostname(''), true);
+assert.equal(isLocalHostname('router.example.com'), false);
+assert.equal(isLocalHostname('router.example.com', ['router.example.com']), true);
+assert.equal(isLocalHostname('a.example.com', ['.example.com']), true);
+assert.equal(isLocalHostname('example.com', ['.example.com']), true);
+assert.equal(isLocalHostname('a.example.com', ['*.example.com']), true);
+assert.equal(isLocalHostname('example.com', ['*.example.com']), true);
+assert.equal(isLocalHostname('example.com', ['.example.com']), true);
+assert.equal(isLocalHostname('a.other.com', ['.example.com']), false);
+assert.equal(isLocalHostname('evil-example.com', ['.example.com']), false);
 
 console.log('net unit tests passed');

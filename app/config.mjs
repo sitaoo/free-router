@@ -710,7 +710,17 @@ export function defaultConfigObject() {
       insufficientFunds: 86400000,
       overloaded: 15000,
     },
-    webui: { enabled: true, envFile: '.env', password: 'admin123' },
+    webui: {
+      enabled: true,
+      envFile: '.env',
+      password: 'admin123',
+      // Reverse-proxy support: allow extra Host names through the rebinding
+      // guard, trust X-Forwarded-* for client addresses and host, and mark the
+      // session cookie Secure when TLS terminates upstream.
+      trustedHosts: [],
+      trustProxy: false,
+      secureCookie: false,
+    },
     gateway: { requireAuth: false, keys: [] },
   };
 }

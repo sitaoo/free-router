@@ -107,11 +107,14 @@ npm run models -- --json
 ```json
 "webui": {
   "enabled": true,
-  "envFile": ".env"
+  "envFile": ".env",
+  "trustedHosts": ["router.example.com"],
+  "trustProxy": false,
+  "secureCookie": false
 }
 ```
 
-设 `enabled: false` 可整个拿掉 `/` 和 `/api/*`。
+设 `enabled: false` 可整个拿掉 `/` 和 `/api/*`。`trustedHosts` 里的主机名可以穿过 DNS 重绑定防护（支持精确名、`.example.com` 和 `*.example.com`）；放在反向代理后面时把 `trustProxy` 设为 `true`，让 `X-Forwarded-For` 和 `X-Forwarded-Host` 生效（否则登录限流会把所有客户端都看成 127.0.0.1）；TLS 在代理层终结时把 `secureCookie` 设为 `true`，会话 cookie 会带 `Secure`。
 
 ### 鉴权模型
 

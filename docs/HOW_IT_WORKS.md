@@ -107,11 +107,14 @@ Open <http://127.0.0.1:8787/> and log in (default password `admin123`, change it
 ```json
 "webui": {
   "enabled": true,
-  "envFile": ".env"
+  "envFile": ".env",
+  "trustedHosts": ["router.example.com"],
+  "trustProxy": false,
+  "secureCookie": false
 }
 ```
 
-Set `enabled: false` to remove `/` and `/api/*` entirely.
+Set `enabled: false` to remove `/` and `/api/*` entirely. `trustedHosts` lets those hostnames through the DNS-rebinding guard (exact, `.example.com`, or `*.example.com`); set `trustProxy: true` behind a reverse proxy so `X-Forwarded-For` and `X-Forwarded-Host` are authoritative (otherwise every client looks like 127.0.0.1 to the login brake), and `secureCookie: true` so the session cookie carries `Secure` when TLS terminates upstream.
 
 ### Authentication model
 

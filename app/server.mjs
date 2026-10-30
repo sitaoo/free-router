@@ -65,7 +65,13 @@ import {
   toResponsesPayload,
 } from './responses.mjs';
 import { loadSweBenchScores, sweBenchScoreFor } from './swe-bench.mjs';
-import { describeLanAccess, lanGuard, loginLockout, recordLoginFailure } from './net.mjs';
+import {
+  describeLanAccess,
+  isLocalHostname,
+  lanGuard,
+  loginLockout,
+  recordLoginFailure,
+} from './net.mjs';
 import { normalizeTimeZone } from './timezones.mjs';
 import { mergeVerdict, verdictFor as cachedVerdictFor } from './verdicts.mjs';
 import { PINNED_SCORE, USAGE_KINDS, classifyFailure, ewmaLatency, isClientFaultExhaustion, isCredentialFault, latencyAdjustment, metadataBonus, metadataScore, normalizeScore, pickExplorationTarget, qualityTotals } from './ranking.mjs';
@@ -2871,19 +2877,34 @@ function isLoopbackAddress(address) {
 //   - a forged Origin that does not match the request host is rejected,
 //     while same-host LAN origins are allowed.
 // A plain curl call sends neither Origin nor Sec-Fetch-Site and is allowed.
+// Reverse-proxy knobs live in `webui`: trustedHosts lets a public hostname
+// through the rebinding guard, trustProxy makes X-Forwarded-* authoritative
+// (needed for the login brake to see real client addresses), and secureCookie
+// marks the session cookie Secure when TLS terminates upstream.
+function webuiConfig() {
+  return config.webui && typeof config.webui === 'object' ? config.webui : {};
+}
+
+function trustedHosts() {
+  const list = webuiConfig().trustedHosts;
+  return Array.isArray(list) ? list.map((entry) => String(entry).toLowerCase().trim()).filter(Boolean) : [];
+}
+
+function trustProxy() {
+  return webuiConfig().trustProxy === true;
+}
+
+function secureCookie() {
+  return webuiConfig().secureCookie === true;
+}
+
 function isLocalHost(hostname) {
-  const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
-  if (!host) return true;
-  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
-  if (host === '::1' || host === '127.0.0.1' || host.startsWith('127.') || host === '[::1]') return true;
-  if (/^(10|172\.(1[6-9]|2\d|3[01])|192\.168)\./.test(host)) return true;
-  if (/^(fc[0-9a-f]{2}|fd[0-9a-f]{2}|fe80):/i.test(host)) return true;
-  if (!host.includes('.') && /^[a-z0-9-]+$/i.test(host)) return true;
-  return false;
+  return isLocalHostname(hostname, trustedHosts());
 }
 
 function uiGuardFailure(req) {
-  const host = String(req.headers.host || '');
+  const forwardedHost = trustProxy() ? String(req.headers['x-forwarded-host'] || '') : '';
+  const host = forwardedHost || String(req.headers.host || '');
   const hostname = host.replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
   if (hostname && !isLocalHost(hostname)) {
     return `unexpected Host header: ${host}`;
@@ -2896,14 +2917,17 @@ function uiGuardFailure(req) {
 
   const origin = String(req.headers.origin || '');
   if (origin) {
-    let originHost = '';
+    let originUrl;
     try {
-      originHost = new URL(origin).hostname;
+      originUrl = new URL(origin);
     } catch {
       return `invalid Origin header: ${origin}`;
     }
-    const sameHost = originHost.toLowerCase() === hostname.toLowerCase();
-    if (!sameHost && !isLocalHost(originHost)) {
+    const sameHost = originUrl.hostname.toLowerCase() === hostname.toLowerCase();
+    // Behind a proxy the browser's Origin carries the public hostname and the
+    // backend sees only the forwarded one; the forwarded host is compared
+    // above, so an allowed hostname is enough here.
+    if (!sameHost && !isLocalHost(originUrl.hostname)) {
       return `unexpected Origin header: ${origin}`;
     }
   }
@@ -3772,6 +3796,16 @@ async function handleRestart(req, res) {
   }, 300).unref?.();
 }
 
+// Behind a reverse proxy every connection comes from 127.0.0.1, so the login
+// brake has to key on the forwarded client address once trustProxy is on.
+function clientAddress(req) {
+  if (trustProxy()) {
+    const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    if (forwarded) return forwarded;
+  }
+  return req.socket?.remoteAddress || 'unknown';
+}
+
 async function handleLogin(req, res) {
   let body;
   try {
@@ -3780,7 +3814,7 @@ async function handleLogin(req, res) {
     return sendJson(res, 400, { error: { message: String(error), type: 'invalid_request_error' } });
   }
   const password = typeof body.password === 'string' ? body.password : '';
-  const clientIp = req.socket?.remoteAddress || 'unknown';
+  const clientIp = clientAddress(req);
   pruneLoginFailures();
   const lock = loginLockout(loginFailures.get(clientIp));
   if (lock.locked) {
@@ -3804,9 +3838,10 @@ async function handleLogin(req, res) {
   // Cookie lifetime mirrors the server-side TTL; "never" becomes a browser
   // session cookie so it still dies with the browser.
   const maxAge = ttlHours > 0 ? `; Max-Age=${Math.round(ttlHours * 3600)}` : '';
+  const secure = secureCookie() ? '; Secure' : '';
   res.writeHead(200, {
     'Content-Type': 'application/json; charset=utf-8',
-    'Set-Cookie': `fr_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${maxAge}`,
+    'Set-Cookie': `fr_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secure}${maxAge}`,
     'Cache-Control': 'no-store',
   });
   return res.end(JSON.stringify({
@@ -3856,7 +3891,7 @@ async function handler(req, res) {
     webuiSessions.delete(webuiSessionToken(req));
     res.writeHead(200, {
       'Content-Type': 'application/json; charset=utf-8',
-      'Set-Cookie': 'fr_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0',
+      'Set-Cookie': `fr_session=; Path=/; HttpOnly; SameSite=Lax${secureCookie() ? '; Secure' : ''}; Max-Age=0`,
       'Cache-Control': 'no-store',
     });
     return res.end(JSON.stringify({ ok: true }));
