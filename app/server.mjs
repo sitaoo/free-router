@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import {
   backupOverlayFile,
@@ -4243,6 +4244,23 @@ async function handleLogin(req, res) {
   }));
 }
 
+// The page is a pure function of the shipped code, so render, hash, and
+// compress it once per process rather than on every request. Restarting the
+// server is the only way the page changes, and a restart is also what
+// invalidates the ETag.
+let renderedPageCache = null;
+function renderedPage() {
+  if (!renderedPageCache) {
+    const html = Buffer.from(renderPage(), 'utf8');
+    renderedPageCache = {
+      html,
+      etag: `"${crypto.createHash('sha1').update(html).digest('base64url').slice(0, 27)}"`,
+      gzip: zlib.gzipSync(html),
+    };
+  }
+  return renderedPageCache;
+}
+
 async function handler(req, res) {
   const url = new URL(req.url || '/', `http://${req.headers.host || `${HOST}:${PORT}`}`);
   // CORS is for the gateway API only; the web UI is same-origin by design and
@@ -4274,11 +4292,15 @@ async function handler(req, res) {
   }
 
   if (req.method === 'GET' && url.pathname === '/') {
-    const page = renderPage();
-    res.writeHead(200, {
+    const page = renderedPage();
+    const headers = {
       'Content-Type': 'text/html; charset=utf-8',
-      'Content-Length': Buffer.byteLength(page),
-      'Cache-Control': 'no-store',
+      // The page is a static shell (all data arrives through /api), so a
+      // browser may keep it and revalidate; the ETag makes that a 304 with no
+      // body. `private` keeps shared proxies out of an admin surface.
+      'Cache-Control': 'private, no-cache',
+      ETag: page.etag,
+      Vary: 'Accept-Encoding',
       // img-src is not decoration: the favicon is an image the page declares,
       // and `default-src 'none'` blocks it before the request is even made, so
       // the tab silently shows no icon. Anything else stays forbidden.
@@ -4287,8 +4309,17 @@ async function handler(req, res) {
       'Referrer-Policy': 'no-referrer',
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'DENY',
-    });
-    return res.end(page);
+    };
+    if (String(req.headers['if-none-match'] || '') === page.etag) {
+      res.writeHead(304, headers);
+      return res.end();
+    }
+    const gzip = /\bgzip\b/i.test(String(req.headers['accept-encoding'] || ''));
+    const body = gzip ? page.gzip : page.html;
+    if (gzip) headers['Content-Encoding'] = 'gzip';
+    headers['Content-Length'] = body.length;
+    res.writeHead(200, headers);
+    return res.end(body);
   }
   // Login is public (it is the gate itself); logout needs no session either.
   if (req.method === 'POST' && url.pathname === '/api/login') {

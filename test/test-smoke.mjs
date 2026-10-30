@@ -2092,6 +2092,20 @@ try {
   const pageHtml = await pageResponse.text();
   assert.match(pageHtml, /Provider keys/);
   assert.match(pageHtml, /Pool priority/);
+  // The shell is cached by the browser and revalidated: an ETag round trip
+  // answers 304 with no body, and a gzip client gets compressed bytes.
+  const pageEtag = pageResponse.headers.get('etag');
+  assert.match(pageEtag || '', /^".+"$/, 'the page carries an ETag');
+  assert.match(pageResponse.headers.get('cache-control') || '', /no-cache/);
+  const notModified = await fetch(`${base}/`, { headers: { 'If-None-Match': pageEtag } });
+  assert.equal(notModified.status, 304);
+  assert.equal(await notModified.text(), '');
+  const compressed = await fetch(`${base}/`, {
+    headers: { 'Accept-Encoding': 'gzip', 'If-None-Match': '"stale"' },
+  });
+  assert.equal(compressed.headers.get('content-encoding'), 'gzip');
+  assert.equal(compressed.headers.get('etag'), pageEtag);
+  assert.match(await compressed.text(), /Provider keys/);
   assert.doesNotMatch(pageHtml, /data-tab="routes"/);
   assert.doesNotMatch(pageHtml, /data-tab="quota"/);
   assert.match(pageHtml, /<link rel="icon" type="image\/svg\+xml" href="\/favicon\.svg">/);
