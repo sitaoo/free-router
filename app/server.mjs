@@ -82,6 +82,14 @@ import {
 } from './net.mjs';
 import { normalizeTimeZone } from './timezones.mjs';
 import { mergeVerdict, verdictFor as cachedVerdictFor } from './verdicts.mjs';
+import {
+  gatewayKeyState,
+  gatewayUsageFor,
+  parseDailyLimit,
+  parseExpiry,
+  recordGatewayUse,
+  sanitizeGatewayUsage,
+} from './gateway-keys.mjs';
 import { PINNED_SCORE, USAGE_KINDS, classifyFailure, ewmaLatency, isClientFaultExhaustion, isCredentialFault, latencyAdjustment, metadataBonus, metadataScore, normalizeScore, pickExplorationTarget, qualityTotals } from './ranking.mjs';
 import {
   createStreamSignatureExtractor,
@@ -627,16 +635,47 @@ function bearerKey(req) {
   return match ? match[1] : '';
 }
 
-function gatewayClientName(req) {
-  const key = bearerKey(req);
-  if (!key) return '';
-  return gatewayKeys().find((entry) => entry.key === key)?.name || '';
+function gatewayKeyUsedToday(name) {
+  return gatewayUsageFor(gatewayKeyUsage, name, usageDay());
 }
 
-function gatewayGuardFailure(req) {
-  if (!gatewayAuthRequired()) return '';
-  if (gatewayClientName(req)) return '';
-  return bearerKey(req) ? 'invalid API key' : 'missing API key (Authorization: Bearer <key>)';
+function recordGatewayKeyUse(name) {
+  recordGatewayUse(gatewayKeyUsage, name, usageDay(), USAGE_RETENTION_DAYS);
+  scheduleStateSave();
+}
+
+// Returns null when the call may proceed, else the refusal to send. Counting
+// happens here, so every authenticated /v1 call (models included) uses quota.
+function gatewayGuard(req) {
+  if (!gatewayAuthRequired()) return null;
+  const key = bearerKey(req);
+  if (!key) {
+    return { status: 401, type: 'unauthorized', message: 'missing API key (Authorization: Bearer <key>)' };
+  }
+  const entry = gatewayKeys().find((item) => item.key === key);
+  if (!entry) return { status: 401, type: 'unauthorized', message: 'invalid API key' };
+  const state = gatewayKeyState(entry, {
+    now: Date.now(),
+    used: gatewayKeyUsedToday(entry.name),
+    timeZone: USAGE_TIMEZONE || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+  });
+  if (!state.ok) {
+    return {
+      status: state.status,
+      type: state.status === 429 ? 'rate_limited' : 'unauthorized',
+      message: state.message,
+      retryAfterMs: state.retryAfterMs,
+    };
+  }
+  recordGatewayKeyUse(entry.name);
+  return null;
+}
+
+function sendGatewayFailure(res, failure) {
+  const headers = failure.retryAfterMs
+    ? { 'Retry-After': String(Math.max(1, Math.ceil(failure.retryAfterMs / 1000))) }
+    : {};
+  return sendJson(res, failure.status, { error: { message: failure.message, type: failure.type } }, headers);
 }
 
 const cooldowns = new Map();
@@ -663,6 +702,8 @@ const probeTimers = new Map();
 const probeRunning = new Set();
 let lastSelection = null;
 let usageByDay = {};
+// Gateway client-key request counts per day, keyed by key name (never value).
+let gatewayKeyUsage = {};
 // Live latency portraits (EWMA mean + sample count per model key). Persisted
 // next to usage; pruned with it. Feeds the small capped latency term.
 let usageLatency = {};
@@ -964,6 +1005,7 @@ function loadDiscoveryState() {
   try {
     const state = JSON.parse(fs.readFileSync(DISCOVERY_STATE_PATH, 'utf8'));
     usageByDay = sanitizeUsage(state.usage);
+    gatewayKeyUsage = sanitizeGatewayUsage(state.gatewayUsage, usageDays());
     usageLatency = {};
     const storedLatency = state.latency;
     if (storedLatency && typeof storedLatency === 'object') {
@@ -1022,6 +1064,7 @@ function saveDiscoveryState() {
     paymentBlocks,
     lastSelection,
     usage: usageByDay,
+    gatewayUsage: gatewayKeyUsage,
     latency: usageLatency,
   };
   const temporaryPath = `${DISCOVERY_STATE_PATH}.${process.pid}.tmp`;
@@ -3138,6 +3181,30 @@ function randomGatewayKey() {
   return `sk-fr-${crypto.randomBytes(24).toString('base64url')}`;
 }
 
+// Reads the optional policy fields shared by create and update. Returns
+// { error } for a bad value so the caller can answer 400.
+function gatewayKeyPolicy(body) {
+  const dailyLimit = parseDailyLimit(body.dailyLimit);
+  if (dailyLimit === null) {
+    return { error: 'dailyLimit must be a whole number from 0 to 1000000 (0 = unlimited)' };
+  }
+  const expiresAt = parseExpiry(body.expiresAt);
+  if (expiresAt === null) {
+    return { error: 'expiresAt must be YYYY-MM-DD or an ISO timestamp (empty = no expiry)' };
+  }
+  return { dailyLimit, expiresAt };
+}
+
+function gatewayKeySummary(entry) {
+  return {
+    name: entry.name,
+    createdAt: entry.createdAt || null,
+    expiresAt: entry.expiresAt || null,
+    dailyLimit: Number(entry.dailyLimit) > 0 ? Math.floor(Number(entry.dailyLimit)) : null,
+    usedToday: gatewayKeyUsedToday(entry.name),
+  };
+}
+
 // Gateway client keys (downstream). Creating the first key enables auth;
 // the full key value is returned only once at creation.
 async function handleGatewayKeys(req, res) {
@@ -3176,6 +3243,8 @@ async function handleGatewayKeys(req, res) {
     }
     setOverlayValue(['gateway', 'keys'], kept);
     if (!kept.length) setOverlayValue(['gateway', 'requireAuth'], false);
+    delete gatewayKeyUsage[keyName];
+    scheduleStateSave();
     try {
       persistOverlayFile();
     } catch (error) {
@@ -3187,6 +3256,36 @@ async function handleGatewayKeys(req, res) {
     refreshSecretRedactor();
     log(`deleted gateway API key [${keyName}] via web interface`);
     return sendJson(res, 200, { ok: true });
+  }
+
+  if (action === 'update') {
+    const keyName = String(body.name || '');
+    const index = gatewayKeys().findIndex((entry) => entry?.name === keyName);
+    if (index < 0) {
+      return sendJson(res, 404, { error: { message: `unknown key: ${keyName}`, type: 'not_found' } });
+    }
+    const policy = gatewayKeyPolicy(body);
+    if (policy.error) {
+      return sendJson(res, 400, { error: { message: policy.error, type: 'invalid_request_error' } });
+    }
+    const keys = gatewayKeys().slice();
+    const updated = { ...keys[index] };
+    if (policy.dailyLimit) updated.dailyLimit = policy.dailyLimit;
+    else delete updated.dailyLimit;
+    if (policy.expiresAt) updated.expiresAt = policy.expiresAt;
+    else delete updated.expiresAt;
+    keys[index] = updated;
+    setOverlayValue(['gateway', 'keys'], keys);
+    try {
+      persistOverlayFile();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return sendJson(res, 500, {
+        error: { message: `could not write ${OVERLAY_FILENAME}: ${reason}`, type: 'config_write_failed' },
+      });
+    }
+    log(`updated gateway API key [${keyName}] via web interface`);
+    return sendJson(res, 200, { ok: true, key: gatewayKeySummary(updated) });
   }
 
   if (action === 'create') {
@@ -3202,10 +3301,14 @@ async function handleGatewayKeys(req, res) {
     if (problem) {
       return sendJson(res, 400, { error: { message: problem, type: 'invalid_request_error' } });
     }
-    setOverlayValue(['gateway', 'keys'], [
-      ...gatewayKeys(),
-      { name: keyName, key: value, createdAt: new Date().toISOString() },
-    ]);
+    const policy = gatewayKeyPolicy(body);
+    if (policy.error) {
+      return sendJson(res, 400, { error: { message: policy.error, type: 'invalid_request_error' } });
+    }
+    const entry = { name: keyName, key: value, createdAt: new Date().toISOString() };
+    if (policy.dailyLimit) entry.dailyLimit = policy.dailyLimit;
+    if (policy.expiresAt) entry.expiresAt = policy.expiresAt;
+    setOverlayValue(['gateway', 'keys'], [...gatewayKeys(), entry]);
     setOverlayValue(['gateway', 'requireAuth'], true);
     try {
       persistOverlayFile();
@@ -3217,7 +3320,13 @@ async function handleGatewayKeys(req, res) {
     }
     refreshSecretRedactor();
     log(`created gateway API key [${keyName}] via web interface`);
-    return sendJson(res, 200, { ok: true, name: keyName, key: value, requireAuth: true });
+    return sendJson(res, 200, {
+      ok: true,
+      name: keyName,
+      key: value,
+      requireAuth: true,
+      entry: gatewayKeySummary(entry),
+    });
   }
 
   return sendJson(res, 400, { error: { message: `unknown action: ${action}`, type: 'invalid_request_error' } });
@@ -3985,6 +4094,9 @@ async function handler(req, res) {
             name: entry.name,
             masked: maskSecret(entry.key),
             createdAt: entry.createdAt || null,
+            expiresAt: entry.expiresAt || null,
+            dailyLimit: Number(entry.dailyLimit) > 0 ? Math.floor(Number(entry.dailyLimit)) : null,
+            usedToday: gatewayKeyUsedToday(entry.name),
           })),
         },
         webui: {
@@ -4071,10 +4183,8 @@ async function handler(req, res) {
     return sendJson(res, 200, healthPayload());
   }
   if (req.method === 'GET' && url.pathname === '/v1/models') {
-    const gatewayFailure = gatewayGuardFailure(req);
-    if (gatewayFailure) {
-      return sendJson(res, 401, { error: { message: gatewayFailure, type: 'unauthorized' } });
-    }
+    const gatewayFailure = gatewayGuard(req);
+    if (gatewayFailure) return sendGatewayFailure(res, gatewayFailure);
     if (catalogsCold()) await refreshCatalog();
     else refreshCatalogSoon();
     const ordered = orderedPool();
@@ -4088,17 +4198,13 @@ async function handler(req, res) {
     });
   }
   if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
-    const gatewayFailure = gatewayGuardFailure(req);
-    if (gatewayFailure) {
-      return sendJson(res, 401, { error: { message: gatewayFailure, type: 'unauthorized' } });
-    }
+    const gatewayFailure = gatewayGuard(req);
+    if (gatewayFailure) return sendGatewayFailure(res, gatewayFailure);
     return handleChat(req, res);
   }
   if (req.method === 'POST' && url.pathname === '/v1/responses') {
-    const gatewayFailure = gatewayGuardFailure(req);
-    if (gatewayFailure) {
-      return sendJson(res, 401, { error: { message: gatewayFailure, type: 'unauthorized' } });
-    }
+    const gatewayFailure = gatewayGuard(req);
+    if (gatewayFailure) return sendGatewayFailure(res, gatewayFailure);
     return handleChat(req, res, { dialect: 'responses' });
   }
   return sendJson(res, 404, {

@@ -22,6 +22,8 @@ const NEW_KEYS = [
   'th_logs_output_tokens', 'th_logs_speed', 'th_logs_attempts',
   'log_ok', 'log_empty', 'log_interrupted', 'log_aborted', 'log_blocked', 'log_failed',
   'log_rejected',
+  'gw_th_expires', 'gw_th_used', 'gw_limit_ph', 'gw_expires_title', 'gw_limit_prompt',
+  'gw_expires_prompt', 'gw_updated', 'gw_edit',
 ];
 
 // 1. The exact Chinese sentence the operator approved.
@@ -66,6 +68,12 @@ assert.doesNotMatch(STRINGS['zh-CN'].logs_blurb, /方言|顶层字段名/);
 assert.match(STRINGS['zh-CN'].logs_blurb, /API（chat \/ responses）/);
 assert.match(STRINGS['zh-TW'].logs_blurb, /API（chat \/ responses）/);
 assert.equal(STRINGS['zh-TW'].tab_logs, '日誌');
+// Gateway key policy prompts name the key and keep their placeholders.
+assert.match(STRINGS.en.gw_limit_prompt, /\{n\}/);
+assert.match(STRINGS.en.gw_expires_prompt, /\{n\}/);
+assert.match(STRINGS.en.gw_updated, /\{n\}/);
+assert.equal(STRINGS['zh-CN'].gw_edit, '编辑');
+assert.equal(STRINGS['zh-TW'].gw_edit, '編輯');
 assert.equal(translate(STRINGS, 'zh-CN', 'st_blocked', { at: '10:00' }), '资金不足，10:00 前停用');
 assert.equal(translate(STRINGS, 'xx', 'paid_model_warning'), STRINGS.en.paid_model_warning);
 

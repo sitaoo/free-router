@@ -2598,6 +2598,77 @@ try {
   const afterLogout = await fetch(`${base}/api/state`, { headers: { Cookie: freshCookie } });
   assert.equal(afterLogout.status, 401);
 
+  // Gateway key policy: an expiry date and a per-day request quota are
+  // enforced per key, counted in the persisted state, and reported by
+  // /api/state. Both are optional and editing one takes effect at once.
+  {
+    const login = await fetch(`${base}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: 's3cret-newpw' }),
+    });
+    assert.equal(login.status, 200);
+    const cookie = String(login.headers.get('set-cookie') || '').split(';')[0];
+    const policyHeaders = { 'Content-Type': 'application/json', Cookie: cookie, 'Sec-Fetch-Site': 'same-origin' };
+    const createKey = (body) =>
+      fetch(`${base}/api/gateway-keys`, {
+        method: 'POST',
+        headers: policyHeaders,
+        body: JSON.stringify(body),
+      });
+
+    const created = await createKey({ action: 'create', name: 'quota-test', dailyLimit: '1' });
+    assert.equal(created.status, 200);
+    const quotaKey = await created.json();
+    assert.equal(quotaKey.entry.dailyLimit, 1);
+    const bearer = { Authorization: `Bearer ${quotaKey.key}` };
+    assert.equal((await fetch(`${base}/v1/models`, { headers: bearer })).status, 200);
+    const overQuota = await fetch(`${base}/v1/models`, { headers: bearer });
+    assert.equal(overQuota.status, 429);
+    assert.ok(Number(overQuota.headers.get('retry-after')) > 0);
+    assert.match((await overQuota.json()).error.message, /daily request limit/);
+
+    const expiredCreate = await createKey({
+      action: 'create',
+      name: 'expired-test',
+      expiresAt: '2020-01-01',
+    });
+    assert.equal(expiredCreate.status, 200);
+    const expiredKey = await expiredCreate.json();
+    const refused = await fetch(`${base}/v1/models`, {
+      headers: { Authorization: `Bearer ${expiredKey.key}` },
+    });
+    assert.equal(refused.status, 401);
+    assert.match((await refused.json()).error.message, /expired/);
+
+    const policyState = await fetch(`${base}/api/state`, { headers: { Cookie: cookie } }).then((res) =>
+      res.json(),
+    );
+    const listed = policyState.gateway.keys.find((entry) => entry.name === 'quota-test');
+    assert.equal(listed.dailyLimit, 1);
+    assert.equal(listed.usedToday, 1);
+    const expiredListed = policyState.gateway.keys.find((entry) => entry.name === 'expired-test');
+    assert.match(expiredListed.expiresAt, /^2020-01-01T/);
+
+    // Raising the limit makes the key usable again; clearing it removes the
+    // cap entirely.
+    const raised = await createKey({ action: 'update', name: 'quota-test', dailyLimit: '5' });
+    assert.equal(raised.status, 200);
+    assert.equal((await fetch(`${base}/v1/models`, { headers: bearer })).status, 200);
+    const cleared = await createKey({ action: 'update', name: 'quota-test', dailyLimit: '' });
+    assert.equal((await cleared.json()).key.dailyLimit, null);
+
+    // Invalid policy values are refused instead of stored.
+    assert.equal((await createKey({ action: 'create', name: 'bad-limit', dailyLimit: '-2' })).status, 400);
+    assert.equal((await createKey({ action: 'create', name: 'bad-date', expiresAt: 'soon' })).status, 400);
+    assert.equal((await createKey({ action: 'update', name: 'nope', dailyLimit: '1' })).status, 404);
+
+    for (const name of ['quota-test', 'expired-test']) {
+      const removed = await createKey({ action: 'delete', name });
+      assert.equal(removed.status, 200);
+    }
+  }
+
   // Restart must be last: the server exits and stops answering. Re-login
   // first since the password change above revoked all sessions.
   const relogin = await fetch(`${base}/api/login`, {

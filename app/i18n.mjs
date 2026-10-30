@@ -2218,7 +2218,26 @@ const REQUEST_LOG_STRINGS = {
   },
 };
 
+// Gateway client-key policy strings (expiry, daily quota) ship as one unit.
+const GATEWAY_KEY_STRINGS = {
+  en: { gw_th_expires: "Expires", gw_th_used: "Today", gw_limit_ph: "Daily limit (empty = unlimited)", gw_expires_title: "Expiry date (empty = never)", gw_limit_prompt: "Daily request limit for [{n}] (empty = unlimited):", gw_expires_prompt: "Expiry date for [{n}] (YYYY-MM-DD, empty = never):", gw_updated: "Updated [{n}].", gw_edit: "Edit" },
+  "zh-CN": { gw_th_expires: "到期", gw_th_used: "今日", gw_limit_ph: "每日请求上限（留空 = 不限）", gw_expires_title: "到期日期（留空 = 永不过期）", gw_limit_prompt: "设置 [{n}] 的每日请求上限（留空 = 不限）：", gw_expires_prompt: "设置 [{n}] 的到期日期（YYYY-MM-DD，留空 = 永不过期）：", gw_updated: "已更新 [{n}]。", gw_edit: "编辑" },
+  "zh-TW": { gw_th_expires: "到期", gw_th_used: "今日", gw_limit_ph: "每日請求上限（留空 = 不限）", gw_expires_title: "到期日期（留空 = 永不過期）", gw_limit_prompt: "設定 [{n}] 的每日請求上限（留空 = 不限）：", gw_expires_prompt: "設定 [{n}] 的到期日期（YYYY-MM-DD，留空 = 永不過期）：", gw_updated: "已更新 [{n}]。", gw_edit: "編輯" },
+  "ja": { gw_th_expires: "有効期限", gw_th_used: "本日", gw_limit_ph: "1日の上限（空欄 = 無制限）", gw_expires_title: "有効期限（空欄 = 無期限）", gw_limit_prompt: "[{n}] の1日のリクエスト上限（空欄 = 無制限）：", gw_expires_prompt: "[{n}] の有効期限（YYYY-MM-DD、空欄 = 無期限）：", gw_updated: "[{n}] を更新しました。", gw_edit: "編集" },
+  "ko": { gw_th_expires: "만료", gw_th_used: "오늘", gw_limit_ph: "일일 한도 (비우면 무제한)", gw_expires_title: "만료일 (비우면 무기한)", gw_limit_prompt: "[{n}]의 일일 요청 한도 (비우면 무제한):", gw_expires_prompt: "[{n}]의 만료일 (YYYY-MM-DD, 비우면 무기한):", gw_updated: "[{n}]을(를) 수정했습니다.", gw_edit: "편집" },
+  "es": { gw_th_expires: "Caduca", gw_th_used: "Hoy", gw_limit_ph: "Límite diario (vacío = sin límite)", gw_expires_title: "Fecha de caducidad (vacío = nunca)", gw_limit_prompt: "Límite diario de solicitudes para [{n}] (vacío = sin límite):", gw_expires_prompt: "Fecha de caducidad de [{n}] (AAAA-MM-DD, vacío = nunca):", gw_updated: "[{n}] actualizada.", gw_edit: "Editar" },
+  "fr": { gw_th_expires: "Expire", gw_th_used: "Aujourd'hui", gw_limit_ph: "Limite quotidienne (vide = illimitée)", gw_expires_title: "Date d'expiration (vide = jamais)", gw_limit_prompt: "Limite quotidienne de requêtes pour [{n}] (vide = illimitée) :", gw_expires_prompt: "Date d'expiration de [{n}] (AAAA-MM-JJ, vide = jamais) :", gw_updated: "[{n}] mise à jour.", gw_edit: "Modifier" },
+  "de": { gw_th_expires: "Läuft ab", gw_th_used: "Heute", gw_limit_ph: "Tageslimit (leer = unbegrenzt)", gw_expires_title: "Ablaufdatum (leer = nie)", gw_limit_prompt: "Tägliches Anfragelimit für [{n}] (leer = unbegrenzt):", gw_expires_prompt: "Ablaufdatum für [{n}] (JJJJ-MM-TT, leer = nie):", gw_updated: "[{n}] aktualisiert.", gw_edit: "Bearbeiten" },
+  "ru": { gw_th_expires: "Истекает", gw_th_used: "Сегодня", gw_limit_ph: "Дневной лимит (пусто = без лимита)", gw_expires_title: "Дата истечения (пусто = бессрочно)", gw_limit_prompt: "Дневной лимит запросов для [{n}] (пусто = без лимита):", gw_expires_prompt: "Дата истечения для [{n}] (ГГГГ-ММ-ДД, пусто = бессрочно):", gw_updated: "[{n}] обновлён.", gw_edit: "Изменить" },
+  "pt": { gw_th_expires: "Expira", gw_th_used: "Hoje", gw_limit_ph: "Limite diário (vazio = ilimitado)", gw_expires_title: "Data de expiração (vazio = nunca)", gw_limit_prompt: "Limite diário de requisições para [{n}] (vazio = ilimitado):", gw_expires_prompt: "Data de expiração de [{n}] (AAAA-MM-DD, vazio = nunca):", gw_updated: "[{n}] atualizada.", gw_edit: "Editar" },
+  "it": { gw_th_expires: "Scade", gw_th_used: "Oggi", gw_limit_ph: "Limite giornaliero (vuoto = illimitato)", gw_expires_title: "Data di scadenza (vuoto = mai)", gw_limit_prompt: "Limite giornaliero di richieste per [{n}] (vuoto = illimitato):", gw_expires_prompt: "Data di scadenza per [{n}] (AAAA-MM-GG, vuoto = mai):", gw_updated: "[{n}] aggiornata.", gw_edit: "Modifica" },
+  "ar": { gw_th_expires: "ينتهي", gw_th_used: "اليوم", gw_limit_ph: "الحد اليومي (فارغ = بلا حد)", gw_expires_title: "تاريخ الانتهاء (فارغ = بلا انتهاء)", gw_limit_prompt: "الحد اليومي للطلبات لـ [{n}] (فارغ = بلا حد):", gw_expires_prompt: "تاريخ انتهاء [{n}] (YYYY-MM-DD، فارغ = بلا انتهاء):", gw_updated: "تم تحديث [{n}].", gw_edit: "تعديل" },
+};
+
 for (const [code, strings] of Object.entries(REQUEST_LOG_STRINGS)) {
+  Object.assign(STRINGS[code], strings);
+}
+for (const [code, strings] of Object.entries(GATEWAY_KEY_STRINGS)) {
   Object.assign(STRINGS[code], strings);
 }
 

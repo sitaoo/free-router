@@ -161,7 +161,7 @@ The admin password is stored as a salted scrypt hash, never plaintext, and the l
 
 ## Gateway API keys
 
-Named client credentials (`sk-fr-…`, shown once at creation) for anything calling `/v1/*`. Creating the first key enables auth; deleting the last one disables it again (or flip the switch in the Access title row — it refuses to enable with zero keys). Keys are checked on `/v1/models`, `/v1/chat/completions`, and `/v1/responses`; `/healthz` stays open for container probes, and `/health` reveals its full payload only to loopback or an admin session.
+Named client credentials (`sk-fr-…`, shown once at creation) for anything calling `/v1/*`. Creating the first key enables auth; deleting the last one disables it again (or flip the switch in the Access title row — it refuses to enable with zero keys). Keys are checked on `/v1/models`, `/v1/chat/completions`, and `/v1/responses`; `/healthz` stays open for container probes, and `/health` reveals its full payload only to loopback or an admin session. A key can carry an expiry date and a daily request quota, set when it is created or with **Edit** in the key table: an expired key is refused with `401`, and a key at its quota with `429` plus `Retry-After` counting down to the next local midnight (the daily-limit timezone). The quota counts every authenticated call, `/v1/models` included, and is shown as today's count in the table; both limits are optional and live in `config.local.json`.
 
 ## Provider keys (multi-account)
 

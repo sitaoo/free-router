@@ -660,6 +660,8 @@ body[data-gate="1"] main#app { display: none; }
         <div id="gateway"></div>
         <div class="row">
           <input id="gw-name" data-i18n-ph="gw_name_ph" placeholder="Label, e.g. living-room laptop" style="max-width:260px">
+          <input id="gw-limit" type="number" min="0" step="1" inputmode="numeric" data-i18n-ph="gw_limit_ph" placeholder="Daily limit (empty = unlimited)" style="max-width:190px">
+          <input id="gw-expires" type="date" data-i18n-title="gw_expires_title" title="Expiry date (empty = never)">
           <button class="primary" id="gw-create" data-i18n="gw_create">Create API key</button>
         </div>
         <p class="note" id="gw-note"></p>
@@ -2040,8 +2042,47 @@ function renderGateway() {
     host.appendChild(p);
   } else {
     host.appendChild(table(
-      [{ label: t('gw_th_name') }, { label: t('gw_th_key') }, { label: t('gw_th_created') }, { label: '' }],
+      [
+        { label: t('gw_th_name') },
+        { label: t('gw_th_key') },
+        { label: t('gw_th_created') },
+        { label: t('gw_th_expires') },
+        { label: t('gw_th_used') },
+        { label: '' },
+      ],
       keys.map((entry) => {
+        const edit = document.createElement('button');
+        edit.className = 'quiet';
+        edit.textContent = t('gw_edit');
+        edit.onclick = async () => {
+          const limit = prompt(
+            t('gw_limit_prompt', { n: entry.name }),
+            entry.dailyLimit === null || entry.dailyLimit === undefined ? '' : String(entry.dailyLimit),
+          );
+          if (limit === null) return;
+          const expires = prompt(
+            t('gw_expires_prompt', { n: entry.name }),
+            entry.expiresAt ? entry.expiresAt.slice(0, 10) : '',
+          );
+          if (expires === null) return;
+          edit.disabled = true;
+          try {
+            await api('api/gateway-keys', {
+              method: 'POST',
+              body: JSON.stringify({
+                action: 'update',
+                name: entry.name,
+                dailyLimit: limit,
+                expiresAt: expires,
+              }),
+            });
+            toast(t('gw_updated', { n: entry.name }), 'good');
+            await load();
+          } catch (error) {
+            toast(String(error.message || error), 'err');
+            edit.disabled = false;
+          }
+        };
         const del = document.createElement('button');
         del.className = 'quiet danger';
         del.textContent = t('del');
@@ -2060,11 +2101,20 @@ function renderGateway() {
             del.disabled = false;
           }
         };
+        const actions = document.createElement('div');
+        actions.className = 'row';
+        actions.style.gap = '0.35rem';
+        actions.append(edit, del);
+        const used = entry.dailyLimit
+          ? String(entry.usedToday || 0) + ' / ' + entry.dailyLimit
+          : String(entry.usedToday || 0);
         return [
           td(entry.name),
           td(entry.masked, 'mono'),
           td(entry.createdAt ? entry.createdAt.slice(0, 10) : '—'),
-          td(del),
+          td(entry.expiresAt ? entry.expiresAt.slice(0, 10) : '—'),
+          td(used, 'num'),
+          td(actions),
         ];
       }),
     ));
@@ -3069,9 +3119,16 @@ function bindOnce() {
     try {
       const result = await api('api/gateway-keys', {
         method: 'POST',
-        body: JSON.stringify({ action: 'create', name: label }),
+        body: JSON.stringify({
+          action: 'create',
+          name: label,
+          dailyLimit: el('gw-limit').value,
+          expiresAt: el('gw-expires').value,
+        }),
       });
       el('gw-name').value = '';
+      el('gw-limit').value = '';
+      el('gw-expires').value = '';
       prompt(t('gw_copy_once'), result.key);
       toast(t('gw_created', { n: label }), 'good');
       await load();
