@@ -59,7 +59,7 @@ assert.equal(/toLocaleString\(\)/.test(page), false, 'dates must pass lang to to
 
 // Provider/discovery controls: verified presets, a probe toggle, a manual run,
 // and the paid-model warning in the model table.
-for (const preset of ['groq', 'cerebras', 'mistral', 'huggingface']) {
+for (const preset of ['groq', 'cerebras', 'mistral', 'huggingface', 'sambanova', 'siliconflow', 'cloudflare', 'ollama', 'lmstudio']) {
   assert.match(page, new RegExp(`${preset}:\\s*\\{ baseUrl:`), `${preset} preset missing`);
 }
 assert.match(page, /np-probe/, 'probe-free-tier toggle missing from provider form');

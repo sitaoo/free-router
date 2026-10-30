@@ -332,7 +332,7 @@ If a paid call is refused for insufficient funds, only that `provider:model` is 
 
 ## Add a provider
 
-No code change is needed for an OpenAI-compatible `/chat/completions` endpoint. The registry in `providers.mjs` loads every block under `config.json` `providers`. Easiest is the web UI (Providers tab → Add provider): the preset menu fills the base URL and discovery flags for Gemini, OpenRouter, TokenRouter, B.AI, HashNeuron, Groq, Cerebras, Mistral, and Hugging Face, and Custom accepts anything else. A preset is only a shortcut — you still paste the key yourself. To do it by hand:
+No code change is needed for an OpenAI-compatible `/chat/completions` endpoint. The registry in `providers.mjs` loads every block under `config.json` `providers`. Easiest is the web UI (Providers tab → Add provider): the preset menu fills the base URL and discovery flags for Gemini, OpenRouter, TokenRouter, B.AI, HashNeuron, Groq, Cerebras, Mistral, Hugging Face, SambaNova, SiliconFlow, Cloudflare Workers AI, Ollama, and LM Studio, and Custom accepts anything else. The Cloudflare preset carries a `YOUR_ACCOUNT_ID` placeholder to replace; the two local presets (`http://127.0.0.1:11434/v1`, `http://127.0.0.1:1234/v1`) accept any placeholder key because neither server checks one. A preset is only a shortcut — you still paste the key yourself. To do it by hand:
 
 1. Add a provider object. Set `"catalog": true` if it exposes `GET /models`.
 Set `"pricing": true` only when that response carries per-token prices; the

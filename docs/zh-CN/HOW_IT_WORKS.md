@@ -326,7 +326,7 @@ curl -s http://127.0.0.1:8787/health | jq
 
 ## 加新渠道
 
-OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers.mjs`的注册表加载 `config.json` 里 `providers` 下的每一块。最省事的是 Web UI（渠道 tab → 添加渠道）：预设菜单会填好 Gemini、OpenRouter、TokenRouter、B.AI、HashNeuron、Groq、Cerebras、Mistral、Hugging Face 的地址和发现开关，其他服务选 Custom。预设只是快捷方式，Key 仍要自己贴。手改的话：
+OpenAI 兼容的 `/chat/completions` 端口加进来不用改代码。`providers.mjs`的注册表加载 `config.json` 里 `providers` 下的每一块。最省事的是 Web UI（渠道 tab → 添加渠道）：预设菜单会填好 Gemini、OpenRouter、TokenRouter、B.AI、HashNeuron、Groq、Cerebras、Mistral、Hugging Face、SambaNova、SiliconFlow、Cloudflare Workers AI、Ollama、LM Studio 的地址和发现开关，其他服务选 Custom。Cloudflare 预设里的 `YOUR_ACCOUNT_ID` 需要先替换；两个本地预设（`http://127.0.0.1:11434/v1`、`http://127.0.0.1:1234/v1`）随便填一个占位 Key 即可，它们都不校验 Key。预设只是快捷方式，Key 仍要自己贴。手改的话：
 
 1. 加一个 provider 对象。有 `GET /models` 就 `"catalog": true`；返回体
 带逐 token 价格才加 `"pricing": true`。服务端会按真正拉到的行重新判定，

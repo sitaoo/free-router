@@ -1344,6 +1344,15 @@ const PROVIDER_PRESETS = {
   cerebras: { baseUrl: 'https://api.cerebras.ai/v1', catalog: true, pricing: false },
   mistral: { baseUrl: 'https://api.mistral.ai/v1', catalog: true, pricing: false },
   huggingface: { baseUrl: 'https://router.huggingface.co/v1', catalog: true, pricing: false },
+  sambanova: { baseUrl: 'https://api.sambanova.ai/v1', catalog: true, pricing: false },
+  siliconflow: { baseUrl: 'https://api.siliconflow.cn/v1', catalog: true, pricing: false },
+  // Workers AI is OpenAI-compatible under the account id; replace the
+  // placeholder before saving.
+  cloudflare: { baseUrl: 'https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/v1', catalog: true, pricing: false },
+  // Local servers need no real key; any placeholder value satisfies the
+  // gateway's "provider is configured" check.
+  ollama: { baseUrl: 'http://127.0.0.1:11434/v1', catalog: true, pricing: false },
+  lmstudio: { baseUrl: 'http://127.0.0.1:1234/v1', catalog: true, pricing: false },
 };
 
 function modelCheckLabel(id, freeSet, classes) {

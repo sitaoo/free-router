@@ -117,7 +117,7 @@ Detailed notes: [Run with Docker](docs/HOW_IT_WORKS.md#run-with-docker).
 ```
 
 - LAN: Settings → **Allow LAN access**. It lists the exact addresses. Create a gateway key and change the password first. The gateway serves plain HTTP only, so keep it off a public IP and put an HTTPS reverse proxy in front for remote access.
-- New provider: pick a preset (Gemini, OpenRouter, TokenRouter, B.AI, HashNeuron, Groq, Cerebras, Mistral, Hugging Face) or enter any OpenAI-compatible endpoint in the web UI, or add a block in `app/config/config.json`. Its free models join the callable pool as soon as they are known; select paid ones per provider under Providers → Models.
+- New provider: pick a preset (Gemini, OpenRouter, TokenRouter, B.AI, HashNeuron, Groq, Cerebras, Mistral, Hugging Face, SambaNova, SiliconFlow, Cloudflare Workers AI, Ollama, LM Studio) or enter any OpenAI-compatible endpoint in the web UI, or add a block in `app/config/config.json`. Its free models join the callable pool as soon as they are known; select paid ones per provider under Providers → Models.
 - Design and config layers: [How it works](docs/HOW_IT_WORKS.md).
 
 ## Where to get keys
