@@ -1241,6 +1241,37 @@ async function refreshCatalog(force = false) {
   syncModelAvailability();
 }
 
+// A request must not wait on a provider catalog round trip: the snapshot it
+// already has is good enough to route. Only a cold start (a catalog that has
+// never loaded) blocks, because otherwise every model would look unavailable.
+function catalogsCold() {
+  return [...PROVIDERS.values()].some(
+    (provider) => provider.usesCatalog && !(provider.catalog?.size > 0),
+  );
+}
+
+function refreshCatalogSoon() {
+  refreshCatalog().catch((error) => {
+    log(`catalog refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
+}
+
+// Requests only piggyback on a stale catalog; this timer keeps it fresh even
+// when the gateway is idle. The delay is re-read every round so a settings
+// change applies without a restart.
+function scheduleNextCatalogRefresh() {
+  const delay = Math.max(60000, Number(catalogRefreshMs) || 900000);
+  const timer = setTimeout(async () => {
+    try {
+      await refreshCatalog();
+    } catch (error) {
+      log(`catalog refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    scheduleNextCatalogRefresh();
+  }, delay);
+  timer.unref?.();
+}
+
 // One provider, usually because its key just became usable: refreshing every
 // catalog would spend a request per provider to learn nothing about the rest.
 async function refreshProviderCatalog(name) {
@@ -2511,7 +2542,8 @@ async function runChatRequest(req, res, options, record) {
   const requestedModel = String(body.model || DEFAULT_MODEL_ALIAS);
   record.model = requestedModel;
   log(`${dialect} request ${requestedModel} id=${record.id} fields=${requestFields.join(',')}`);
-  await refreshCatalog();
+  if (catalogsCold()) await refreshCatalog();
+  else refreshCatalogSoon();
   const requestPlan = resolveRequest(requestedModel, body);
   const candidates = requestPlan.candidates;
   if (!candidates.length) {
@@ -3873,7 +3905,8 @@ async function handler(req, res) {
     return res.end(icon);
   }
   if (req.method === 'GET' && url.pathname === '/api/state') {
-    await refreshCatalog();
+    if (catalogsCold()) await refreshCatalog();
+    else refreshCatalogSoon();
     return sendJson(
       res,
       200,
@@ -4009,7 +4042,8 @@ async function handler(req, res) {
     if (gatewayFailure) {
       return sendJson(res, 401, { error: { message: gatewayFailure, type: 'unauthorized' } });
     }
-    await refreshCatalog();
+    if (catalogsCold()) await refreshCatalog();
+    else refreshCatalogSoon();
     const ordered = orderedPool();
     const { models } = registry.buildModelList({
       aliases: [{ id: DEFAULT_MODEL_ALIAS }],
@@ -4083,6 +4117,7 @@ server.listen(PORT, HOST, async () => {
     else if (provider.apiKeys.length > 1) log(`${provider.name}: ${provider.apiKeys.length} keys configured`);
   }
   await refreshCatalog(true);
+  scheduleNextCatalogRefresh();
   await discoverFreeModels();
   scheduleNextDiscovery();
 });
