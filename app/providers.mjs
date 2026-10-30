@@ -277,20 +277,27 @@ export function createProviderRegistry(config, { host, port }) {
   }
 
   // Round-robin over usable keys. Invalid (401) keys are skipped until the
-  // provider is reconfigured. Returns [{index, name, key}] in try-order.
-  // Pure read: rotation advances only via rotateKeyCursor (called when a
-  // request actually goes out), so status pages and filters never skew it.
+  // provider is reconfigured. Returns [{index, name, key}] in try-order, and
+  // an empty list once every configured key has been retired: falling back to
+  // the invalid keys made every request retry a credential the provider had
+  // already refused. Pure read: rotation advances only via rotateKeyCursor
+  // (called when a request actually goes out), so status pages and filters
+  // never skew it.
   function keySlots(providerName) {
     const provider = get(providerName);
     if (!provider || !provider.apiKeys?.length) return [];
     const usable = provider.apiKeys
       .map((entry, index) => ({ ...entry, index }))
       .filter((entry) => entry.key && !provider.invalidKeys.has(entry.key));
-    if (!usable.length) {
-      return provider.apiKeys.map((entry, index) => ({ ...entry, index }));
-    }
+    if (!usable.length) return [];
     const start = provider.keyCursor % usable.length;
     return [...usable.slice(start), ...usable.slice(0, start)];
+  }
+
+  // How many keys the operator configured, retired or not. Lets callers tell
+  // "this provider needs no key" (local endpoints) from "every key is dead".
+  function keyCount(providerName) {
+    return get(providerName)?.apiKeys?.length || 0;
   }
 
   function rotateKeyCursor(providerName) {
@@ -726,6 +733,7 @@ export function createProviderRegistry(config, { host, port }) {
     removeProvider,
     setDefaultProvider,
     keySlots,
+    keyCount,
     rotateKeyCursor,
     markKeyInvalid,
     refreshKeysFromEnv,

@@ -17,3 +17,22 @@ export function timeoutBackoffMs(consecutive, baseMs, capMs = TIMEOUT_BACKOFF_CA
   const factor = 2 ** Math.min(count - 1, 20);
   return Math.min(limit, base * factor);
 }
+
+// A candidate is cooling only when it has no usable key left: a model-level
+// cooldown covers every key, and a per-key cooldown hides just that key.
+// Taking the worst key (the previous behaviour) parked the whole model while
+// its other accounts were idle.
+export function candidateCooldown({ now, modelEntry, keyEntries = [] }) {
+  if (modelEntry && modelEntry.until > now) return modelEntry;
+  if (!keyEntries.length) return null;
+  let worst = null;
+  let free = false;
+  for (const entry of keyEntries) {
+    if (!entry || entry.until <= now) {
+      free = true;
+      continue;
+    }
+    if (!worst || entry.until > worst.until) worst = entry;
+  }
+  return free ? null : worst;
+}

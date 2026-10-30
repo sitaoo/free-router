@@ -36,7 +36,7 @@ import {
   createChatStreamNormalizer,
   pickChatRequestFields,
 } from './chat.mjs';
-import { TIMEOUT_BACKOFF_CAP_MS, timeoutBackoffMs } from './cooldown.mjs';
+import { TIMEOUT_BACKOFF_CAP_MS, candidateCooldown, timeoutBackoffMs } from './cooldown.mjs';
 import { createRequestLog, outputTokensPerSecond } from './request-log.mjs';
 import { estimateRequestTokens, fitsContext } from './context.mjs';
 import { installUpstreamProxy } from './proxy.mjs';
@@ -1685,19 +1685,20 @@ function applyProviderVerdict(candidate, result) {
   return quota.retryDelayMs;
 }
 
-// Worst active cooldown across a candidate's keys, with its kind so the
-// all-cooling fallback can retry capacity faults only.
+// Active cooldown that makes the whole candidate unusable, with its kind so
+// the all-cooling fallback can retry capacity faults only. A candidate stays
+// available while any of its keys is free; the attempt loop skips the keys
+// that are still cooling.
 function worstCooldown(candidate) {
   const now = Date.now();
-  const keys = registry.keySlots(candidate.provider).map((slot) => cooldownKey(candidate, slot));
-  if (!keys.length) keys.push(cooldownKey(candidate));
-  let worst = null;
-  for (const key of keys) {
-    const entry = cooldowns.get(key) || cooldowns.get(candidateKey(candidate));
-    if (!entry || entry.until <= now) continue;
-    if (!worst || entry.until > worst.until) worst = entry;
-  }
-  return worst;
+  const keyEntries = registry
+    .keySlots(candidate.provider)
+    .map((slot) => cooldowns.get(cooldownKey(candidate, slot)));
+  return candidateCooldown({
+    now,
+    modelEntry: cooldowns.get(candidateKey(candidate)),
+    keyEntries,
+  });
 }
 
 function blockPayment(candidate, reason) {
@@ -2541,6 +2542,14 @@ async function runChatRequest(req, res, options, record) {
     // round-robin order. A 401 retires just that key; rate limits cool down
     // just that key.
     const slots = registry.keySlots(candidate.provider);
+    if (!slots.length && registry.keyCount(candidate.provider) > 0) {
+      // Every configured key was retired after a 401. A keyless request would
+      // just be refused again, so skip the whole provider until it is
+      // reconfigured.
+      log(`skipping ${candidate.provider}: every configured key is retired`);
+      failedProviders.add(candidate.provider);
+      continue;
+    }
     registry.rotateKeyCursor(candidate.provider);
     const attempts = slots.length ? slots : [null];
     let candidateOk = false;
