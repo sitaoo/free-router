@@ -84,6 +84,22 @@ const mock = http.createServer(async (req, res) => {
     if (body.stream && body.model === 'stall-connect') {
       return;
     }
+    // Offered by both providers and never answers: only the request budget
+    // can stop the failover chain.
+    if (body.stream && body.model === 'stall-both') {
+      return;
+    }
+    // Committed, then silent forever: the idle watchdog must end the answer
+    // instead of holding the client for the whole attempt timeout.
+    if (body.stream && body.model === 'stall-mid') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'partial-idle' }, finish_reason: null }] })}\n\n`,
+      );
+      await sleep(5000);
+      res.end('data: [DONE]\n\n');
+      return;
+    }
     // Strict like Gemini's compatibility layer: any non-standard top-level
     // field (including stream_options when the provider says it cannot take
     // it) is a 400, not something to ignore.
@@ -110,6 +126,7 @@ const mock = http.createServer(async (req, res) => {
         'tool_choice',
         'parallel_tool_calls',
         'reasoning_effort',
+        'reasoning',
         'service_tier',
         'modalities',
         'audio',
@@ -209,9 +226,16 @@ const mockPort = mock.address().port;
 // healthy, so a stalled first offering must fail over to this one.
 const healthy = http.createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/chat/completions') {
-    for await (const _chunk of req) {
-      // Drain the request body.
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    let body = {};
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      // Keep the default answer below.
     }
+    // The budget test needs both offerings to stall.
+    if (body.model === 'stall-both') return;
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     res.write(
       `data: ${JSON.stringify({ choices: [{ delta: { content: 'fallback-ok' }, finish_reason: null }] })}\n\n`,
@@ -237,6 +261,9 @@ fs.writeFileSync(
     host: '127.0.0.1',
     port: routerPort,
     attemptTimeoutMs: 20000,
+    // Failover for one request shares this budget; a committed stream is not
+    // cut by it. Short enough to exercise the bound in a test.
+    requestBudgetMs: 1000,
     catalogRefreshMs: 3600000,
     defaultProvider: 'mock',
     routing: { explorePercent: 0 },
@@ -256,6 +283,8 @@ fs.writeFileSync(
           'fast-empty',
           'stall-headers',
           'stall-connect',
+          'stall-both',
+          'stall-mid',
           'late-think',
           'strict-ok',
           'drop-mid',
@@ -268,7 +297,13 @@ fs.writeFileSync(
       healthy: {
         baseUrl: `http://127.0.0.1:${healthyPort}`,
         keyEnv: 'STREAM_COMMIT_API_KEY',
-        freeModels: ['fallback-ok', 'fast-empty', 'stall-headers', 'stall-connect'],
+        freeModels: [
+          'fallback-ok',
+          'fast-empty',
+          'stall-headers',
+          'stall-connect',
+          'stall-both',
+        ],
         chatPath: '/chat/completions',
       },
     },
@@ -288,6 +323,7 @@ const child = spawn(process.execPath, [path.join(HERE, '..', 'app', 'server.mjs'
     FREE_ROUTER_STREAM_COMMIT_GRACE_MS: '800',
     FREE_ROUTER_FIRST_BYTE_TIMEOUT_MS: '700',
     FREE_ROUTER_STREAM_KEEPALIVE_MS: '250',
+    FREE_ROUTER_STREAM_IDLE_TIMEOUT_MS: '3000',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -584,6 +620,52 @@ try {
     assert.equal(callFrame.choices[0].delta.tool_calls[0].index, 0, 'the tool call carries an index');
     const finishFrame = frames.find((frame) => frame.choices?.[0]?.finish_reason);
     assert.equal(finishFrame.choices[0].finish_reason, 'tool_calls');
+  }
+
+  // 12. A committed stream that goes silent is ended by the idle watchdog:
+  // long answers are not cut by a total timer, but a dead upstream cannot
+  // hold the client open forever.
+  {
+    const started = Date.now();
+    const response = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'stall-mid',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    const elapsed = Date.now() - started;
+    assert.match(text, /partial-idle/);
+    assert.match(text, /"type":"upstream_error"/);
+    assert.match(text, /\[DONE\]/);
+    assert.ok(elapsed >= 2500, `idle watchdog fired too early: ${elapsed}ms`);
+    assert.ok(elapsed < 4500, `idle watchdog took ${elapsed}ms; the stream was not cut`);
+  }
+
+  // 13. Every failover attempt shares one wall-clock budget. Both providers
+  // stall, so the gateway must answer 504 once the budget is spent instead of
+  // walking the whole pool.
+  {
+    const started = Date.now();
+    const response = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'stall-both',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+      }),
+    });
+    const elapsed = Date.now() - started;
+    assert.equal(response.status, 504);
+    const body = await response.json();
+    assert.equal(body.error.type, 'gateway_timeout');
+    assert.ok(elapsed >= 900, `budget answered before it was spent: ${elapsed}ms`);
+    assert.ok(elapsed < 2500, `budget did not bound failover: ${elapsed}ms`);
   }
 
   // The finish line records what the answer was made of, so a row that a

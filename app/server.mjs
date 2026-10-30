@@ -253,6 +253,26 @@ function streamKeepAliveMs() {
   );
   return Number.isFinite(raw) && raw >= 0 ? raw : 15000;
 }
+// Once a response is committed the client is reading a real answer, so a long
+// generation must not be cut by a total timer. Only a silent gap means the
+// upstream is stuck: abort when no byte arrives for this long. 0 disables it.
+function streamIdleTimeoutMs() {
+  const env = process.env.FREE_ROUTER_STREAM_IDLE_TIMEOUT_MS;
+  const raw = Number(
+    env === undefined || env === '' ? config.streamIdleTimeoutMs ?? 60000 : env,
+  );
+  return Number.isFinite(raw) && raw >= 0 ? raw : 60000;
+}
+// Wall-clock budget for finding a candidate that answers: every failover
+// attempt shares it. A committed stream is not cut by it (the idle timeout
+// covers a dead upstream), so long answers still finish.
+function requestBudgetMs() {
+  const env = process.env.FREE_ROUTER_REQUEST_BUDGET_MS;
+  const raw = Number(
+    env === undefined || env === '' ? config.requestBudgetMs ?? 300000 : env,
+  );
+  return Number.isFinite(raw) && raw >= 1000 ? raw : 300000;
+}
 let catalogRefreshMs = Number(config.catalogRefreshMs || 900000);
 const registry = createProviderRegistry(config, { host: HOST, port: PORT });
 const PROVIDERS = registry.providers;
@@ -1887,17 +1907,27 @@ function errorSummary(status, raw) {
 
 async function fetchModel(candidate, body, clientSignal, slot, options = {}) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error('attempt timeout')), attemptTimeoutMs);
+  // A stream passes 0: its first-byte and idle deadlines cover the whole
+  // attempt, and a total timer here would truncate a long answer mid-stream.
+  const timeoutMs =
+    options.timeoutMs === undefined ? attemptTimeoutMs : Number(options.timeoutMs);
+  const timer =
+    Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? setTimeout(() => controller.abort(new Error('attempt timeout')), timeoutMs)
+      : null;
   const abortFromClient = () => controller.abort(new Error('client disconnected'));
   clientSignal?.addEventListener('abort', abortFromClient, { once: true });
   // A stream aborts this one when the first-byte deadline expires, which
   // cancels the body read too once the headers are already in.
   const abortFromFirstByte = () => controller.abort(new Error('first byte timeout'));
   options.firstByteSignal?.addEventListener('abort', abortFromFirstByte, { once: true });
+  const abortFromIdle = () => controller.abort(new Error('stream idle timeout'));
+  options.idleSignal?.addEventListener('abort', abortFromIdle, { once: true });
   const cleanup = () => {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
     clientSignal?.removeEventListener('abort', abortFromClient);
     options.firstByteSignal?.removeEventListener('abort', abortFromFirstByte);
+    options.idleSignal?.removeEventListener('abort', abortFromIdle);
   };
   try {
     const provider = PROVIDERS.get(candidate.provider);
@@ -1918,7 +1948,7 @@ async function fetchModel(candidate, body, clientSignal, slot, options = {}) {
   }
 }
 
-async function attemptJson(candidate, body, clientSignal, slot) {
+async function attemptJson(candidate, body, clientSignal, slot, options = {}) {
   let response;
   let cleanup = () => {};
   try {
@@ -1927,6 +1957,7 @@ async function attemptJson(candidate, body, clientSignal, slot) {
       { ...body, stream: false },
       clientSignal,
       slot,
+      { timeoutMs: options.timeoutMs },
     ));
   } catch (error) {
     const timedOut = error?.name === 'AbortError' || /timeout/i.test(String(error));
@@ -1997,7 +2028,12 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
     ? null
     : createChatStreamNormalizer({ model: options.model || candidate.model });
   const attemptStartedAt = Number(options.startedAt) || Date.now();
-  const firstByteWaitMs = firstByteTimeoutMs();
+  // The request budget also bounds the wait for a first byte, so a stream
+  // attempt cannot outlive it before anything was committed.
+  const firstByteWaitMs = Math.min(
+    firstByteTimeoutMs(),
+    Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : Infinity,
+  );
   const firstByteController = new AbortController();
   const firstByteTimer =
     firstByteWaitMs > 0
@@ -2007,6 +2043,8 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
   const clearFirstByteTimer = () => {
     if (firstByteTimer) clearTimeout(firstByteTimer);
   };
+  // A committed answer may legitimately take minutes; only silence is fatal.
+  const idleController = new AbortController();
   let response;
   let cleanup = () => {};
   try {
@@ -2015,7 +2053,7 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
       { ...body, stream: true },
       clientSignal,
       slot,
-      { firstByteSignal: firstByteController.signal },
+      { firstByteSignal: firstByteController.signal, idleSignal: idleController.signal, timeoutMs: 0 },
     ));
   } catch (error) {
     clearFirstByteTimer();
@@ -2039,6 +2077,19 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
   let graceTimer = null;
   let keepAliveTimer = null;
   let lastUpstreamAt = Date.now();
+  // Idle watchdog: the upstream must produce a byte at least this often.
+  const idleMs = streamIdleTimeoutMs();
+  const idleTimer =
+    idleMs > 0
+      ? setInterval(
+          () => {
+            if (Date.now() - lastUpstreamAt > idleMs) {
+              idleController.abort(new Error('stream idle timeout'));
+            }
+          },
+          Math.max(250, Math.min(5000, Math.floor(idleMs / 4))),
+        )
+      : null;
   let parserBuffer = '';
   let committed = false;
   let sawUseful = false;
@@ -2061,6 +2112,7 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
     clearFirstByteTimer();
     if (graceTimer) clearTimeout(graceTimer);
     if (keepAliveTimer) clearInterval(keepAliveTimer);
+    if (idleTimer) clearInterval(idleTimer);
     graceTimer = null;
     keepAliveTimer = null;
     cleanup();
@@ -2535,10 +2587,20 @@ async function runChatRequest(req, res, options, record) {
     }
   }
 
+  // One wall-clock budget for the whole failover phase, measured from the
+  // request's arrival. Once a stream is committed the client is reading and
+  // the budget stops mattering; the idle watchdog covers a dead upstream.
+  const budgetDeadline = Number(record.startedAt || Date.now()) + requestBudgetMs();
+  let budgetExhausted = false;
+
   for (const candidate of candidates) {
     if (clientController.signal.aborted) {
       record.aborted = true;
       return;
+    }
+    if (Date.now() >= budgetDeadline) {
+      budgetExhausted = true;
+      break;
     }
     if (failedProviders.has(candidate.provider)) continue;
     // Multi-account: each candidate is tried with every usable key in
@@ -2561,6 +2623,10 @@ async function runChatRequest(req, res, options, record) {
         record.aborted = true;
         return;
       }
+      if (Date.now() >= budgetDeadline) {
+        budgetExhausted = true;
+        break;
+      }
       if (slot && cooldownRemaining(candidate, slot) > 0) continue;
       const slotLabel = slot ? ` [${slot.name}]` : '';
       log(`trying ${candidateKey(candidate)}${slotLabel} for ${requestedModel}`);
@@ -2577,8 +2643,12 @@ async function runChatRequest(req, res, options, record) {
             translator,
             model: requestedModel,
             startedAt: attemptStartedAt,
+            timeoutMs: Math.max(1, budgetDeadline - Date.now()),
           })
-        : await attemptJson(candidate, body, clientController.signal, slot);
+        : await attemptJson(candidate, body, clientController.signal, slot, {
+            // Never let one attempt outlive the request budget.
+            timeoutMs: Math.max(1, budgetDeadline - Date.now()),
+          });
 
       record.attempts.push({
         provider: candidate.provider,
@@ -2721,7 +2791,21 @@ async function runChatRequest(req, res, options, record) {
     }
   }
 
+  // An attempt can consume the last of the budget without the next loop
+  // check running; report the timeout rather than a generic pool failure.
+  if (!budgetExhausted && Date.now() >= budgetDeadline) budgetExhausted = true;
+
   if (!res.headersSent) {
+    if (budgetExhausted) {
+      record.reason = 'request budget exhausted';
+      return sendJson(res, 504, {
+        error: {
+          message: `No model answered within the ${Math.round(requestBudgetMs() / 1000)}s request budget`,
+          type: 'gateway_timeout',
+          failures,
+        },
+      });
+    }
     // If every candidate refused the request itself, the pool is not
     // exhausted: the caller sent something no provider accepts.
     const clientFault = isClientFaultExhaustion(failures);
@@ -3166,6 +3250,8 @@ function editableConfigState() {
     limits,
     general: {
       attemptTimeoutMs,
+      streamIdleTimeoutMs: streamIdleTimeoutMs(),
+      requestBudgetMs: requestBudgetMs(),
       catalogRefreshMs,
       redactSecrets: config.redactSecrets !== false,
       socksFirstHosts: config.socksFirstHosts || [],
@@ -3553,6 +3639,20 @@ async function handleSettings(req, res) {
     }
     attemptTimeoutMs = value;
     setOverlayValue(['attemptTimeoutMs'], value);
+  }
+  if (body.streamIdleTimeoutMs !== undefined) {
+    const value = Number(body.streamIdleTimeoutMs);
+    if (!Number.isFinite(value) || value < 0 || value > 600000) {
+      return sendJson(res, 400, { error: { message: 'streamIdleTimeoutMs must be 0-600000', type: 'invalid_request_error' } });
+    }
+    setOverlayValue(['streamIdleTimeoutMs'], value);
+  }
+  if (body.requestBudgetMs !== undefined) {
+    const value = Number(body.requestBudgetMs);
+    if (!Number.isFinite(value) || value < 5000 || value > 1800000) {
+      return sendJson(res, 400, { error: { message: 'requestBudgetMs must be 5000-1800000', type: 'invalid_request_error' } });
+    }
+    setOverlayValue(['requestBudgetMs'], value);
   }
   if (body.catalogRefreshMs !== undefined) {
     const value = Number(body.catalogRefreshMs);

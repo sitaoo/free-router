@@ -2,6 +2,8 @@
   "host": "127.0.0.1",
   "port": 8787,
   "attemptTimeoutMs": 180000,
+  "streamIdleTimeoutMs": 60000,
+  "requestBudgetMs": 300000,
   "catalogRefreshMs": 900000,
   "redactSecrets": true,
   "socksFirstHosts": [

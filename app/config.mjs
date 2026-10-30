@@ -561,6 +561,14 @@ export function defaultConfigObject() {
     host: '127.0.0.1',
     port: 8787,
     attemptTimeoutMs: 180000,
+    // A committed stream is not cut by a total timer: long answers finish.
+    // This is the longest silence tolerated from the upstream before the
+    // attempt is treated as dead. 0 disables the watchdog.
+    streamIdleTimeoutMs: 60000,
+    // Wall-clock budget for the failover phase of one client request (every
+    // candidate and key before a response is committed). A committed stream
+    // is not cut by it. On expiry the gateway answers 504 gateway_timeout.
+    requestBudgetMs: 300000,
     // Upper bound on the headerless wait for the first content/tool-call
     // delta of a stream. Thinking models reason first; without this bound the
     // client (e.g. OpenWebUI) times out and shows an empty reply.
