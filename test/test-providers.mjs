@@ -55,3 +55,22 @@ function registryWith(keys) {
 }
 
 console.log('provider registry unit tests passed');
+
+// Embeddings live beside chat on the same base URL, with an override for a
+// provider that publishes them elsewhere.
+{
+  const registry = registryWith([{ name: 'a', key: 'key-a' }]);
+  assert.equal(registry.chatUrl('demo'), 'http://127.0.0.1:9/chat/completions');
+  assert.equal(registry.embeddingsUrl('demo'), 'http://127.0.0.1:9/embeddings');
+  const custom = createProviderRegistry(
+    {
+      defaultProvider: 'demo',
+      providers: {
+        demo: { baseUrl: 'http://127.0.0.1:9/v1/', embeddingsPath: '/embed', keys: [{ name: 'a', key: 'k' }] },
+      },
+    },
+    { host: '127.0.0.1', port: 9 },
+  );
+  assert.equal(custom.embeddingsUrl('demo'), 'http://127.0.0.1:9/v1/embed');
+  assert.equal(custom.embeddingsUrl('missing'), '');
+}

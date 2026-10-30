@@ -457,6 +457,22 @@ function close(server) {
 
 let paidBrokeRequests = 0;
 const mock = http.createServer(async (req, res) => {
+  // Embeddings are a passthrough, so the mock only has to echo a vector.
+  if (req.method === 'POST' && req.url === '/api/v1/embeddings') {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    res.setHeader('Content-Type', 'application/json');
+    res.end(
+      JSON.stringify({
+        object: 'list',
+        model: body.model,
+        data: [{ object: 'embedding', index: 0, embedding: [0.1, 0.2, 0.3] }],
+        usage: { prompt_tokens: 3, total_tokens: 3 },
+      }),
+    );
+    return;
+  }
   if (req.method === 'GET' && req.url === '/api/v1/models') {
     res.setHeader('Content-Type', 'application/json');
     res.end(
@@ -1084,6 +1100,8 @@ fs.writeFileSync(
     // Exploration would reorder requests nondeterministically; unit tests
     // in test-ranking.mjs cover the picker, live sampling stays manual.
     routing: { explorePercent: 0 },
+    // CORS is off by default; turn it on here so the preflight path is real.
+    gateway: { cors: true },
     providers: {
       openrouter: {
         catalog: true,
@@ -1373,6 +1391,50 @@ try {
   assert.equal(geminiListed.free, true);
   // The embedding endpoint entry is never offered as a chat model.
   assert.equal(modelsById.has('gemini-embed-x'), false);
+
+  // One model by id, and a 404 for an id the pool does not hold.
+  const oneModel = await fetch(`http://127.0.0.1:${routerPort}/v1/models/gemini-3.8-flash`);
+  assert.equal(oneModel.status, 200);
+  assert.equal((await oneModel.json()).id, 'gemini-3.8-flash');
+  const missingModel = await fetch(`http://127.0.0.1:${routerPort}/v1/models/not-a-model`);
+  assert.equal(missingModel.status, 404);
+  assert.equal((await missingModel.json()).error.type, 'model_not_found');
+
+  // CORS applies to /v1 only, a preflight is answered before auth, and a
+  // request without Origin gets no CORS header.
+  const preflight = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://app.example', 'Access-Control-Request-Method': 'POST' },
+  });
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get('access-control-allow-origin'), '*');
+  assert.match(preflight.headers.get('access-control-allow-headers') || '', /Authorization/i);
+  const corsModels = await fetch(`http://127.0.0.1:${routerPort}/v1/models`, {
+    headers: { Origin: 'https://app.example' },
+  });
+  assert.equal(corsModels.headers.get('access-control-allow-origin'), '*');
+  assert.equal(
+    corsModels.headers.get('access-control-expose-headers'),
+    'X-Free-Router-Request-Id',
+  );
+  const plainModels = await fetch(`http://127.0.0.1:${routerPort}/v1/models`);
+  assert.equal(plainModels.headers.get('access-control-allow-origin'), null);
+  const uiCors = await fetch(`http://127.0.0.1:${routerPort}/`, {
+    headers: { Origin: 'https://app.example' },
+  });
+  assert.equal(uiCors.headers.get('access-control-allow-origin'), null, 'the UI is not cross-origin');
+
+  // Embeddings are a passthrough to the named provider (here the default
+  // one) and produce a request-log row like any other gateway call.
+  const embedding = await fetch(`http://127.0.0.1:${routerPort}/v1/embeddings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'mock-b', input: 'hello' }),
+  });
+  assert.equal(embedding.status, 200);
+  const embeddingBody = await embedding.json();
+  assert.equal(embeddingBody.data[0].embedding.length, 3);
+  assert.match(embedding.headers.get('x-free-router-request-id') || '', /^req_[0-9a-f]{16}$/);
   // A priced catalog keeps its published metadata and capability list.
   const freeCatalogEntry = modelsById.get('mock-a');
   assert.equal(freeCatalogEntry.context_length, 0);

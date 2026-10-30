@@ -282,6 +282,8 @@ GET  /healthz                最小探活：ok、service、version（始终开�
 GET  /health                 本机回环或管理员会话返回完整内容，其他调用者只拿到最小内容
 GET  /api/health             完整内容（需要管理员会话）
 GET  /v1/models              开了鉴权就要网关 Key
+GET  /v1/models/{id}         该列表中的单个条目，找不到时 404 model_not_found
+POST /v1/embeddings          透传到指定渠道（不参与池子路由）
 GET  /metrics               Prometheus 文本；与 /v1 同一 Bearer Key，但不计入每日配额
 POST /v1/chat/completions    开了鉴权就要网关 Key
 POST /v1/responses           同一套模型池，Responses 方言
@@ -290,6 +292,12 @@ POST /v1/responses           同一套模型池，Responses 方言
 `GET /metrics` 是 Prometheus 抓取目标，输出文本格式。它报告进程生命周期的计数器（按结果分的请求数、请求总耗时、首 token 总耗时、上游报告过的输入/输出 token），以及当前值（免费/付费池大小、冷却中的模型数、每个网关 Key 今日调用数与每日限额）和版本号。计数器只存在内存里，随进程重启归零；管理员清空日志页不会重置它们。鉴权规则与 `/v1` 相同（存在 Key 时需要 Bearer），但抓取不计入该 Key 的每日配额，Prometheus 可以轮询而不会吃掉客户端的额度。
 
 `GET /healthz` 和 `GET /health` 报 `package.json` 的 `version`（当前 `1.0.0`），发版用`v1.0.0` 这种 git tag。完整的 `/health` 内容会列出各渠道 Key 名称、欠费封禁、用量和整个池子，所以只发给本机回环调用（容器探活和本机脚本）或已登录的管理员；其他调用者只拿到和 `/healthz` 一样的三字段。`/api/health` 始终返回完整内容，但需要管理员会话。
+
+`GET /v1/models/{id}` 返回列表中该 id 对应的同一个对象（含别名和 `provider:model` 形式），找不到时返回 `404`、`type: model_not_found`，OpenAI 客户端据此判断 id 不在池中。
+
+`POST /v1/embeddings` 是透传而不是路由：embedding 不属于免费聊天池，请求直接发到 `model` 里点名的渠道（`provider:model`），裸 id 则走默认渠道，沿用同一套 Key 轮换和单次超时。上游返回体原样透传，失败保留上游状态码，调用同样会出现在调用日志和 `/metrics` 里。embedding 不在渠道之间自动回退。
+
+跨域默认关闭。把 `gateway.cors` 设为 `true` 允许任意来源，或设为 `["https://app.example"]` 这样的数组只允许列出的来源；只作用于 `/v1` 响应（Web 界面始终同源），预检 `OPTIONS` 在鉴权之前回答，并暴露 `X-Free-Router-Request-Id` 供浏览器读取。没有 `Origin` 头的请求不会带任何 CORS 头。
 
 `GET /v1/models` 依次返回 `free-best` 别名、池里全部免费文本模型、以及显式选中的付费模型。免费模型用裸 ID 列出（跨渠道去重）；当已选付费模型与某个免费条目同名时，它改以 `provider:model` 出现。点名免费模型会试当前提供同一 slug 的每家渠道；点名付费模型只用被选中的那一个 `provider:model`。
 

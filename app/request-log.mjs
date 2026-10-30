@@ -111,7 +111,9 @@ export function normalizeRequestRecord(input, { now = Date.now } = {}) {
     at,
     startedAt: isoOr(source.startedAt, at),
     durationMs,
-    dialect: source.dialect === 'responses' ? 'responses' : 'chat',
+    dialect: source.dialect === 'responses' ? 'responses'
+      : source.dialect === 'embeddings' ? 'embeddings'
+        : 'chat',
     stream: source.stream === true,
     model: cleanText(source.model, 200),
     provider: cleanText(source.provider, 64),

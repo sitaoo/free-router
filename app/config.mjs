@@ -741,7 +741,9 @@ export function defaultConfigObject() {
       // reloads the last 500 at boot.
       requestLogPersist: false,
     },
-    gateway: { requireAuth: false, keys: [] },
+    // cors: false by default. true allows any origin; an array of origins
+    // allows exactly those. It only ever applies to /v1 responses.
+    gateway: { requireAuth: false, keys: [], cors: false },
   };
 }
 

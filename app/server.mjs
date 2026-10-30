@@ -51,6 +51,7 @@ import {
 } from './cooldown.mjs';
 import { createRequestLog, outputTokensPerSecond, parseRequestLogLines } from './request-log.mjs';
 import { formatMetrics } from './metrics.mjs';
+import { corsHeaders } from './cors.mjs';
 import { estimateRequestTokens, fitsContext } from './context.mjs';
 import { installUpstreamProxy } from './proxy.mjs';
 import { isInsufficientFunds, msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
@@ -2655,6 +2656,129 @@ async function handleChat(req, res, options = {}) {
   }
 }
 
+// The model list served by /v1/models and reused by /v1/models/{id}, so the
+// two can never disagree about what the pool contains.
+async function gatewayModels() {
+  if (catalogsCold()) await refreshCatalog();
+  else refreshCatalogSoon();
+  const ordered = orderedPool();
+  const { models } = registry.buildModelList({
+    aliases: [{ id: DEFAULT_MODEL_ALIAS }],
+    entries: [...ordered.free, ...ordered.paid],
+  });
+  return models;
+}
+
+// /v1/embeddings is a passthrough, not a routed call: embeddings are not part
+// of the free chat pool, so the caller names the model (bare id for the
+// default provider, or provider:model) and the request goes to that provider
+// with the usual key rotation. The response is returned untouched.
+async function handleEmbeddings(req, res) {
+  const startedAt = Date.now();
+  const record = {
+    id: `req_${crypto.randomBytes(8).toString('hex')}`,
+    dialect: 'embeddings',
+    attempts: [],
+  };
+  res.setHeader('X-Free-Router-Request-Id', record.id);
+  try {
+    let body;
+    try {
+      body = await readJson(req);
+    } catch (error) {
+      record.reason = 'invalid JSON body';
+      return sendJson(res, 400, {
+        error: { message: String(error), type: 'invalid_request_error' },
+      });
+    }
+    const requested = String(body?.model || '').trim();
+    record.model = requested;
+    record.fields = Object.keys(body || {}).slice(0, 40);
+    if (!requested) {
+      record.reason = 'model is required';
+      return sendJson(res, 400, {
+        error: { message: 'model is required', type: 'invalid_request_error' },
+      });
+    }
+    const parsed = registry.parsePrefixed(requested);
+    const providerName = parsed ? parsed.provider : registry.defaultProvider;
+    const upstreamModel = parsed ? parsed.model : requested;
+    const slot = registry.keySlots(providerName)[0];
+    const endpoint = registry.embeddingsUrl(providerName);
+    if (!endpoint || !slot) {
+      record.reason = `provider ${providerName} is not configured`;
+      return sendJson(res, 503, {
+        error: { message: record.reason, type: 'provider_unavailable' },
+      });
+    }
+    registry.rotateKeyCursor(providerName);
+    const controller = new AbortController();
+    const timer = Number(attemptTimeoutMs) > 0
+      ? setTimeout(() => controller.abort(new Error('attempt timeout')), Number(attemptTimeoutMs))
+      : null;
+    let response;
+    let raw;
+    try {
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: registry.headers(providerName, slot.key),
+        body: JSON.stringify({ ...body, model: upstreamModel }),
+        signal: controller.signal,
+      });
+      raw = await response.text();
+    } catch (error) {
+      record.reason = String(error);
+      record.attempts.push({
+        provider: providerName,
+        model: upstreamModel,
+        key: slot.name,
+        status: 502,
+        ok: false,
+        kind: 'network',
+        reason: String(error),
+        ms: Date.now() - startedAt,
+      });
+      return sendJson(res, 502, {
+        error: { message: `embedding request failed: ${String(error)}`, type: 'upstream_error' },
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    const contentType = response.headers.get('content-type') || 'application/json';
+    record.attempts.push({
+      provider: providerName,
+      model: upstreamModel,
+      key: slot.name,
+      status: response.status,
+      ok: response.ok,
+      kind: response.ok ? 'ok' : 'http',
+      reason: response.ok ? '' : errorSummary(response.status, raw),
+      ms: Date.now() - startedAt,
+    });
+    if (!response.ok) {
+      record.reason = errorSummary(response.status, raw);
+      let payload;
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        payload = { error: { message: record.reason, type: 'upstream_error' } };
+      }
+      res.writeHead(response.status, { 'Content-Type': contentType });
+      return res.end(JSON.stringify(payload));
+    }
+    record.provider = providerName;
+    record.upstreamModel = upstreamModel;
+    record.key = slot.name;
+    res.writeHead(response.status, { 'Content-Type': contentType });
+    return res.end(raw);
+  } finally {
+    const entry = finishRequestRecord(record, res, startedAt);
+    const stored = clientRequestLog.add(secretRedactor ? secretRedactor.redact(entry).value : entry);
+    recordProcessTotals(stored);
+    appendRequestLog(stored);
+  }
+}
+
 async function runChatRequest(req, res, options, record) {
   let body;
   try {
@@ -4121,6 +4245,20 @@ async function handleLogin(req, res) {
 
 async function handler(req, res) {
   const url = new URL(req.url || '/', `http://${req.headers.host || `${HOST}:${PORT}`}`);
+  // CORS is for the gateway API only; the web UI is same-origin by design and
+  // deliberately gets no cross-origin permission.
+  if (url.pathname.startsWith('/v1/')) {
+    const cors = corsHeaders(config.gateway?.cors, req.headers.origin);
+    if (cors) {
+      for (const [name, value] of Object.entries(cors)) res.setHeader(name, value);
+      // A preflight asks for permission, not for data, and carries no
+      // Authorization header: answer it before any auth check.
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        return res.end();
+      }
+    }
+  }
   const isUiPath = url.pathname === '/' || url.pathname.startsWith('/api/');
   if (isUiPath) {
     if (!UI_ENABLED) {
@@ -4430,17 +4568,36 @@ async function handler(req, res) {
   if (req.method === 'GET' && url.pathname === '/v1/models') {
     const gatewayFailure = gatewayGuard(req);
     if (gatewayFailure) return sendGatewayFailure(res, gatewayFailure);
-    if (catalogsCold()) await refreshCatalog();
-    else refreshCatalogSoon();
-    const ordered = orderedPool();
-    const { models } = registry.buildModelList({
-      aliases: [{ id: DEFAULT_MODEL_ALIAS }],
-      entries: [...ordered.free, ...ordered.paid],
-    });
+    const models = await gatewayModels();
     return sendJson(res, 200, {
       object: 'list',
       data: models,
     });
+  }
+  // OpenAI clients fetch a single model before using it; a 404 here is how
+  // they learn the id is not in this pool.
+  if (req.method === 'GET' && url.pathname.startsWith('/v1/models/')) {
+    const gatewayFailure = gatewayGuard(req);
+    if (gatewayFailure) return sendGatewayFailure(res, gatewayFailure);
+    let id = url.pathname.slice('/v1/models/'.length);
+    try {
+      id = decodeURIComponent(id);
+    } catch {
+      // Keep the raw text; it simply will not match.
+    }
+    const models = await gatewayModels();
+    const model = models.find((entry) => entry.id === id);
+    if (!model) {
+      return sendJson(res, 404, {
+        error: { message: `unknown model: ${id}`, type: 'model_not_found' },
+      });
+    }
+    return sendJson(res, 200, model);
+  }
+  if (req.method === 'POST' && url.pathname === '/v1/embeddings') {
+    const gatewayFailure = gatewayGuard(req);
+    if (gatewayFailure) return sendGatewayFailure(res, gatewayFailure);
+    return handleEmbeddings(req, res);
   }
   if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
     const gatewayFailure = gatewayGuard(req);

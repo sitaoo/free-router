@@ -289,6 +289,8 @@ GET  /health                 full payload from loopback or an admin session; min
 GET  /api/health             full payload (session required)
 GET  /metrics               Prometheus text; same bearer key as /v1, not counted against quota
 GET  /v1/models              gateway key required once auth is on
+GET  /v1/models/{id}         one entry from that list, 404 model_not_found otherwise
+POST /v1/embeddings          passthrough to the named provider (not pooled)
 POST /v1/chat/completions    gateway key required once auth is on
 POST /v1/responses           same pool, keys, limits, translated Responses dialect
 ```
@@ -298,6 +300,12 @@ POST /v1/responses           same pool, keys, limits, translated Responses diale
 `GET /healthz` and `GET /health` report `version` from `package.json` (currently `1.0.0`). Releases are git tags of the form `v1.0.0`. The full `/health` payload names provider key labels, payment blocks, usage and the whole pool, so it is served only to a loopback caller (the container healthcheck and local scripts) or to a logged-in admin; any other caller gets the same three fields as `/healthz`. `/api/health` always returns the full payload and requires the admin session.
 
 `GET /v1/models` returns the `free-best` alias, every free text-chat model in the pool, then the explicitly selected paid models. Free models are listed by bare ID (deduplicated across providers); when a selected paid model would collide with a free listing of the same ID, it appears as `provider:model` instead. Naming a free model tries every provider that currently offers that same slug; naming a paid model uses exactly the selected `provider:model`.
+
+`GET /v1/models/{id}` returns the same object the list holds for that id (the alias and `provider:model` forms included) or `404` with `type: model_not_found`, which is how an OpenAI client learns an id is not in this pool.
+
+`POST /v1/embeddings` is a passthrough, not a routed call: embeddings are not part of the free chat pool, so the request goes to the provider named in `model` (`provider:model`) or to the default provider for a bare id, using the same key rotation and per-attempt timeout. The upstream body is returned unchanged, failures keep the upstream status, and the call appears in the request log and `/metrics` like any other. There is no automatic fallback between providers for embeddings.
+
+Cross-origin access is off by default. Set `gateway.cors` to `true` to allow any origin, or to an array such as `["https://app.example"]` to allow only those; it applies to `/v1` responses only (the web UI is same-origin), a preflight `OPTIONS` is answered before the auth check, and `X-Free-Router-Request-Id` is exposed so a browser client can read it. A request without an `Origin` header gets no CORS headers.
 
 Each entry carries the four standard OpenAI fields (`id`, `object`, `created`, `owned_by`) plus what the catalogs actually publish about that model: `context_length`, `max_output_tokens`, `name`, `description`, `supported_parameters`, `input_modalities`, `output_modalities`, `pricing`, `expiration_date`, `provider`, and `free`. Metadata is merged per model across providers, because the dialects disagree on what they report — Google's native listing gives `inputTokenLimit`/`outputTokenLimit` but has no release date, while OpenRouter supplies `created` and `top_provider.max_completion_tokens`. A field one provider omits is filled from another provider offering the same model; pricing is never borrowed, since a price is per provider. Anything genuinely unknown stays `0` (or is omitted) rather than invented.
 

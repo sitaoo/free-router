@@ -161,6 +161,9 @@ export function createProviderRegistry(config, { host, port }) {
       // candidate and is only sound on a key with no billing attached.
       probeFreeTier: usesCatalog && !catalogHasPricing && cfg.probeFreeTier === true,
       chatPath: cfg.chatPath || '/chat/completions',
+      // Embeddings live beside chat on every OpenAI-compatible base URL;
+      // a provider with a different layout can override the path.
+      embeddingsPath: cfg.embeddingsPath || '/embeddings',
       // Some OpenAI-compatible layers (Gemini's) reject `stream_options`
       // outright; providers that understand it keep returning usage.
       streamOptions: cfg.streamOptions !== false,
@@ -741,6 +744,10 @@ export function createProviderRegistry(config, { host, port }) {
     chatUrl(name) {
       const provider = get(name);
       return provider ? joinUrl(provider.baseUrl, provider.chatPath) : '';
+    },
+    embeddingsUrl(name) {
+      const provider = get(name);
+      return provider ? joinUrl(provider.baseUrl, provider.embeddingsPath) : '';
     },
   };
 }
