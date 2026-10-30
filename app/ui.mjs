@@ -783,6 +783,13 @@ body[data-gate="1"] main#app { display: none; }
         </div>
         <div class="setrow">
           <div class="set-text">
+            <div class="set-title" data-i18n="tun_request_log">Persist request log</div>
+            <div class="set-desc" data-i18n="tun_request_log_desc">Append each finished request (metadata only) to data/request-log.jsonl and reload the last 500 at boot. Off by default; Clear removes the file.</div>
+          </div>
+          <div class="set-ctl"><label class="switch"><input type="checkbox" id="set-request-log"><span class="slider"></span></label></div>
+        </div>
+        <div class="setrow">
+          <div class="set-text">
             <div class="set-title" data-i18n="tun_default">Default provider</div>
             <div class="set-desc" data-i18n="tun_default_desc">Assumed provider for bare model ids in routes.</div>
           </div>
@@ -883,6 +890,14 @@ body[data-gate="1"] main#app { display: none; }
         <p data-i18n="logs_blurb">Newest first. Metadata only: dialect, models, outcome, timings, and top-level field names — never prompts, answers, headers, or key values. The last 500 requests are kept in memory and cleared on restart.</p>
       </div>
       <div class="sec-body">
+        <div class="row">
+          <input id="logs-search" type="search" data-i18n-ph="logs_search_ph" placeholder="Search id, model, provider, key, reason" style="flex:1;min-width:220px">
+          <select id="logs-outcome" data-i18n-title="logs_all"></select>
+          <select id="logs-sort">
+            <option value="time" data-i18n="logs_sort_time">Newest first</option>
+            <option value="duration" data-i18n="logs_sort_duration">Slowest first</option>
+          </select>
+        </div>
         <div class="row" style="justify-content:flex-end">
           <button id="logs-refresh" class="ghost" data-i18n="logs_refresh">Refresh</button>
           <button id="logs-copy" class="ghost" data-i18n="logs_copy_all">Copy all</button>
@@ -891,6 +906,11 @@ body[data-gate="1"] main#app { display: none; }
           <button id="logs-clear" class="ghost danger" data-i18n="logs_clear">Clear</button>
         </div>
         <div id="logs"></div>
+        <div class="row" id="logs-pager" style="justify-content:flex-end" hidden>
+          <button id="logs-prev" class="ghost" data-i18n-title="logs_prev">‹</button>
+          <span class="note" id="logs-page" style="margin:0"></span>
+          <button id="logs-next" class="ghost" data-i18n-title="logs_next">›</button>
+        </div>
         <p class="note" id="logs-note"></p>
       </div>
     </section>
@@ -1297,6 +1317,23 @@ const PROVIDER_PRESETS = {
   huggingface: { baseUrl: 'https://router.huggingface.co/v1', catalog: true, pricing: false },
 };
 
+function modelCheckLabel(id, freeSet, classes) {
+  const label = document.createElement('label');
+  label.className = 'check';
+  const boxEl = document.createElement('input');
+  boxEl.type = 'checkbox';
+  boxEl.dataset.model = id;
+  const cls = classes?.[id] || (freeSet.has(id) ? 'free' : 'paid');
+  boxEl.dataset.cls = cls;
+  if (freeSet.has(id)) boxEl.checked = true;
+  const text = document.createElement('span');
+  text.className = 'mono';
+  text.textContent =
+    id + (cls === 'free' ? '' : ' ' + (cls === 'unknown' ? t('prov_unknown_tag') : t('prov_paid_tag')));
+  label.append(boxEl, text);
+  return label;
+}
+
 function renderModelList(box, ids, freeSet, truncated, classes) {
   box.textContent = '';
   if (!ids.length) {
@@ -1311,22 +1348,39 @@ function renderModelList(box, ids, freeSet, truncated, classes) {
   title.className = 'prov-hint';
   title.textContent = t('prov_models_pick');
   box.appendChild(title);
-  for (const id of ids) {
-    const label = document.createElement('label');
-    label.className = 'check';
-    const boxEl = document.createElement('input');
-    boxEl.type = 'checkbox';
-    boxEl.dataset.model = id;
-    const cls = classes?.[id] || (freeSet.has(id) ? 'free' : 'paid');
-    boxEl.dataset.cls = cls;
-    if (freeSet.has(id)) boxEl.checked = true;
-    const text = document.createElement('span');
-    text.className = 'mono';
-    text.textContent =
-      id + (cls === 'free' ? '' : ' ' + (cls === 'unknown' ? t('prov_unknown_tag') : t('prov_paid_tag')));
-    label.append(boxEl, text);
-    box.appendChild(label);
+  // A long catalog is unusable as a checkbox wall, and the server caps the
+  // list at 200; a filter box makes both the cap and the list workable.
+  let search = null;
+  if (ids.length > 12) {
+    search = document.createElement('input');
+    search.type = 'search';
+    search.className = 'mono';
+    search.placeholder = t('prov_filter_ph');
+    search.style.maxWidth = '280px';
+    search.style.marginBottom = '6px';
+    box.appendChild(search);
   }
+  const list = document.createElement('div');
+  box.appendChild(list);
+  const draw = () => {
+    list.textContent = '';
+    const query = search ? search.value.trim().toLowerCase() : '';
+    let shown = 0;
+    for (const id of ids) {
+      if (query && id.toLowerCase().indexOf(query) < 0) continue;
+      list.appendChild(modelCheckLabel(id, freeSet, classes));
+      shown += 1;
+    }
+    if (!shown) {
+      const p = document.createElement('p');
+      p.className = 'note';
+      p.style.margin = '0';
+      p.textContent = t('prov_no_match');
+      list.appendChild(p);
+    }
+  };
+  if (search) search.oninput = draw;
+  draw();
   if (truncated) {
     const p = document.createElement('p');
     p.className = 'note';
@@ -2335,6 +2389,15 @@ function renderUsage() {
 // reach this tab. All values are inserted as text, never as HTML.
 let logsState = null;
 let logsRefreshing = false;
+// Filters are client-side over the bounded buffer: 500 rows need no query API,
+// and keeping them in the page means switching tabs never loses the view.
+let logQuery = '';
+let logOutcome = 'all';
+let logSort = 'time';
+let logPage = 0;
+const LOG_PAGE_SIZE = 50;
+const logExpanded = new Set();
+const LOG_OUTCOMES = ['all', 'ok', 'empty', 'interrupted', 'aborted', 'blocked', 'failed', 'rejected'];
 
 function logReasonText(value, max) {
   const text = String(value || '');
@@ -2498,6 +2561,165 @@ function logAttemptsCell(entry) {
   return cell;
 }
 
+function logFiltered() {
+  const entries = (logsState && logsState.entries) || [];
+  const query = logQuery.trim().toLowerCase();
+  const rows = entries.filter((entry) => {
+    if (logOutcome !== 'all' && entry.outcome !== logOutcome) return false;
+    if (!query) return true;
+    const haystack = [
+      entry.id, entry.dialect, entry.model, entry.provider,
+      entry.upstreamModel, entry.key, entry.reason, entry.outcome,
+    ].filter(Boolean).join(' ').toLowerCase();
+    return haystack.indexOf(query) >= 0;
+  });
+  // The buffer arrives newest first, which is the default order; sorting by
+  // duration makes the slow rows easy to find without changing the buffer.
+  if (logSort === 'duration') {
+    rows.sort((left, right) => Number(right.durationMs || 0) - Number(left.durationMs || 0));
+  }
+  return rows;
+}
+
+function logDetailBlock(entry) {
+  const lines = [];
+  lines.push('id ' + entry.id);
+  if (entry.startedAt) lines.push('started ' + new Date(entry.startedAt).toLocaleString(lang));
+  lines.push('stream ' + (entry.stream ? 'yes' : 'no'));
+  if (Array.isArray(entry.fields) && entry.fields.length) {
+    lines.push(t('logs_fields') + ' ' + entry.fields.join(', '));
+  }
+  for (const attempt of entry.attempts || []) lines.push('  ' + logAttemptText(attempt));
+  const pre = document.createElement('div');
+  pre.className = 'mono';
+  pre.style.fontSize = '11.5px';
+  pre.style.whiteSpace = 'pre-wrap';
+  pre.style.color = 'var(--muted)';
+  pre.textContent = lines.join('\\n');
+  return pre;
+}
+
+function logCells(entry) {
+  const selected = entry.provider
+    ? entry.provider + ':' + entry.upstreamModel + (entry.key ? ' [' + entry.key + ']' : '')
+    : '-';
+  const timeCell = td(new Date(entry.at).toLocaleString(lang), 'muted');
+  timeCell.style.cursor = 'pointer';
+  timeCell.title = t('logs_detail_hint');
+  timeCell.onclick = () => {
+    if (logExpanded.has(entry.id)) logExpanded.delete(entry.id);
+    else logExpanded.add(entry.id);
+    renderLogs();
+  };
+  const modelCell = td(entry.model || '-', 'mono');
+  if (entry.model) {
+    modelCell.style.cursor = 'pointer';
+    modelCell.title = t('logs_filter_hint');
+    modelCell.onclick = () => {
+      logQuery = entry.model;
+      logPage = 0;
+      el('logs-search').value = logQuery;
+      renderLogs();
+    };
+  }
+  const resultCell = document.createElement('td');
+  resultCell.appendChild(pill(t('log_' + entry.outcome), logResultKind(entry.outcome)));
+  if (entry.reason) {
+    const why = document.createElement('div');
+    why.className = 'note';
+    why.style.margin = '3px 0 0';
+    why.style.maxWidth = '160px';
+    why.style.overflow = 'hidden';
+    why.style.textOverflow = 'ellipsis';
+    why.style.whiteSpace = 'nowrap';
+    why.textContent = logReasonText(entry.reason, 120);
+    why.title = String(entry.reason);
+    resultCell.appendChild(why);
+  }
+  // What the answer was made of: an "ok" row with zero characters and a
+  // tool call looks very different from one that carried text.
+  if (entry.finishReason || entry.toolCalls || entry.contentChars) {
+    const shape = document.createElement('div');
+    shape.className = 'note';
+    shape.style.margin = '3px 0 0';
+    shape.style.maxWidth = '160px';
+    shape.style.overflow = 'hidden';
+    shape.style.textOverflow = 'ellipsis';
+    shape.style.whiteSpace = 'nowrap';
+    shape.textContent = t('logs_answer', {
+      finish: entry.finishReason || '-',
+      tools: entry.toolCalls || 0,
+      chars: entry.contentChars || 0,
+    });
+    resultCell.appendChild(shape);
+  }
+  return [
+    timeCell,
+    td(entry.dialect, 'muted'),
+    modelCell,
+    td(selected, 'mono'),
+    resultCell,
+    td(logSeconds(entry.durationMs), 'num'),
+    td(logSeconds(entry.firstTokenMs), 'num'),
+    // 0 tokens means the upstream never reported usage, not an empty answer:
+    // that row still shows its character and tool-call counts.
+    td(entry.inputTokens ? logNumber(entry.inputTokens) : '-', 'num'),
+    td(entry.outputTokens ? logNumber(entry.outputTokens) : '-', 'num'),
+    td(entry.outputTps === null || entry.outputTps === undefined ? '-' : logNumber(entry.outputTps, 1) + ' tok/s', 'num'),
+    logAttemptsCell(entry),
+  ];
+}
+
+function logHeaders() {
+  return [
+    { label: t('th_logs_time') },
+    { label: t('th_logs_dialect') },
+    { label: t('th_logs_requested') },
+    { label: t('th_logs_selected') },
+    { label: t('th_logs_result') },
+    { label: t('th_logs_duration'), num: true },
+    { label: t('th_logs_first_token'), num: true },
+    { label: t('th_logs_input_tokens'), num: true },
+    { label: t('th_logs_output_tokens'), num: true },
+    { label: t('th_logs_speed'), num: true },
+    { label: t('th_logs_attempts') },
+  ];
+}
+
+// A custom builder rather than table(): an expanded row inserts a second <tr>
+// spanning every column, which the simple helper cannot express.
+function logTable(entries) {
+  const headers = logHeaders();
+  const node = document.createElement('table');
+  const head = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  for (const header of headers) {
+    const cell = document.createElement('th');
+    cell.textContent = header.label;
+    if (header.num) cell.className = 'num';
+    headRow.appendChild(cell);
+  }
+  head.appendChild(headRow);
+  node.appendChild(head);
+  const body = document.createElement('tbody');
+  for (const entry of entries) {
+    const row = document.createElement('tr');
+    for (const cell of logCells(entry)) row.appendChild(cell);
+    body.appendChild(row);
+    if (logExpanded.has(entry.id)) {
+      const detailRow = document.createElement('tr');
+      const detailCell = document.createElement('td');
+      detailCell.colSpan = headers.length;
+      detailCell.style.background = 'var(--panel2)';
+      detailCell.appendChild(logDetailBlock(entry));
+      detailRow.appendChild(detailCell);
+      body.appendChild(detailRow);
+    }
+  }
+  node.appendChild(body);
+  return node;
+}
+
 function renderLogs() {
   const host = el('logs');
   const note = el('logs-note');
@@ -2505,8 +2727,12 @@ function renderLogs() {
   const entries = (logsState && logsState.entries) || [];
   const capacity = (logsState && logsState.capacity) || 500;
   note.textContent = logsState ? t('logs_count', { n: entries.length, cap: capacity }) : '';
-  if (!logsState) return;
+  if (!logsState) {
+    el('logs-pager').hidden = true;
+    return;
+  }
   if (!entries.length) {
+    el('logs-pager').hidden = true;
     const p = document.createElement('p');
     p.className = 'note';
     p.style.margin = '0';
@@ -2514,72 +2740,29 @@ function renderLogs() {
     host.appendChild(p);
     return;
   }
-  host.appendChild(table(
-    [
-      { label: t('th_logs_time') },
-      { label: t('th_logs_dialect') },
-      { label: t('th_logs_requested') },
-      { label: t('th_logs_selected') },
-      { label: t('th_logs_result') },
-      { label: t('th_logs_duration'), num: true },
-      { label: t('th_logs_first_token'), num: true },
-      { label: t('th_logs_input_tokens'), num: true },
-      { label: t('th_logs_output_tokens'), num: true },
-      { label: t('th_logs_speed'), num: true },
-      { label: t('th_logs_attempts') },
-    ],
-    entries.map((entry) => {
-      const selected = entry.provider
-        ? entry.provider + ':' + entry.upstreamModel + (entry.key ? ' [' + entry.key + ']' : '')
-        : '-';
-      const resultCell = document.createElement('td');
-      resultCell.appendChild(pill(t('log_' + entry.outcome), logResultKind(entry.outcome)));
-      if (entry.reason) {
-        const why = document.createElement('div');
-        why.className = 'note';
-        why.style.margin = '3px 0 0';
-        why.style.maxWidth = '160px';
-        why.style.overflow = 'hidden';
-        why.style.textOverflow = 'ellipsis';
-        why.style.whiteSpace = 'nowrap';
-        why.textContent = logReasonText(entry.reason, 120);
-        why.title = String(entry.reason);
-        resultCell.appendChild(why);
-      }
-      // What the answer was made of: an "ok" row with zero characters and a
-      // tool call looks very different from one that carried text.
-      if (entry.finishReason || entry.toolCalls || entry.contentChars) {
-        const shape = document.createElement('div');
-        shape.className = 'note';
-        shape.style.margin = '3px 0 0';
-        shape.style.maxWidth = '160px';
-        shape.style.overflow = 'hidden';
-        shape.style.textOverflow = 'ellipsis';
-        shape.style.whiteSpace = 'nowrap';
-        shape.textContent = t('logs_answer', {
-          finish: entry.finishReason || '-',
-          tools: entry.toolCalls || 0,
-          chars: entry.contentChars || 0,
-        });
-        resultCell.appendChild(shape);
-      }
-      return [
-        td(new Date(entry.at).toLocaleString(lang), 'muted'),
-        td(entry.dialect, 'muted'),
-        td(entry.model || '-', 'mono'),
-        td(selected, 'mono'),
-        resultCell,
-        td(logSeconds(entry.durationMs), 'num'),
-        td(logSeconds(entry.firstTokenMs), 'num'),
-        // 0 tokens means the upstream never reported usage, not an empty
-        // answer: that row still shows its character and tool-call counts.
-        td(entry.inputTokens ? logNumber(entry.inputTokens) : '-', 'num'),
-        td(entry.outputTokens ? logNumber(entry.outputTokens) : '-', 'num'),
-        td(entry.outputTps === null || entry.outputTps === undefined ? '-' : logNumber(entry.outputTps, 1) + ' tok/s', 'num'),
-        logAttemptsCell(entry),
-      ];
-    }),
-  ));
+  const rows = logFiltered();
+  if (!rows.length) {
+    el('logs-pager').hidden = true;
+    const p = document.createElement('p');
+    p.className = 'note';
+    p.style.margin = '0';
+    p.textContent = t('logs_no_match');
+    host.appendChild(p);
+    return;
+  }
+  const pages = Math.max(1, Math.ceil(rows.length / LOG_PAGE_SIZE));
+  if (logPage > pages - 1) logPage = pages - 1;
+  if (logPage < 0) logPage = 0;
+  const offset = logPage * LOG_PAGE_SIZE;
+  host.appendChild(logTable(rows.slice(offset, offset + LOG_PAGE_SIZE)));
+  const pager = el('logs-pager');
+  pager.hidden = pages <= 1;
+  el('logs-prev').disabled = logPage === 0;
+  el('logs-next').disabled = logPage >= pages - 1;
+  el('logs-page').textContent = t('logs_page', { p: logPage + 1, n: pages });
+  if (rows.length !== entries.length) {
+    note.textContent += ' · ' + t('logs_showing', { n: rows.length, t: entries.length });
+  }
 }
 
 async function refreshLogs(silent) {
@@ -3201,6 +3384,7 @@ function renderTuning() {
   el('set-timeout').value = general.attemptTimeoutMs;
   el('set-refresh').value = general.catalogRefreshMs;
   el('set-redact').checked = Boolean(general.redactSecrets);
+  el('set-request-log').checked = Boolean(state.webui && state.webui.requestLogPersist);
   el('set-socks').value = (general.socksFirstHosts || []).join(', ');
   const select = el('set-default');
   select.textContent = '';
@@ -3235,6 +3419,38 @@ function bindOnce() {
       }
     };
   }
+  const outcomeSelect = el('logs-outcome');
+  for (const value of LOG_OUTCOMES) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = value === 'all' ? t('logs_all') : t('log_' + value);
+    outcomeSelect.appendChild(option);
+  }
+  outcomeSelect.onchange = () => {
+    logOutcome = outcomeSelect.value;
+    logPage = 0;
+    renderLogs();
+  };
+  el('logs-search').oninput = () => {
+    logQuery = el('logs-search').value;
+    logPage = 0;
+    renderLogs();
+  };
+  el('logs-sort').onchange = () => {
+    logSort = el('logs-sort').value;
+    logPage = 0;
+    renderLogs();
+  };
+  el('logs-prev').onclick = () => {
+    if (logPage > 0) {
+      logPage -= 1;
+      renderLogs();
+    }
+  };
+  el('logs-next').onclick = () => {
+    logPage += 1;
+    renderLogs();
+  };
   el('logs-refresh').onclick = () => refreshLogs(false);
   el('logs-copy').onclick = () => copyLogText(logAllText());
   el('logs-export-jsonl').onclick = () =>
@@ -3439,6 +3655,7 @@ function bindOnce() {
           attemptTimeoutMs: Number(el('set-timeout').value),
           catalogRefreshMs: Number(el('set-refresh').value),
           redactSecrets: el('set-redact').checked,
+          requestLogPersist: el('set-request-log').checked,
           defaultProvider: el('set-default').value,
           socksFirstHosts: el('set-socks').value.split(',').map((s) => s.trim()).filter(Boolean),
           retentionDays: Number(el('set-retention').value),

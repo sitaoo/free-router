@@ -2669,6 +2669,72 @@ try {
     }
   }
 
+  // Request-log persistence is opt-in: enabled from Settings, it appends
+  // finished records (metadata only) to data/request-log.jsonl, and Clear
+  // removes the file rather than just the ring.
+  {
+    const login = await fetch(`${base}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: 's3cret-newpw' }),
+    });
+    assert.equal(login.status, 200);
+    const cookie = String(login.headers.get('set-cookie') || '').split(';')[0];
+    const headers = { 'Content-Type': 'application/json', Cookie: cookie, 'Sec-Fetch-Site': 'same-origin' };
+    const toggle = (value) =>
+      fetch(`${base}/api/settings`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ requestLogPersist: value }),
+      });
+    assert.equal((await toggle(true)).status, 200);
+    const onState = await fetch(`${base}/api/state`, { headers: { Cookie: cookie } }).then((res) => res.json());
+    assert.equal(onState.webui.requestLogPersist, true);
+
+    const probe = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'mock-b',
+        messages: [{ role: 'user', content: 'persist this prompt' }],
+      }),
+    });
+    assert.equal(probe.status, 200);
+    const probeRecordId = probe.headers.get('x-free-router-request-id') || '';
+    assert.match(probeRecordId, /^req_[0-9a-f]{16}$/);
+    const file = path.join(tempDir, 'request-log.jsonl');
+    // The record is appended after the response is flushed, so poll instead of
+    // racing the finally block.
+    const readPersisted = () => {
+      if (!fs.existsSync(file)) return [];
+      return fs
+        .readFileSync(file, 'utf8')
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+    };
+    let lastRecord = null;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      lastRecord = readPersisted().find((entry) => entry.id === probeRecordId) || null;
+      if (lastRecord) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.ok(lastRecord, 'the request log file must hold the probe record once enabled');
+    assert.equal(lastRecord.model, 'mock-b');
+    assert.equal(JSON.stringify(lastRecord).includes('persist this prompt'), false, 'prompts are never stored');
+
+    const cleared = await fetch(`${base}/api/logs`, {
+      method: 'DELETE',
+      headers: { Cookie: cookie, 'Sec-Fetch-Site': 'same-origin' },
+    });
+    assert.equal(cleared.status, 200);
+    assert.equal(fs.existsSync(file), false, 'Clear removes the persisted file');
+    assert.equal((await toggle(false)).status, 200);
+    const offState = await fetch(`${base}/api/state`, { headers: { Cookie: cookie } }).then((res) => res.json());
+    assert.equal(offState.webui.requestLogPersist, false);
+  }
+
   // Session manager: the admin can see every signed-in browser, sign out all
   // the others, and revoke their own session (which clears the cookie). The
   // listing carries a hash id, never the token.

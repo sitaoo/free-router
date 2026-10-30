@@ -736,6 +736,10 @@ export function defaultConfigObject() {
       trustedHosts: [],
       trustProxy: false,
       secureCookie: false,
+      // The request log is memory-only by default. Turning this on appends
+      // each finished record (metadata only) to data/request-log.jsonl and
+      // reloads the last 500 at boot.
+      requestLogPersist: false,
     },
     gateway: { requireAuth: false, keys: [] },
   };

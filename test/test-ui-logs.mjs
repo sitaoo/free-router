@@ -18,7 +18,10 @@ assert.ok(logsPaneAt > page.indexOf('data-pane="settings"'), 'logs pane must fol
 assert.ok(logsPaneAt < page.indexOf('</main>'), 'logs pane must stay inside main');
 
 // 2. Pane controls: five ghost buttons over the table, then the count note.
-for (const id of ['logs', 'logs-refresh', 'logs-note', 'logs-copy', 'logs-export-jsonl', 'logs-export-text', 'logs-clear']) {
+for (const id of [
+  'logs', 'logs-refresh', 'logs-note', 'logs-copy', 'logs-export-jsonl', 'logs-export-text', 'logs-clear',
+  'logs-search', 'logs-outcome', 'logs-sort', 'logs-pager', 'logs-prev', 'logs-next', 'logs-page',
+]) {
   assert.ok(page.includes(`id="${id}"`), `#${id} missing`);
 }
 for (const id of ['logs-refresh', 'logs-copy', 'logs-export-jsonl', 'logs-export-text', 'logs-clear']) {
@@ -35,6 +38,22 @@ assert.match(page, /data-i18n="logs_clear"/);
 assert.match(page, /api\('api\/logs'\)/, 'logs must use the dedicated endpoint');
 assert.match(page, /api\('api\/logs', \{ method: 'DELETE' \}\)/, 'Clear must delete the in-memory records');
 assert.match(page, /confirm\(t\('logs_clear_confirm'\)\)/, 'clearing must ask first');
+
+// 3b. Filtering, sorting, and paging are client-side over the bounded buffer,
+// and a row expands into its full attempt list without leaving the page.
+assert.match(page, /function logFiltered\(/);
+assert.match(page, /function logTable\(/);
+assert.match(page, /function logDetailBlock\(/);
+assert.match(page, /LOG_PAGE_SIZE = 50/);
+assert.match(page, /logOutcome !== 'all'/);
+assert.match(page, /logSort === 'duration'/);
+assert.match(page, /el\('logs-search'\)\.oninput/);
+assert.match(page, /el\('logs-prev'\)\.onclick/);
+assert.match(page, /el\('logs-next'\)\.onclick/);
+assert.match(page, /logExpanded\.has\(entry\.id\)/);
+// Clicking the requested model filters by it: the per-model drilldown.
+assert.match(page, /logQuery = entry\.model;/);
+assert.match(page, /logs_filter_hint/);
 
 // 4. Polling: 5s, only on the logs tab, only visible, only while logged in,
 // and never overlapping.

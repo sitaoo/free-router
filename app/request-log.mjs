@@ -133,6 +133,23 @@ export function normalizeRequestRecord(input, { now = Date.now } = {}) {
   };
 }
 
+// Rebuilds records from a persisted JSONL file: torn lines (a hard kill
+// mid-write) are skipped and only the newest `limit` survive.
+export function parseRequestLogLines(text, { limit = REQUEST_LOG_CAPACITY } = {}) {
+  const records = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed && typeof parsed === 'object') records.push(parsed);
+    } catch {
+      // Ignore: the last line of a killed process is often incomplete.
+    }
+  }
+  const keep = Number.isFinite(limit) ? Math.max(1, Math.trunc(limit)) : REQUEST_LOG_CAPACITY;
+  return records.slice(-keep);
+}
+
 export function createRequestLog({ capacity = REQUEST_LOG_CAPACITY, now = Date.now } = {}) {
   const limit = Number.isFinite(capacity)
     ? Math.min(Math.max(Math.trunc(capacity), 1), 5000)

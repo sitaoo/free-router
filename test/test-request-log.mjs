@@ -9,6 +9,7 @@ import {
   REQUEST_LOG_MAX_ATTEMPTS,
   createRequestLog,
   normalizeRequestRecord,
+  parseRequestLogLines,
 } from '../app/request-log.mjs';
 
 const now = () => Date.parse('2026-10-29T10:00:00.000Z');
@@ -206,6 +207,22 @@ const iso = (date) => new Date(date).toISOString();
   assert.equal(log.clear(), 0, 'clearing an empty log is a no-op');
   log.add({ id: 'c' });
   assert.deepEqual(log.snapshot().entries.map((entry) => entry.id), ['c']);
+}
+
+// ---- persisted file parsing ----------------------------------------------
+{
+  const text = [
+    JSON.stringify({ id: 'req_1', outcome: 'ok' }),
+    '{"id": "req_2", "outcome": "ok"',
+    '',
+    'null',
+    JSON.stringify({ id: 'req_3', outcome: 'failed' }),
+  ].join('\n');
+  const records = parseRequestLogLines(text);
+  assert.deepEqual(records.map((record) => record.id), ['req_1', 'req_3'], 'torn and null lines are skipped');
+  assert.deepEqual(parseRequestLogLines(text, { limit: 1 }).map((record) => record.id), ['req_3']);
+  assert.deepEqual(parseRequestLogLines(''), []);
+  assert.deepEqual(parseRequestLogLines(undefined), []);
 }
 
 console.log('request-log unit tests passed');

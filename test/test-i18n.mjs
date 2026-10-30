@@ -29,6 +29,11 @@ const NEW_KEYS = [
   'th_sess_id', 'th_sess_created', 'th_sess_expires', 'th_sess_ip', 'th_sess_client',
   'audit_t', 'audit_d', 'audit_refresh', 'audit_empty', 'audit_note',
   'th_audit_time', 'th_audit_actor', 'th_audit_action', 'th_audit_target', 'th_audit_result',
+  'logs_search_ph', 'logs_all', 'logs_sort_time', 'logs_sort_duration', 'logs_prev',
+  'logs_next', 'logs_page', 'logs_showing', 'logs_no_match', 'logs_fields',
+  'logs_detail_hint', 'logs_filter_hint',
+  'tun_request_log', 'tun_request_log_desc',
+  'prov_filter_ph', 'prov_no_match',
 ];
 
 // 1. The exact Chinese sentence the operator approved.
@@ -86,6 +91,12 @@ assert.match(STRINGS.en.sess_confirm, /\{id\}/);
 for (const [code] of LANGS) {
   assert.ok(STRINGS[code].sess_confirm_self.length > 20, `${code} sess_confirm_self`);
 }
+// The logs filter strings keep both page placeholders and both counts.
+assert.match(STRINGS.en.logs_page, /\{p\}/);
+assert.match(STRINGS.en.logs_page, /\{n\}/);
+assert.match(STRINGS.en.logs_showing, /\{n\}/);
+assert.match(STRINGS.en.logs_showing, /\{t\}/);
+assert.equal(STRINGS['zh-CN'].logs_no_match, '没有符合筛选条件的请求。');
 // The audit blurb promises what is never written; keep that promise in every
 // language and keep both placeholders in the note.
 assert.match(STRINGS.en.audit_note, /\{n\}/);

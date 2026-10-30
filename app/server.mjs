@@ -49,7 +49,7 @@ import {
   parseRetryAfterMs,
   timeoutBackoffMs,
 } from './cooldown.mjs';
-import { createRequestLog, outputTokensPerSecond } from './request-log.mjs';
+import { createRequestLog, outputTokensPerSecond, parseRequestLogLines } from './request-log.mjs';
 import { estimateRequestTokens, fitsContext } from './context.mjs';
 import { installUpstreamProxy } from './proxy.mjs';
 import { isInsufficientFunds, msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
@@ -712,6 +712,37 @@ function log(message, detail = undefined) {
   const prefix = `[${new Date().toISOString()}]`;
   if (detail === undefined) console.log(prefix, message);
   else console.log(prefix, message, detail);
+}
+
+// Optional request-log persistence: off by default (the log is metadata-only
+// and memory-only unless the operator opts in). One JSON object per line,
+// rotated at 5 MB, reloaded into the ring at boot.
+const REQUEST_LOG_PATH = LAYOUT.statePath('request-log.jsonl');
+const REQUEST_LOG_MAX_BYTES = 5 * 1024 * 1024;
+function requestLogPersistEnabled() {
+  return config.webui?.requestLogPersist === true;
+}
+function appendRequestLog(record) {
+  if (!requestLogPersistEnabled()) return;
+  try {
+    if (fs.existsSync(REQUEST_LOG_PATH) && fs.statSync(REQUEST_LOG_PATH).size > REQUEST_LOG_MAX_BYTES) {
+      fs.renameSync(REQUEST_LOG_PATH, `${REQUEST_LOG_PATH}.1`);
+    }
+    fs.appendFileSync(REQUEST_LOG_PATH, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+  } catch (error) {
+    log(`failed to persist request log: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+function loadPersistedRequestLog() {
+  if (!requestLogPersistEnabled() || !fs.existsSync(REQUEST_LOG_PATH)) return;
+  try {
+    const text = fs.readFileSync(REQUEST_LOG_PATH, 'utf8');
+    for (const record of parseRequestLogLines(text, { limit: clientRequestLog.capacity })) {
+      clientRequestLog.add(record);
+    }
+  } catch (error) {
+    log(`failed to load persisted request log: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 // Security-relevant actions go to an append-only JSONL file next to the
@@ -1700,6 +1731,7 @@ function scheduleNextDiscovery() {
 }
 
 loadDiscoveryState();
+loadPersistedRequestLog();
 
 function requestNeeds(body) {
   const modalities = new Set();
@@ -2580,7 +2612,8 @@ async function handleChat(req, res, options = {}) {
     await runChatRequest(req, res, options, record);
   } finally {
     const entry = finishRequestRecord(record, res, startedAt);
-    clientRequestLog.add(secretRedactor ? secretRedactor.redact(entry).value : entry);
+    const stored = clientRequestLog.add(secretRedactor ? secretRedactor.redact(entry).value : entry);
+    appendRequestLog(stored);
   }
 }
 
@@ -3947,6 +3980,11 @@ async function handleSettings(req, res) {
     setOverlayValue(['webui', 'sessionTtlHours'], value);
     notes.push(value === 0 ? 'sessions never expire' : `sessions expire after ${value} hour(s); existing sessions keep their old expiry`);
   }
+  if (body.requestLogPersist !== undefined) {
+    const value = Boolean(body.requestLogPersist);
+    setOverlayValue(['webui', 'requestLogPersist'], value);
+    notes.push(value ? 'request log persistence enabled' : 'request log persistence disabled');
+  }
   if (body.dismissMigrationNotice === true) {
     deleteOverlayValue(['migratedFromEnv']);
   }
@@ -4161,6 +4199,7 @@ async function handler(req, res) {
         },
         webui: {
           defaultPassword: isDefaultPassword(),
+          requestLogPersist: requestLogPersistEnabled(),
           passwordChangedAt: config.webui?.passwordChangedAt || null,
           sessionTtlHours: sessionTtlHours(),
           sessionExpiresAt: (() => {
@@ -4210,13 +4249,17 @@ async function handler(req, res) {
     );
   }
   if (req.method === 'DELETE' && url.pathname === '/api/logs') {
-    // Clearing only touches the in-memory ring; nothing on disk to erase.
-    return sendJson(
-      res,
-      200,
-      { ok: true, cleared: clientRequestLog.clear() },
-      { 'Cache-Control': 'no-store' },
-    );
+    // Clearing drops the ring and, when persistence is on, the file too:
+    // Clear means gone, not hidden until the next restart.
+    const cleared = clientRequestLog.clear();
+    if (requestLogPersistEnabled()) {
+      try {
+        fs.rmSync(REQUEST_LOG_PATH, { force: true });
+      } catch (error) {
+        log(`failed to clear persisted request log: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return sendJson(res, 200, { ok: true, cleared }, { 'Cache-Control': 'no-store' });
   }
   if (req.method === 'GET' && url.pathname === '/api/sessions') {
     // Tokens never leave the server: rows carry a hash-derived id only.

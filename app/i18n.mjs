@@ -2266,6 +2266,54 @@ const AUDIT_STRINGS = {
   "ar": { audit_t: "سجل التدقيق", audit_d: "سجل للإضافة فقط لتسجيلات الدخول وتغييرات المفاتيح والإعدادات، الأحدث أولاً. تُسطَّح القيم وتُقصّ؛ لا تُكتب المفاتيح أو كلمات المرور أو الطلبات أبداً.", audit_refresh: "تحديث", audit_empty: "لا توجد سجلات بعد.", audit_note: "{n} سجلاً من {p} (الأحدث أولاً).", th_audit_time: "الوقت", th_audit_actor: "الفاعل", th_audit_action: "الإجراء", th_audit_target: "الهدف", th_audit_result: "النتيجة" },
 };
 
+// Logs filter/sort/pager strings, one unit so every locale stays complete.
+const LOG_FILTER_STRINGS = {
+  en: { logs_search_ph: "Search id, model, provider, key, reason", logs_all: "All outcomes", logs_sort_time: "Newest first", logs_sort_duration: "Slowest first", logs_prev: "Previous page", logs_next: "Next page", logs_page: "Page {p} of {n}", logs_showing: "Showing {n} of {t}", logs_no_match: "No requests match these filters.", logs_fields: "Fields:", logs_detail_hint: "Click to show every attempt and field", logs_filter_hint: "Click to filter by this model" },
+  "zh-CN": { logs_search_ph: "搜索 id、模型、渠道、Key、原因", logs_all: "全部结果", logs_sort_time: "最新在前", logs_sort_duration: "最慢在前", logs_prev: "上一页", logs_next: "下一页", logs_page: "第 {p} / {n} 页", logs_showing: "显示 {n} / {t} 条", logs_no_match: "没有符合筛选条件的请求。", logs_fields: "字段：", logs_detail_hint: "点击查看全部尝试与字段", logs_filter_hint: "点击按此模型筛选" },
+  "zh-TW": { logs_search_ph: "搜尋 id、模型、管道、Key、原因", logs_all: "全部結果", logs_sort_time: "最新在前", logs_sort_duration: "最慢在前", logs_prev: "上一頁", logs_next: "下一頁", logs_page: "第 {p} / {n} 頁", logs_showing: "顯示 {n} / {t} 筆", logs_no_match: "沒有符合篩選條件的請求。", logs_fields: "欄位：", logs_detail_hint: "點擊查看全部嘗試與欄位", logs_filter_hint: "點擊依此模型篩選" },
+  "ja": { logs_search_ph: "id・モデル・プロバイダー・キー・理由を検索", logs_all: "すべての結果", logs_sort_time: "新しい順", logs_sort_duration: "遅い順", logs_prev: "前のページ", logs_next: "次のページ", logs_page: "{n} ページ中 {p} ページ", logs_showing: "{t} 件中 {n} 件を表示", logs_no_match: "条件に一致するリクエストはありません。", logs_fields: "フィールド:", logs_detail_hint: "クリックで全試行とフィールドを表示", logs_filter_hint: "クリックでこのモデルに絞り込み" },
+  "ko": { logs_search_ph: "id, 모델, 프로바이더, 키, 사유 검색", logs_all: "모든 결과", logs_sort_time: "최신순", logs_sort_duration: "느린 순", logs_prev: "이전 페이지", logs_next: "다음 페이지", logs_page: "{n}페이지 중 {p}페이지", logs_showing: "{t}개 중 {n}개 표시", logs_no_match: "조건에 맞는 요청이 없습니다.", logs_fields: "필드:", logs_detail_hint: "클릭하면 모든 시도와 필드가 표시됩니다", logs_filter_hint: "클릭하면 이 모델로 필터링" },
+  "es": { logs_search_ph: "Buscar id, modelo, proveedor, clave, motivo", logs_all: "Todos los resultados", logs_sort_time: "Más recientes primero", logs_sort_duration: "Más lentas primero", logs_prev: "Página anterior", logs_next: "Página siguiente", logs_page: "Página {p} de {n}", logs_showing: "Mostrando {n} de {t}", logs_no_match: "Ninguna solicitud coincide con estos filtros.", logs_fields: "Campos:", logs_detail_hint: "Haz clic para ver todos los intentos y campos", logs_filter_hint: "Haz clic para filtrar por este modelo" },
+  "fr": { logs_search_ph: "Rechercher id, modèle, fournisseur, clé, motif", logs_all: "Tous les résultats", logs_sort_time: "Plus récentes d'abord", logs_sort_duration: "Plus lentes d'abord", logs_prev: "Page précédente", logs_next: "Page suivante", logs_page: "Page {p} sur {n}", logs_showing: "{n} sur {t} affichées", logs_no_match: "Aucune requête ne correspond à ces filtres.", logs_fields: "Champs :", logs_detail_hint: "Cliquez pour voir tous les essais et champs", logs_filter_hint: "Cliquez pour filtrer sur ce modèle" },
+  "de": { logs_search_ph: "id, Modell, Anbieter, Schlüssel, Grund suchen", logs_all: "Alle Ergebnisse", logs_sort_time: "Neueste zuerst", logs_sort_duration: "Langsamste zuerst", logs_prev: "Vorherige Seite", logs_next: "Nächste Seite", logs_page: "Seite {p} von {n}", logs_showing: "{n} von {t} angezeigt", logs_no_match: "Keine Anfrage passt zu diesen Filtern.", logs_fields: "Felder:", logs_detail_hint: "Klicken für alle Versuche und Felder", logs_filter_hint: "Klicken, um nach diesem Modell zu filtern" },
+  "ru": { logs_search_ph: "Поиск по id, модели, провайдеру, ключу, причине", logs_all: "Все результаты", logs_sort_time: "Сначала новые", logs_sort_duration: "Сначала медленные", logs_prev: "Предыдущая страница", logs_next: "Следующая страница", logs_page: "Страница {p} из {n}", logs_showing: "Показано {n} из {t}", logs_no_match: "Нет запросов, подходящих под фильтры.", logs_fields: "Поля:", logs_detail_hint: "Нажмите, чтобы увидеть все попытки и поля", logs_filter_hint: "Нажмите, чтобы отфильтровать по этой модели" },
+  "pt": { logs_search_ph: "Pesquisar id, modelo, provedor, chave, motivo", logs_all: "Todos os resultados", logs_sort_time: "Mais recentes primeiro", logs_sort_duration: "Mais lentas primeiro", logs_prev: "Página anterior", logs_next: "Próxima página", logs_page: "Página {p} de {n}", logs_showing: "Mostrando {n} de {t}", logs_no_match: "Nenhuma requisição corresponde a estes filtros.", logs_fields: "Campos:", logs_detail_hint: "Clique para ver todas as tentativas e campos", logs_filter_hint: "Clique para filtrar por este modelo" },
+  "it": { logs_search_ph: "Cerca id, modello, provider, chiave, motivo", logs_all: "Tutti gli esiti", logs_sort_time: "Più recenti prima", logs_sort_duration: "Più lente prima", logs_prev: "Pagina precedente", logs_next: "Pagina successiva", logs_page: "Pagina {p} di {n}", logs_showing: "{n} di {t} mostrate", logs_no_match: "Nessuna richiesta corrisponde a questi filtri.", logs_fields: "Campi:", logs_detail_hint: "Clicca per vedere tutti i tentativi e i campi", logs_filter_hint: "Clicca per filtrare per questo modello" },
+  "ar": { logs_search_ph: "بحث بالمعرّف أو النموذج أو المزود أو المفتاح أو السبب", logs_all: "كل النتائج", logs_sort_time: "الأحدث أولاً", logs_sort_duration: "الأبطأ أولاً", logs_prev: "الصفحة السابقة", logs_next: "الصفحة التالية", logs_page: "صفحة {p} من {n}", logs_showing: "عرض {n} من {t}", logs_no_match: "لا توجد طلبات تطابق هذه المرشحات.", logs_fields: "الحقول:", logs_detail_hint: "انقر لعرض كل المحاولات والحقول", logs_filter_hint: "انقر للتصفية حسب هذا النموذج" },
+};
+
+// Request-log persistence strings.
+const TUNING_STRINGS = {
+  en: { tun_request_log: "Persist request log", tun_request_log_desc: "Append each finished request (metadata only) to data/request-log.jsonl and reload the last 500 at boot. Off by default; Clear removes the file." },
+  "zh-CN": { tun_request_log: "持久化调用日志", tun_request_log_desc: "把每个完成的请求（仅元数据）追加到 data/request-log.jsonl，启动时载入最近 500 条。默认关闭；清除会删掉该文件。" },
+  "zh-TW": { tun_request_log: "持久化呼叫日誌", tun_request_log_desc: "把每個完成的請求（僅中繼資料）附加到 data/request-log.jsonl，啟動時載入最近 500 筆。預設關閉；清除會刪除該檔案。" },
+  "ja": { tun_request_log: "リクエストログを保存", tun_request_log_desc: "完了した各リクエスト（メタデータのみ）を data/request-log.jsonl に追記し、起動時に直近 500 件を読み込みます。既定はオフ。クリアでファイルも削除します。" },
+  "ko": { tun_request_log: "요청 로그 저장", tun_request_log_desc: "완료된 각 요청(메타데이터만)을 data/request-log.jsonl에 추가하고 부팅 시 최근 500개를 불러옵니다. 기본값은 꺼짐이며 지우기를 하면 파일도 삭제됩니다." },
+  "es": { tun_request_log: "Guardar el registro de solicitudes", tun_request_log_desc: "Añade cada solicitud terminada (solo metadatos) a data/request-log.jsonl y recarga las últimas 500 al arrancar. Desactivado por defecto; Borrar elimina el archivo." },
+  "fr": { tun_request_log: "Conserver le journal des requêtes", tun_request_log_desc: "Ajoute chaque requête terminée (métadonnées uniquement) à data/request-log.jsonl et recharge les 500 dernières au démarrage. Désactivé par défaut ; Clear supprime le fichier." },
+  "de": { tun_request_log: "Anfrageprotokoll speichern", tun_request_log_desc: "Hängt jede abgeschlossene Anfrage (nur Metadaten) an data/request-log.jsonl an und lädt beim Start die letzten 500. Standardmäßig aus; Leeren löscht die Datei." },
+  "ru": { tun_request_log: "Сохранять журнал запросов", tun_request_log_desc: "Дописывает каждый завершённый запрос (только метаданные) в data/request-log.jsonl и загружает последние 500 при старте. По умолчанию выключено; «Очистить» удаляет файл." },
+  "pt": { tun_request_log: "Persistir o registro de requisições", tun_request_log_desc: "Anexa cada requisição concluída (somente metadados) a data/request-log.jsonl e recarrega as últimas 500 ao iniciar. Desativado por padrão; Limpar remove o arquivo." },
+  "it": { tun_request_log: "Conserva il registro delle richieste", tun_request_log_desc: "Aggiunge ogni richiesta completata (solo metadati) a data/request-log.jsonl e ricarica le ultime 500 all'avvio. Disattivato per impostazione predefinita; Cancella rimuove il file." },
+  "ar": { tun_request_log: "حفظ سجل الطلبات", tun_request_log_desc: "يُلحق كل طلب مكتمل (البيانات الوصفية فقط) بـ data/request-log.jsonl ويعيد تحميل آخر 500 عند الإقلاع. معطّل افتراضياً؛ «مسح» يحذف الملف." },
+};
+
+// Model picker filter strings.
+const PICKER_STRINGS = {
+  en: { prov_filter_ph: "Filter models", prov_no_match: "No model matches." },
+  "zh-CN": { prov_filter_ph: "筛选模型", prov_no_match: "没有匹配的模型。" },
+  "zh-TW": { prov_filter_ph: "篩選模型", prov_no_match: "沒有符合的模型。" },
+  "ja": { prov_filter_ph: "モデルを絞り込む", prov_no_match: "一致するモデルはありません。" },
+  "ko": { prov_filter_ph: "모델 필터", prov_no_match: "일치하는 모델이 없습니다." },
+  "es": { prov_filter_ph: "Filtrar modelos", prov_no_match: "Ningún modelo coincide." },
+  "fr": { prov_filter_ph: "Filtrer les modèles", prov_no_match: "Aucun modèle ne correspond." },
+  "de": { prov_filter_ph: "Modelle filtern", prov_no_match: "Kein Modell passt." },
+  "ru": { prov_filter_ph: "Фильтр моделей", prov_no_match: "Нет подходящих моделей." },
+  "pt": { prov_filter_ph: "Filtrar modelos", prov_no_match: "Nenhum modelo corresponde." },
+  "it": { prov_filter_ph: "Filtra modelli", prov_no_match: "Nessun modello corrisponde." },
+  "ar": { prov_filter_ph: "تصفية النماذج", prov_no_match: "لا يوجد نموذج مطابق." },
+};
+
 for (const [code, strings] of Object.entries(REQUEST_LOG_STRINGS)) {
   Object.assign(STRINGS[code], strings);
 }
@@ -2276,6 +2324,15 @@ for (const [code, strings] of Object.entries(SESSION_STRINGS)) {
   Object.assign(STRINGS[code], strings);
 }
 for (const [code, strings] of Object.entries(AUDIT_STRINGS)) {
+  Object.assign(STRINGS[code], strings);
+}
+for (const [code, strings] of Object.entries(LOG_FILTER_STRINGS)) {
+  Object.assign(STRINGS[code], strings);
+}
+for (const [code, strings] of Object.entries(TUNING_STRINGS)) {
+  Object.assign(STRINGS[code], strings);
+}
+for (const [code, strings] of Object.entries(PICKER_STRINGS)) {
   Object.assign(STRINGS[code], strings);
 }
 
