@@ -5,6 +5,7 @@
 // up to a cap, so a recovered model is still probed eventually.
 
 export const TIMEOUT_BACKOFF_CAP_MS = 60 * 60 * 1000;
+export const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
 
 export function timeoutBackoffMs(consecutive, baseMs, capMs = TIMEOUT_BACKOFF_CAP_MS) {
   const base = Number(baseMs);
@@ -16,6 +17,24 @@ export function timeoutBackoffMs(consecutive, baseMs, capMs = TIMEOUT_BACKOFF_CA
   // 1x, 2x, 4x, ... The exponent stops growing long before it overflows.
   const factor = 2 ** Math.min(count - 1, 20);
   return Math.min(limit, base * factor);
+}
+
+// Upstream `Retry-After` in either documented form: delta-seconds or an HTTP
+// date. Returns 0 for a missing/unparseable header and caps absurd values so
+// a bad header cannot park a model for days.
+export function parseRetryAfterMs(value, now = Date.now()) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return 0;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds)) {
+    if (seconds <= 0) return 0;
+    return Math.min(MAX_RETRY_AFTER_MS, Math.round(seconds * 1000));
+  }
+  const at = Date.parse(raw);
+  if (!Number.isFinite(at)) return 0;
+  const wait = at - now;
+  if (wait <= 0) return 0;
+  return Math.min(MAX_RETRY_AFTER_MS, wait);
 }
 
 // A candidate is cooling only when it has no usable key left: a model-level

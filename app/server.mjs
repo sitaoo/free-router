@@ -36,7 +36,12 @@ import {
   createChatStreamNormalizer,
   pickChatRequestFields,
 } from './chat.mjs';
-import { TIMEOUT_BACKOFF_CAP_MS, candidateCooldown, timeoutBackoffMs } from './cooldown.mjs';
+import {
+  TIMEOUT_BACKOFF_CAP_MS,
+  candidateCooldown,
+  parseRetryAfterMs,
+  timeoutBackoffMs,
+} from './cooldown.mjs';
 import { createRequestLog, outputTokensPerSecond } from './request-log.mjs';
 import { estimateRequestTokens, fitsContext } from './context.mjs';
 import { installUpstreamProxy } from './proxy.mjs';
@@ -62,6 +67,7 @@ import {
 import { loadSweBenchScores, sweBenchScoreFor } from './swe-bench.mjs';
 import { describeLanAccess, lanGuard, loginLockout, recordLoginFailure } from './net.mjs';
 import { normalizeTimeZone } from './timezones.mjs';
+import { mergeVerdict, verdictFor as cachedVerdictFor } from './verdicts.mjs';
 import { PINNED_SCORE, USAGE_KINDS, classifyFailure, ewmaLatency, isClientFaultExhaustion, isCredentialFault, latencyAdjustment, metadataBonus, metadataScore, normalizeScore, pickExplorationTarget, qualityTotals } from './ranking.mjs';
 import {
   createStreamSignatureExtractor,
@@ -659,24 +665,14 @@ function metadataForKey(key) {
 // Positive verdicts need no expiry, since ordinary traffic revisits them and a
 // later refusal overwrites them.
 function verdictFor(key) {
-  const verdict = modelVerdicts[key];
-  if (!verdict) return null;
-  if (verdict.free !== false) return verdict;
-  const age = Date.now() - Date.parse(verdict.observedAt || 0);
-  return Number.isFinite(age) && age > VERDICT_RETRY_MS ? null : verdict;
+  return cachedVerdictFor(modelVerdicts, key, Date.now(), VERDICT_RETRY_MS);
 }
 
 function setModelVerdict(key, verdict) {
-  const previous = modelVerdicts[key];
-  const merged = {
-    ...previous,
-    ...verdict,
-    observedAt: new Date().toISOString(),
-  };
-  if (previous?.free === merged.free && previous?.dailyRequestLimit === merged.dailyRequestLimit) {
-    return;
-  }
-  modelVerdicts[key] = merged;
+  // Always refresh observedAt, even when the answer did not change: a model
+  // that keeps failing must not keep its stale timestamp and be re-probed on
+  // every request once the TTL passes.
+  modelVerdicts[key] = mergeVerdict(modelVerdicts[key], verdict, new Date().toISOString());
   scheduleStateSave();
 }
 
@@ -1961,6 +1957,7 @@ async function attemptJson(candidate, body, clientSignal, slot) {
       // Kept so the caller can read what the provider said about its own
       // quotas instead of only seeing a status code.
       errorBody: parseErrorPayload(raw),
+      retryAfterMs: parseRetryAfterMs(response.headers.get('retry-after')),
     };
   }
   let payload;
@@ -2079,6 +2076,7 @@ async function attemptStream(candidate, body, res, clientSignal, slot, options =
       kind: classifyFailure(response.status, reason),
       fatal: response.status === 401,
       errorBody: parseErrorPayload(raw),
+      retryAfterMs: parseRetryAfterMs(response.headers.get('retry-after')),
     };
   }
   if (!response.body) {
@@ -2680,10 +2678,13 @@ async function runChatRequest(req, res, options, record) {
         return;
       }
       const providerWaitMs = applyProviderVerdict(candidate, result);
-      // A client-side rejection says nothing about the model or the key, so
-      // it neither cools the candidate down nor poisons its quality record.
+      // The provider's own Retry-After is more accurate than the configured
+      // cooldown; take whichever is longer. A client-side rejection says
+      // nothing about the model or the key, so it neither cools the candidate
+      // down nor poisons its quality record.
+      const waitMs = Math.max(providerWaitMs || 0, result.retryAfterMs || 0);
       if (result.kind && result.kind !== 'clientError') {
-        setCooldown(candidate, result.kind, result.reason, providerWaitMs, slot);
+        setCooldown(candidate, result.kind, result.reason, waitMs, slot);
       }
       log(`failed ${candidateKey(candidate)}${slotLabel}: ${result.status} ${result.reason}`);
       if (result.fatal) {
