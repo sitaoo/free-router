@@ -40,6 +40,9 @@ export const CHAT_REQUEST_FIELDS = [
   'tool_choice',
   'parallel_tool_calls',
   'reasoning_effort',
+  // Not in the OpenAI schema, but several compatible providers accept it and
+  // clients opt in by sending it; the evaluation uses it to cap thinking.
+  'reasoning',
   'service_tier',
   'modalities',
   'audio',

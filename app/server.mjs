@@ -1282,7 +1282,12 @@ async function evaluateModel(target) {
     temperature: 0,
     max_tokens: EVALUATION_MAX_TOKENS,
   };
-  if (supported.has('reasoning') || supported.has('reasoning_effort')) {
+  // Ask for as little thinking as the provider understands. Sending
+  // `reasoning` to a model that only advertises `reasoning_effort` (or the
+  // reverse) is how the evaluation used to spend its budget on thinking.
+  if (supported.has('reasoning_effort')) {
+    evaluationBody.reasoning_effort = 'low';
+  } else if (supported.has('reasoning')) {
     evaluationBody.reasoning = { effort: 'low' };
   }
   const result = await attemptJson(candidate, evaluationBody);

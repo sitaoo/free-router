@@ -587,8 +587,9 @@ export function defaultConfigObject() {
         catalog: true,
         pricing: false,
         probeFreeTier: true,
-        // Gemini's OpenAI-compatible layer rejects stream_options.
-        streamOptions: false,
+        // Gemini's compatibility layer accepts stream_options and reports
+        // usage, which the request log needs for token counts and speed.
+        streamOptions: true,
         baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
         modelsUrl: 'https://generativelanguage.googleapis.com/v1beta/models',
         modelsKeyHeader: 'x-goog-api-key',

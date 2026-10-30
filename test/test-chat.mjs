@@ -29,6 +29,7 @@ import { countPayloadOutput, createChatStreamNormalizer, pickChatRequestFields }
     logit_bias: { '1': -1 },
     parallel_tool_calls: false,
     reasoning_effort: 'low',
+    reasoning: { effort: 'medium' },
     stream_options: { include_usage: true },
     // Not Chat Completions:
     features: { web: true },
@@ -45,6 +46,9 @@ import { countPayloadOutput, createChatStreamNormalizer, pickChatRequestFields }
   assert.equal(picked.stream, true);
   assert.deepEqual(picked.stream_options, { include_usage: true });
   assert.equal(picked.tools.length, 1);
+  // `reasoning` is a provider extension, but it is opt-in: forward it when the
+  // client sent it (the evaluation also uses it), never invent it.
+  assert.deepEqual(picked.reasoning, { effort: 'medium' });
   for (const key of ['features', 'variables', 'files', 'tool_ids', 'metadata', 'models', 'route', 'undefined_field']) {
     assert.equal(key in picked, false, `${key} must be stripped`);
   }
