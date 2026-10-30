@@ -20,7 +20,13 @@ import {
   rememberSignaturesFromPayload,
 } from '../app/thought-signature.mjs';
 import { displayPath, maskSecret, validateSecret } from '../app/ui.mjs';
-import { hashPassword, isPasswordHash, verifyPassword } from '../app/auth.mjs';
+import {
+  hashPassword,
+  hashPasswordAsync,
+  isPasswordHash,
+  verifyPassword,
+  verifyPasswordAsync,
+} from '../app/auth.mjs';
 import {
   addMissingKeys,
   buildLiveConfig,
@@ -284,6 +290,16 @@ assert.equal(validateSecret('sk-normal-key'), '');
   assert.equal(verifyPassword('x', '$scrypt$broken'), false);
   assert.equal(verifyPassword('x', '$scrypt$N=16384$r=8$p=1$zz$zz'), false);
   assert.notEqual(hashPassword('same'), hashPassword('same'));
+
+  // The request path uses the thread-pool variants; they must agree with the
+  // sync ones on every case, including the legacy plaintext fallback.
+  const asyncHash = await hashPasswordAsync('unit-test-pw');
+  assert.equal(isPasswordHash(asyncHash), true);
+  assert.equal(await verifyPasswordAsync('unit-test-pw', asyncHash), true);
+  assert.equal(await verifyPasswordAsync('wrong', asyncHash), false);
+  assert.equal(await verifyPasswordAsync('unit-test-pw', hashed), true);
+  assert.equal(await verifyPasswordAsync('plain', 'plain'), true);
+  assert.equal(await verifyPasswordAsync('x', '$scrypt$broken'), false);
 }
 
 // Layered config: base defaults + sparse overlay, tombstones for deletions,
@@ -2526,6 +2542,16 @@ try {
 
   // Password change persists a salted hash (never plaintext); the old
   // password stops working and the new one issues a fresh session.
+  // A one-character admin password is refused; the floor applies to every
+  // password set through the UI.
+  const shortPw = await fetch(`${base}/api/webui-password`, {
+    method: 'POST',
+    headers: uiHeaders,
+    body: JSON.stringify({ password: 'short-pw' }),
+  });
+  assert.equal(shortPw.status, 400);
+  assert.match((await shortPw.json()).error.message, /at least 12/);
+
   const pwChange = await fetch(`${base}/api/webui-password`, {
     method: 'POST',
     headers: uiHeaders,

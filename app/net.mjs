@@ -87,7 +87,18 @@ export function loginLockout(state, now = Date.now()) {
 export function recordLoginFailure(state, now = Date.now()) {
   const fails = (state?.fails || 0) + 1;
   if (fails >= LOGIN_RATE.maxFails) {
-    return { fails: 0, lockedUntil: now + LOGIN_RATE.lockMs };
+    return { fails: 0, lockedUntil: now + LOGIN_RATE.lockMs, lastFailAt: now };
   }
-  return { fails, lockedUntil: 0 };
+  return { fails, lockedUntil: 0, lastFailAt: now };
+}
+
+// Drop entries that no longer matter: no active lock and no failure inside
+// the lock window. Without the age check, one failed attempt from each of many
+// addresses leaks memory for the life of the process.
+export function pruneLoginFailures(states, now = Date.now()) {
+  for (const [ip, state] of states) {
+    if (state?.lockedUntil && state.lockedUntil > now) continue;
+    if (state?.fails > 0 && now - Number(state.lastFailAt || 0) <= LOGIN_RATE.lockMs) continue;
+    states.delete(ip);
+  }
 }

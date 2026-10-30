@@ -1,4 +1,7 @@
 import crypto from 'node:crypto';
+import { promisify } from 'node:util';
+
+const scryptAsync = promisify(crypto.scrypt);
 
 // Salted scrypt password storage. Format is self-describing so parameters
 // can evolve without breaking old hashes:
@@ -40,6 +43,21 @@ export function hashPassword(password, params = DEFAULT_PARAMS) {
   return `$scrypt$N=${params.N}$r=${params.r}$p=${params.p}$${salt.toString('hex')}$${key.toString('hex')}`;
 }
 
+// Request-path variants. scryptSync blocks the event loop for the whole
+// derivation, so a burst of login attempts would stall every proxied request;
+// these run the same work on the libuv thread pool. Boot-time seeding keeps
+// using the sync forms.
+export async function hashPasswordAsync(password, params = DEFAULT_PARAMS) {
+  const salt = crypto.randomBytes(16);
+  const key = await scryptAsync(String(password ?? ''), salt, params.keyLength, {
+    N: params.N,
+    r: params.r,
+    p: params.p,
+    maxmem: MAX_MEM,
+  });
+  return `$scrypt$N=${params.N}$r=${params.r}$p=${params.p}$${salt.toString('hex')}$${key.toString('hex')}`;
+}
+
 function safeEqualBuffers(left, right) {
   if (left.length !== right.length) return false;
   return crypto.timingSafeEqual(left, right);
@@ -57,6 +75,28 @@ export function verifyPassword(input, stored) {
   let derived;
   try {
     derived = crypto.scryptSync(candidate, parsed.salt, parsed.key.length, {
+      N: parsed.N,
+      r: parsed.r,
+      p: parsed.p,
+      maxmem: MAX_MEM * 2,
+    });
+  } catch {
+    return false;
+  }
+  return safeEqualBuffers(derived, parsed.key);
+}
+
+// Async twin of verifyPassword for the login path (see hashPasswordAsync).
+export async function verifyPasswordAsync(input, stored) {
+  const candidate = String(input ?? '');
+  if (!isPasswordHash(stored)) {
+    return safeEqualBuffers(Buffer.from(candidate), Buffer.from(String(stored ?? '')));
+  }
+  const parsed = parseHash(stored);
+  if (!parsed) return false;
+  let derived;
+  try {
+    derived = await scryptAsync(candidate, parsed.salt, parsed.key.length, {
       N: parsed.N,
       r: parsed.r,
       p: parsed.p,

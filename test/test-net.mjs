@@ -9,6 +9,7 @@ import {
   isLocalHostname,
   lanGuard,
   loginLockout,
+  pruneLoginFailures,
   recordLoginFailure,
 } from '../app/net.mjs';
 
@@ -85,6 +86,20 @@ assert.equal(lanGuard({ host: '0.0.0.0', keyCount: 0, isDefaultPassword: true })
   assert.equal(locked.locked, true);
   assert.equal(locked.retryAfterMs, 5 * 60 * 1000);
   assert.deepEqual(loginLockout(state, NOW + 5 * 60 * 1000 + 1), { locked: false });
+}
+
+// The failure map must not grow forever: a single failure from many addresses
+// is forgotten once the lock window has passed, while a live lock stays.
+{
+  const NOW = 10_000_000;
+  const states = new Map([
+    ['fresh', { fails: 1, lockedUntil: 0, lastFailAt: NOW - 1000 }],
+    ['stale', { fails: 1, lockedUntil: 0, lastFailAt: NOW - 6 * 60 * 1000 }],
+    ['locked', { fails: 0, lockedUntil: NOW + 1000, lastFailAt: NOW }],
+    ['clean', { fails: 0, lockedUntil: 0 }],
+  ]);
+  pruneLoginFailures(states, NOW);
+  assert.deepEqual([...states.keys()].sort(), ['fresh', 'locked']);
 }
 
 // Host-header allowlist: loopback/LAN/local names always pass; a public

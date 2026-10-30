@@ -20,7 +20,13 @@ import {
   runOverlayMigrations,
   saveOverlayFile,
 } from './config.mjs';
-import { hashPassword, isPasswordHash, verifyPassword } from './auth.mjs';
+import {
+  hashPassword,
+  hashPasswordAsync,
+  isPasswordHash,
+  verifyPassword,
+  verifyPasswordAsync,
+} from './auth.mjs';
 import {
   createProviderRegistry,
   isChatModel,
@@ -70,6 +76,7 @@ import {
   isLocalHostname,
   lanGuard,
   loginLockout,
+  pruneLoginFailures as pruneLoginStates,
   recordLoginFailure,
 } from './net.mjs';
 import { normalizeTimeZone } from './timezones.mjs';
@@ -393,23 +400,23 @@ function setStoredWebuiPassword(value, { persist = true } = {}) {
   return true;
 }
 
-function checkWebuiPassword(input) {
+async function checkWebuiPassword(input) {
   const password = String(input || '');
   if (!password) return false;
   if (process.env.FREE_ROUTER_WEBUI_PASSWORD) {
-    return verifyPassword(password, process.env.FREE_ROUTER_WEBUI_PASSWORD);
+    return verifyPasswordAsync(password, process.env.FREE_ROUTER_WEBUI_PASSWORD);
   }
-  return verifyPassword(password, storedWebuiPassword());
+  return verifyPasswordAsync(password, storedWebuiPassword());
 }
 
 // One-time upgrade: replace a plaintext stored password with a salted hash.
 // Runs at boot and after successful legacy logins (operators hand-editing
 // the file between restarts converge on the next login either way).
-function upgradePasswordStorage(reason) {
+async function upgradePasswordStorage(reason) {
   if (process.env.FREE_ROUTER_WEBUI_PASSWORD) return;
   const stored = storedWebuiPassword();
   if (isPasswordHash(stored)) return;
-  setStoredWebuiPassword(hashPassword(stored));
+  setStoredWebuiPassword(await hashPasswordAsync(stored));
   log(`upgraded web UI password storage to salted scrypt hash (${reason})`);
 }
 // Login session TTL in hours (default 24, 0 = never expires).
@@ -422,11 +429,7 @@ const webuiSessions = new Map();
 // (see app/net.mjs). Success clears the record; expired locks prune lazily.
 const loginFailures = new Map();
 function pruneLoginFailures(now = Date.now()) {
-  for (const [ip, state] of loginFailures) {
-    if (!state?.fails && (!state?.lockedUntil || state.lockedUntil <= now)) {
-      loginFailures.delete(ip);
-    }
-  }
+  pruneLoginStates(loginFailures, now);
 }
 function webuiSessionToken(req) {
   const cookie = String(req.headers.cookie || '');
@@ -592,7 +595,7 @@ function migrateEnvFileOnce() {
 }
 
 migrateEnvFileOnce();
-upgradePasswordStorage('boot');
+await upgradePasswordStorage('boot');
 
 // Gateway (downstream) API keys: named client credentials for LAN access.
 // Auth is required once at least one key exists (unless explicitly disabled).
@@ -3218,16 +3221,28 @@ async function handleWebuiPassword(req, res) {
   }
   const password = typeof body.password === 'string' ? body.password : '';
   const problem = validateSecret(password);
+  // The admin password guards the whole management surface; one character is
+  // not a password. The default "admin123" is 10 characters, so the
+  // floor applies to replacements, not to the shipped value.
+  const MIN_ADMIN_PASSWORD = 12;
   if (problem || !password) {
     return sendJson(res, 400, {
       error: { message: problem || 'password is required', type: 'invalid_request_error' },
+    });
+  }
+  if (password.length < MIN_ADMIN_PASSWORD) {
+    return sendJson(res, 400, {
+      error: {
+        message: `password must be at least ${MIN_ADMIN_PASSWORD} characters`,
+        type: 'invalid_request_error',
+      },
     });
   }
   config.webui ||= {};
   // Stamp explicit changes only (not boot upgrades or first-boot seeds) so
   // the UI can tell whether the password was ever changed by hand.
   setOverlayValue(['webui', 'passwordChangedAt'], new Date().toISOString());
-  if (!setStoredWebuiPassword(hashPassword(password))) {
+  if (!setStoredWebuiPassword(await hashPasswordAsync(password))) {
     return sendJson(res, 500, {
       error: { message: `could not write ${OVERLAY_FILENAME}`, type: 'config_write_failed' },
     });
@@ -3823,13 +3838,13 @@ async function handleLogin(req, res) {
       'Retry-After': String(Math.ceil((lock.retryAfterMs || 0) / 1000)),
     });
   }
-  if (!checkWebuiPassword(password)) {
+  if (!(await checkWebuiPassword(password))) {
     loginFailures.set(clientIp, recordLoginFailure(loginFailures.get(clientIp)));
     log(`failed web UI login from ${clientIp}`);
     return sendJson(res, 401, { error: { message: 'invalid password', type: 'unauthorized' } });
   }
   loginFailures.delete(clientIp);
-  upgradePasswordStorage('login');
+  await upgradePasswordStorage('login');
   const token = crypto.randomBytes(32).toString('hex');
   pruneWebuiSessions();
   const ttlHours = sessionTtlHours();

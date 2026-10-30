@@ -155,7 +155,7 @@ browser and log in.
 
 The gateway itself speaks HTTP only, with no TLS: once the bind is widened, everything crossing that port — the admin password, gateway keys, prompts, model replies — travels in clear text and anyone on the same network segment can read it off the wire. Do not expose it this way when the machine has a public IP. For remote access, put an HTTPS reverse proxy (Caddy, nginx) in front so the proxy terminates TLS, and keep `FREE_ROUTER_HOST` on `127.0.0.1` so only the proxy can connect. Turning the "Allow LAN access" switch on in the Settings tab shows a matching red warning on the server card.
 
-The admin password is stored as a salted scrypt hash, never plaintext. `FREE_ROUTER_WEBUI_PASSWORD` overrides it for emergency recovery.
+The admin password is stored as a salted scrypt hash, never plaintext, and the login path derives it on the thread pool so a burst of attempts cannot stall proxied requests. A replacement must be at least 12 characters. `FREE_ROUTER_WEBUI_PASSWORD` overrides it for emergency recovery.
 
 ## Gateway API keys
 
