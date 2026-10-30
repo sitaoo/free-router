@@ -528,6 +528,16 @@ try {
     assert.match(text, /"type":"upstream_error"/);
     assert.match(text, /\[DONE\]/);
     assert.doesNotMatch(text, /fallback-ok/, 'a committed stream must not fail over');
+
+    // A truncated answer is not a success: it counts as interrupted, never ok.
+    const health = await (await fetch(`http://127.0.0.1:${routerPort}/health`)).json();
+    const entry = health.usage.models.find((model) => model.key === 'mock:drop-mid');
+    assert.ok(entry, 'drop-mid has usage');
+    assert.ok(
+      (entry.counts.interrupted || 0) >= 1,
+      `expected interrupted usage, got ${JSON.stringify(entry.counts)}`,
+    );
+    assert.equal(entry.counts.ok || 0, 0, 'an interrupted stream must not count as ok');
   }
 
   // 10. Latency accounting uses the first useful token, not the duration of

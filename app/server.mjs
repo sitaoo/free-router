@@ -2599,8 +2599,14 @@ async function runChatRequest(req, res, options, record) {
         record.outputTokens = result.stats?.outputTokens || 0;
         // A grace-committed stream that never yielded content kept the
         // client's 200 but served nothing: count it as empty (the cooldown
-        // was already set inside the attempt) instead of a success.
-        recordUsage(candidate, result.hollow ? 'empty' : 'ok');
+        // was already set inside the attempt) instead of a success. A stream
+        // that died mid-answer is also not a success, but it is a serving
+        // condition, so it gets its own capacity kind instead of a quality
+        // failure.
+        recordUsage(
+          candidate,
+          result.hollow ? 'empty' : result.interrupted ? 'interrupted' : 'ok',
+        );
         resetTimeoutStreak(candidate, slot);
         if (!result.hollow) {
           // Time to first useful token, not time to completion: a long answer

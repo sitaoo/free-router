@@ -22,11 +22,18 @@ export const USAGE_KINDS = [
   'payment',
   'overloaded',
   'clientError',
+  'interrupted',
   'other',
 ];
 
 export const QUALITY_FAIL_KINDS = new Set(['empty', 'serverError', 'other']);
-export const CAPACITY_FAIL_KINDS = new Set(['rateLimit', 'timeout', 'overloaded', 'aborted']);
+export const CAPACITY_FAIL_KINDS = new Set([
+  'rateLimit',
+  'timeout',
+  'overloaded',
+  'aborted',
+  'interrupted',
+]);
 export const UNATTRIBUTED_FAIL_KINDS = new Set([
   'notFound',
   'forbidden',

@@ -104,6 +104,14 @@ assert.equal(classifyFailure(503, 'internal error', false), 'serverError');
 // New kinds never score as quality.
 assert.deepEqual(qualityTotals({ ok: 5, payment: 3, overloaded: 2 }), { ok: 5, fail: 0 });
 
+// A stream that died mid-answer delivered an incomplete result: it is not a
+// success, but it is a serving condition rather than a quality verdict, so it
+// lowers the success ratio without moving the quality score.
+assert.ok(USAGE_KINDS.includes('interrupted'));
+assert.ok(CAPACITY_FAIL_KINDS.has('interrupted'));
+assert.ok(!QUALITY_FAIL_KINDS.has('interrupted'));
+assert.deepEqual(qualityTotals({ ok: 5, interrupted: 3 }), { ok: 5, fail: 0 });
+
 // A rejected request body is the client's fault, not the model's. Without
 // its own kind a 400 lands in 'other' and every candidate in the failover
 // chain earns a quality failure for the same bad request.
